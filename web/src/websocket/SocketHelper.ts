@@ -165,7 +165,7 @@ export class ReStreamSocket {
     }
 
     sendRPC<RS extends RPCResponseStruct<RT>, RT>(rpcStruct: RPCStruct<RS, RT>): Promise<RT> {
-        if (this._authenticated) {
+        if (!this._authenticated) {
             return Promise.reject(new Error("Server is disconnected"));
         }
 
