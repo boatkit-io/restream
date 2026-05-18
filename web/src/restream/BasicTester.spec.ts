@@ -1,8 +1,8 @@
-import { deserializeDynamicValue } from '@boatkit-io/restream';
-import { BinaryReader } from '@boatkit-io/restream';
-import { VarInfoDynamic } from '@boatkit-io/restream';
 import { describe, expect, test } from 'vitest';
 
+import { deserializeDynamicValue } from '../utils/Decoders';
+import BinaryReader from '../utils/BinaryReader';
+import { VarInfoDynamic } from '../utils/SerializationTypes';
 import BasicTesterData from './BasicTesterData';
 import { mapValueToObject } from '../utils/TSUtils';
 

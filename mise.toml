@@ -5,6 +5,7 @@ node = "24"
 pnpm = "11.1.2"
 "go:gotest.tools/gotestsum" = "1.13.0"
 "go:golang.org/x/tools/cmd/goimports" = "0.44.0"
+"go:github.com/thenativeweb/get-next-version" = "v0.0.0-20260427193751-283f693d1042"
 
 [tasks.codegen]
 description = "Generate restream-based code"
@@ -41,3 +42,7 @@ run = [
   "pnpm --dir web run build",
   "pnpm --dir web publish --access public --no-git-checks",
 ]
+
+[tasks.next-version]
+description = "Get the version number that would be released if a release was ran right now."
+run = ["./.github/workflows/scripts/get-next-version.sh"]
