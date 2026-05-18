@@ -7,7 +7,7 @@ import * as ReStreamDecoders from '../utils/Decoders.js';
 import * as ReStreamEncoders from '../utils/Encoders.js';
 import { VarInfoPrimitive, VarInfoStruct, VarInfoPointer, VarInfoMap, SerializationType } from '../utils/SerializationTypes.js';
 import type { FieldInfo } from '../utils/SerializationTypes.js';
-import { PartialValue, PartialModMap } from './PackageRestream.js';
+import { PartialModMap, PartialValue } from './PackageRestream.js';
 
 export type TestString = string;
 
