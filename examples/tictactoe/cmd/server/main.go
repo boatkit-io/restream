@@ -7,8 +7,8 @@ import (
 	"github.com/boatkit-io/restream/pkg/websocketencoder"
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
-	"github.com/zishang520/engine.io/v2/types"
-	"github.com/zishang520/socket.io/v2/socket"
+	"github.com/zishang520/socket.io/servers/socket/v3"
+	"github.com/zishang520/socket.io/v3/pkg/types"
 )
 
 func main() {

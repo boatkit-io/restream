@@ -9,8 +9,8 @@ import (
 	"github.com/mitchellh/mapstructure"
 	"github.com/samber/lo"
 	"github.com/sirupsen/logrus"
-	socketTypes "github.com/zishang520/engine.io-go-parser/types"
-	"github.com/zishang520/socket.io/v2/socket"
+	"github.com/zishang520/socket.io/servers/socket/v3"
+	socketTypes "github.com/zishang520/socket.io/v3/pkg/types"
 )
 
 // StoreSubscriptionAction is an enum for the type of store subscription action

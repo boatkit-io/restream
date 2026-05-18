@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/zishang520/engine.io-go-parser/types"
+	"github.com/zishang520/socket.io/v3/pkg/types"
 )
 
 // IsBinary Returns true if obj is a Buffer or a File.
@@ -41,8 +41,21 @@ func HasBinary(data any) bool {
 		}
 		return false
 	}
+
+	if IsBinary(data) {
+		return true
+	}
+
 	dv := reflect.ValueOf(data)
-	if dv.Kind() == reflect.Struct {
+	for dv.Kind() == reflect.Pointer || dv.Kind() == reflect.Interface {
+		if dv.IsNil() {
+			return false
+		}
+		dv = dv.Elem()
+	}
+
+	switch dv.Kind() {
+	case reflect.Struct:
 		for fi := range dv.NumField() {
 			dfv := dv.Field(fi)
 			if dfv.CanInterface() && HasBinary(dfv.Interface()) {
@@ -50,7 +63,24 @@ func HasBinary(data any) bool {
 			}
 		}
 		return false
+	case reflect.Array, reflect.Slice:
+		for i := range dv.Len() {
+			av := dv.Index(i)
+			if av.CanInterface() && HasBinary(av.Interface()) {
+				return true
+			}
+		}
+		return false
+	case reflect.Map:
+		mr := dv.MapRange()
+		for mr.Next() {
+			mv := mr.Value()
+			if mv.CanInterface() && HasBinary(mv.Interface()) {
+				return true
+			}
+		}
+		return false
 	}
 
-	return IsBinary(data)
+	return false
 }

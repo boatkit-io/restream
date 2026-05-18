@@ -5,9 +5,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/zishang520/engine.io-go-parser/types"
-	"github.com/zishang520/socket.io-go-parser/v2/parser"
+	"github.com/zishang520/socket.io/parsers/socket/v3/parser"
+	"github.com/zishang520/socket.io/v3/pkg/types"
 )
+
+type preSerializedData string
 
 // encoder A socket.io Encoder instance
 type encoder struct {
@@ -23,12 +25,13 @@ func NewEncoder() parser.Encoder {
 func (e *encoder) Encode(packet *parser.Packet) []types.BufferInterface {
 	if packet.Type == parser.EVENT || packet.Type == parser.ACK {
 		if HasBinary(packet.Data) {
+			data := *packet
 			if packet.Type == parser.EVENT {
-				packet.Type = parser.BINARY_EVENT
+				data.Type = parser.BINARY_EVENT
 			} else {
-				packet.Type = parser.BINARY_ACK
+				data.Type = parser.BINARY_ACK
 			}
-			return e.encodeAsBinary(packet)
+			return e.encodeAsBinary(&data)
 		}
 	}
 	return []types.BufferInterface{e.encodeAsString(packet)}
@@ -63,7 +66,7 @@ func _encodeData(data any) any {
 // encodeAsString Encode packet as string.
 func (e *encoder) encodeAsString(packet *parser.Packet) types.BufferInterface {
 	// first is type
-	str := types.NewStringBuffer([]byte{byte(packet.Type)})
+	str := types.NewStringBuffer([]byte{byte(packet.Type) + '0'})
 	// attachments if we have them
 	if (packet.Type == parser.BINARY_EVENT || packet.Type == parser.BINARY_ACK) && packet.Attachments != nil {
 		str.WriteString(strconv.FormatUint(*packet.Attachments, 10)) //nolint:errcheck
@@ -81,9 +84,9 @@ func (e *encoder) encodeAsString(packet *parser.Packet) types.BufferInterface {
 	}
 	// json data
 	if nil != packet.Data {
-		if pds, is := packet.Data.(string); is {
+		if pds, is := packet.Data.(preSerializedData); is {
 			// Already serialized in the DeconstructPacket function
-			str.WriteString(pds) //nolint:errcheck
+			str.WriteString(string(pds)) //nolint:errcheck
 		} else {
 			if b, err := json.Marshal(_encodeData(packet.Data)); err == nil {
 				str.Write(b) //nolint:errcheck

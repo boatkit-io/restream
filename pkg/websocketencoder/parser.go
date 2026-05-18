@@ -1,7 +1,7 @@
 package websocketencoder
 
 import (
-	"github.com/zishang520/socket.io-go-parser/v2/parser"
+	"github.com/zishang520/socket.io/parsers/socket/v3/parser"
 )
 
 // customParser is a struct
