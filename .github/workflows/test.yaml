@@ -1,0 +1,155 @@
+name: tests
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  # Predictable directories so we can run cache actions first.
+  GOCACHE: /tmp/.cache/go-build
+  GOMODCACHE: /tmp/.cache/go-mod
+
+jobs:
+  eslint:
+    name: web lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.2
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Web pnpm install
+        run: pnpm install --frozen-lockfile
+        working-directory: web
+      - name: ESLint
+        run: pnpm run lint
+        working-directory: web
+
+  tsbuild:
+    name: web build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.2
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Web pnpm install
+        run: pnpm install --frozen-lockfile
+        working-directory: web
+      - name: Build
+        run: pnpm run build
+        working-directory: web
+
+  golint:
+    name: go lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: "go.mod"
+      - uses: jdx/mise-action@v2
+        with:
+          experimental: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          args: --timeout=10m
+          only-new-issues: true
+
+  tstest:
+    name: web test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.2
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Web pnpm install
+        run: pnpm install --frozen-lockfile
+        working-directory: web
+      - name: Vitest
+        run: pnpm test
+        working-directory: web
+
+  gotest:
+    name: go test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: "go.mod"
+      - uses: jdx/mise-action@v2
+        with:
+          experimental: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Download dependencies
+        run: go mod download
+      - name: Test
+        run: gotestsum -- -coverprofile=cover.out ./...
+
+  generate:
+    name: generate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: "go.mod"
+      - uses: jdx/mise-action@v2
+        with:
+          experimental: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.2
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Web pnpm install
+        run: pnpm install --frozen-lockfile
+        working-directory: web
+      - name: Generate
+        run: mise run codegen
+      - uses: tj-actions/verify-changed-files@v20
+        with:
+          fail-if-changed: true

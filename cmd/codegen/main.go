@@ -1,0 +1,478 @@
+//nolint:goconst
+package main
+
+import (
+	"flag"
+	"fmt"
+	"go/parser"
+	"go/token"
+	"go/types"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/dave/dst"
+	"github.com/dave/dst/decorator"
+	"github.com/samber/lo"
+	"golang.org/x/tools/go/packages"
+
+	"github.com/flashlabs/rootpath/location"
+)
+
+const restreamPackagePath = "github.com/boatkit-io/restream/pkg/restream"
+
+func main() { //nolint:gocyclo,funlen
+	fnPtr := flag.String("file", "", "Full path of file to parse")
+	ppPtr := flag.String("project", "", "Full path of project root to parse")
+
+	wd, _ := os.Getwd() //nolint:errcheck
+	// Note: this calls flag.Parse()
+	location.Chdir() //nolint:errcheck
+
+	if (fnPtr == nil || *fnPtr == "") && (ppPtr == nil || *ppPtr == "") {
+		fmt.Printf("missing -file or -project arg\n")
+		os.Exit(1)
+	}
+
+	startTime := time.Now()
+
+	var pt *ProjTracking
+	if ppPtr != nil && *ppPtr != "" {
+		ppRoot := resolveFromWorkingDir(wd, *ppPtr)
+
+		config, err := loadConfig(ppRoot)
+		if err != nil {
+			fmt.Printf("Error loading restream.yaml: %+v\n", err)
+			os.Exit(1)
+		}
+
+		pt = NewProjTracking(ppRoot, config)
+		if err := pt.parseProject(); err != nil {
+			fmt.Printf("Error parsing project: %+v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	if fnPtr != nil && *fnPtr != "" {
+		fName := resolveFromWorkingDir(wd, *fnPtr)
+
+		pt = NewProjTracking(path.Dir(fName), &restreamConfig{})
+		if err := pt.parseFile(fName); err != nil {
+			fmt.Printf("Error parsing file %s: %+v\n", fName, err)
+			os.Exit(1)
+		}
+	}
+
+	for _, ft := range pt.files {
+		fTime := time.Now()
+		fmt.Printf("Running file %s\n", ft.inFile)
+		if err := ft.Run(); err != nil {
+			fmt.Printf("Error running file %s: %+v\n", ft.inFile, err)
+			os.Exit(1)
+		}
+		fmt.Printf("Finished file %s, took %s\n", ft.inFile, time.Since(fTime))
+	}
+
+	if err := pt.Run(); err != nil {
+		fmt.Printf("Error running project: %+v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("ReStream codegen finished, total time: %s\n", time.Since(startTime))
+}
+
+func resolveFromWorkingDir(wd, p string) string {
+	if filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(wd, p)
+}
+
+// fdef is a simple reusable helper struct for writing defs to a file
+type fdef struct {
+	name string
+	defs string
+	typ  fdefType
+	deps []string
+}
+
+// fdefType is an enum for the different types of fdefs
+type fdefType int
+
+// The different types of fdefTypes
+const (
+	// fdefTypeEnum is an enum type
+	fdefTypeEnum fdefType = iota + 1
+
+	// fdefTypeOther is any other type
+	fdefTypeOther
+)
+
+// NewProjTracking creates a new project tracking structure
+func NewProjTracking(ppRoot string, config *restreamConfig) *ProjTracking {
+	pt := &ProjTracking{
+		projPath: ppRoot,
+		config:   config,
+
+		fset: token.NewFileSet(),
+
+		files:          []*FileTracking{},
+		packagesByPath: map[string]map[*packages.Package]struct{}{},
+		packagesByName: map[string]map[*packages.Package]struct{}{},
+
+		goGenEntries: []fdef{},
+
+		tsPackageEntries:  map[*packages.Package][]fdef{},
+		tsTypeImports:     map[*packages.Package]map[*packages.Package][]string{},
+		tsTypeOnlyImports: map[*packages.Package]map[*packages.Package][]string{},
+	}
+
+	return pt
+}
+
+// ProjTracking is the main tracking structure for the codegen project
+type ProjTracking struct {
+	projPath string
+	config   *restreamConfig
+
+	fset *token.FileSet
+
+	files          []*FileTracking
+	packagesByPath map[string]map[*packages.Package]struct{}
+	packagesByName map[string]map[*packages.Package]struct{}
+
+	goGenEntries []fdef
+
+	tsPackageEntries  map[*packages.Package][]fdef
+	tsTypeImports     map[*packages.Package]map[*packages.Package][]string
+	tsTypeOnlyImports map[*packages.Package]map[*packages.Package][]string
+}
+
+// parseProject parses the whole project for work to do
+func (pt *ProjTracking) parseProject() error {
+	startTime := time.Now()
+	fmt.Printf("Parsing project: %s\n", pt.projPath)
+	pcfg := packages.Config{
+		Mode: packages.NeedName | packages.NeedDeps | packages.NeedModule | packages.NeedImports | packages.NeedExportFile |
+			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedSyntax,
+		Fset:  pt.fset,
+		Tests: true,
+		Dir:   pt.projPath,
+	}
+	pkgsl, err := packages.Load(&pcfg, "./...")
+	if err != nil {
+		fmt.Printf("Error: %+v\n", err)
+		os.Exit(1)
+	}
+	for _, pkg := range pkgsl {
+		pt.addPackage(pkg)
+		for _, ipkg := range pkg.Imports {
+			pt.addPackage(ipkg)
+		}
+	}
+
+	for _, dir := range pt.config.InputDirs {
+		fmt.Printf("Loading project dir: %s\n", dir)
+		dp := path.Join(pt.projPath, dir)
+
+		pm, err := decorator.ParseDir(pt.fset, dp, nil, parser.AllErrors|parser.ParseComments)
+		if err != nil {
+			return err
+		}
+
+		if len(pm) > 1 {
+			return fmt.Errorf("multiple packages found in dir %s: %+v", dir, lo.Keys(pm))
+		}
+
+		for _, pkg := range pm {
+			for filename, f := range pkg.Files {
+				isTest := strings.HasSuffix(filename, "_test.go")
+				ppkg, err := pt.getPackageForName(pkg.Name, isTest)
+				if err != nil {
+					return fmt.Errorf("package %s not found in project packages list", pkg.Name)
+				}
+				ft := NewFileTracking(pt, filename, f, ppkg)
+				pt.files = append(pt.files, ft)
+			}
+		}
+	}
+
+	fmt.Printf("Done parsing project, took %s\n", time.Since(startTime))
+
+	return nil
+}
+
+// parseFile parses a single file for work to do
+func (pt *ProjTracking) parseFile(fn string) error {
+	f, err := decorator.ParseFile(pt.fset, fn, nil, parser.AllErrors|parser.ParseComments)
+	if err != nil {
+		return err
+	}
+
+	pcfg := packages.Config{
+		Mode: packages.NeedName | packages.NeedDeps | packages.NeedModule | packages.NeedImports | packages.NeedExportFile |
+			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedSyntax,
+		Fset:  pt.fset,
+		Tests: true,
+		Dir:   path.Dir(fn),
+	}
+	pkgsl, err := packages.Load(&pcfg, "file="+fn)
+	if err != nil {
+		fmt.Printf("Error: %+v\n", err)
+		os.Exit(1)
+	}
+
+	ft := NewFileTracking(pt, fn, f, pkgsl[0])
+	pt.files = append(pt.files, ft)
+	pt.addPackage(pkgsl[0])
+
+	return nil
+}
+
+func (pt *ProjTracking) resolveProjectPath(p string) string {
+	if p == "" || filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(pt.projPath, p)
+}
+
+// addPackage adds a package to the project lookup structures
+func (pt *ProjTracking) addPackage(pkg *packages.Package) {
+	arr, ok := pt.packagesByName[pkg.Name]
+	if !ok {
+		arr = map[*packages.Package]struct{}{}
+	}
+	arr[pkg] = struct{}{}
+	pt.packagesByName[pkg.Name] = arr
+
+	arr, ok = pt.packagesByPath[pkg.PkgPath]
+	if !ok {
+		arr = map[*packages.Package]struct{}{}
+	}
+	arr[pkg] = struct{}{}
+	pt.packagesByPath[pkg.PkgPath] = arr
+}
+
+// getPackageForPath gets a package for a given package path and test flag
+func (pt *ProjTracking) getPackageForPath(p string, isTest bool) (*packages.Package, error) {
+	pkgs, ok := pt.packagesByPath[p]
+	if !ok {
+		return nil, fmt.Errorf("unknown package %s", p)
+	}
+	pkg, fnd := lo.Find(lo.Keys(pkgs), func(p *packages.Package) bool {
+		return strings.Contains(p.ID, "[") == isTest
+	})
+	if !fnd {
+		if isTest {
+			// fall back to no test version
+			return pt.getPackageForPath(p, false)
+		}
+		return nil, fmt.Errorf("unknown package %s with isTest %t", p, isTest)
+	}
+	return pkg, nil
+}
+
+// getPackageForName gets a package for a given short package name and test flag
+func (pt *ProjTracking) getPackageForName(n string, isTest bool) (*packages.Package, error) {
+	pkgs, ok := pt.packagesByName[n]
+	if !ok {
+		return nil, fmt.Errorf("unknown package %s", n)
+	}
+	pkg, fnd := lo.Find(lo.Keys(pkgs), func(p *packages.Package) bool {
+		return strings.Contains(p.ID, "[") == isTest
+	})
+	if !fnd {
+		if isTest {
+			// fall back to no test version
+			return pt.getPackageForName(n, false)
+		}
+		return nil, fmt.Errorf("unknown package %s with isTest %t", n, isTest)
+	}
+	return pkg, nil
+}
+
+// getRestreamPackage gets the canonical restream package. The generator may synthesize references to restream types
+// before user code imports restream, so load it directly from the module path when it is not already discovered.
+func (pt *ProjTracking) getRestreamPackage(isTest bool) (*packages.Package, error) {
+	if pkg, err := pt.getPackageForPath(restreamPackagePath, isTest); err == nil {
+		return pkg, nil
+	}
+	if pkg, err := pt.getPackageForName("restream", isTest); err == nil {
+		return pkg, nil
+	}
+
+	pcfg := packages.Config{
+		Mode: packages.NeedName | packages.NeedDeps | packages.NeedModule | packages.NeedImports | packages.NeedExportFile |
+			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedSyntax,
+		Fset:  pt.fset,
+		Tests: isTest,
+		Dir:   pt.projPath,
+	}
+	pkgsl, err := packages.Load(&pcfg, restreamPackagePath)
+	if err != nil {
+		return nil, err
+	}
+	for _, pkg := range pkgsl {
+		pt.addPackage(pkg)
+		for _, ipkg := range pkg.Imports {
+			pt.addPackage(ipkg)
+		}
+	}
+
+	if pkg, err := pt.getPackageForPath(restreamPackagePath, isTest); err == nil {
+		return pkg, nil
+	}
+	if pkg, err := pt.getPackageForName("restream", isTest); err == nil {
+		return pkg, nil
+	}
+
+	errs := []string{}
+	for _, pkg := range pkgsl {
+		for _, pkgErr := range pkg.Errors {
+			errs = append(errs, pkgErr.Error())
+		}
+	}
+	if len(errs) > 0 {
+		return nil, fmt.Errorf("error loading package %s: %s", restreamPackagePath, strings.Join(errs, "; "))
+	}
+	return nil, fmt.Errorf("unknown package %s", restreamPackagePath)
+}
+
+// Run runs project-scoped codegen work
+func (pt *ProjTracking) Run() error {
+	// A bit hacky, but this shoves fake filetracking structures into the list, for the extra generated serializers
+	if err := pt.buildSerializers(); err != nil {
+		return err
+	}
+
+	if len(pt.goGenEntries) > 0 {
+		if err := pt.writeGoExtraFile(); err != nil {
+			return err
+		}
+	}
+
+	if pt.config.TSDir != "" {
+		if err := pt.collectTSPackages(); err != nil {
+			return err
+		}
+
+		if err := pt.writeTSPackageFiles(); err != nil {
+			return err
+		}
+
+		if err := pt.lintTSFiles(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// NewFileTracking creates a new file tracking structure
+func NewFileTracking(pt *ProjTracking, fn string, f *dst.File, pkg *packages.Package) *FileTracking {
+	isTest := strings.HasSuffix(fn, "_test.go")
+	outFn := strings.Replace(strings.ReplaceAll(path.Base(fn), "_test", ""), ".go", "_rs.go", 1)
+	if isTest {
+		outFn = strings.ReplaceAll(outFn, ".go", "_test.go")
+	}
+
+	ft := &FileTracking{
+		pt: pt,
+
+		inFile:  fn,
+		outFile: path.Join(path.Dir(fn), outFn),
+		isTest:  isTest,
+
+		f:        f,
+		fPackage: pkg,
+
+		importLookup: map[string]*packages.Package{},
+
+		serializerStructs: map[*dst.TypeSpec]struct{}{},
+		fieldedStructs:    map[*dst.TypeSpec]struct{}{},
+		partialStructs:    map[*dst.TypeSpec]struct{}{},
+
+		inputFileDirty: false,
+		goGenEntries:   []fdef{},
+		tsGenEntries:   []fdef{},
+
+		tsPrimitiveImports: map[*packages.Package][]*types.TypeName{},
+		tsStructImports:    map[*packages.Package][]*types.TypeName{},
+	}
+
+	// form an import lookup to package for getting type info
+	for _, imp := range ft.f.Imports {
+		p := strings.Trim(imp.Path.Value, "\"")
+		pspl := strings.Split(p, "/")
+		name := pspl[len(pspl)-1]
+		if imp.Name != nil && imp.Name.Name != "_" {
+			name = imp.Name.Name
+		}
+		ip := pkg.Imports[p]
+		if ip == nil {
+			var err error
+			ip, err = pt.getPackageForPath(p, isTest)
+			if err != nil {
+				panic(err)
+			}
+		}
+		ft.importLookup[name] = ip
+	}
+
+	return ft
+}
+
+// FileTracking is a tracking structure for all the data that goes into processing a source file
+type FileTracking struct {
+	pt *ProjTracking
+
+	inFile, outFile string
+	isTest          bool
+
+	f        *dst.File
+	fPackage *packages.Package
+
+	importLookup map[string]*packages.Package
+
+	serializerStructs map[*dst.TypeSpec]struct{}
+	fieldedStructs    map[*dst.TypeSpec]struct{}
+	partialStructs    map[*dst.TypeSpec]struct{}
+
+	inputFileDirty bool
+	goGenEntries   []fdef
+	tsGenEntries   []fdef
+
+	tsPrimitiveImports map[*packages.Package][]*types.TypeName
+	tsStructImports    map[*packages.Package][]*types.TypeName
+}
+
+// Run executes a run of the codegen on a single source file (filetracking)
+func (ft *FileTracking) Run() error {
+	if err := ft.parseStructDecls(); err != nil {
+		return err
+	}
+
+	if err := ft.parseFuncDecls(); err != nil {
+		return err
+	}
+
+	if len(ft.goGenEntries) > 0 {
+		if err := ft.writeGoStructs(); err != nil {
+			return err
+		}
+	}
+
+	if err := ft.createTSPerFileData(); err != nil {
+		return err
+	}
+
+	if ft.inputFileDirty {
+		if err := ft.rewriteSourceFile(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}

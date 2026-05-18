@@ -1,0 +1,5 @@
+inputDirs:
+  - pkg/restream
+  - pkg/restream/storetest
+tsDir: web/src/restream
+tsRuntimeImportMode: local

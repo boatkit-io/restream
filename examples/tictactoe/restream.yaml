@@ -1,0 +1,3 @@
+inputDirs:
+  - cmd/server
+tsDir: web/src/restream

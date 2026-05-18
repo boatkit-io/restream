@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": "src"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["test/**/*.ts", "src/**/*.spec.ts", "src/restream/Package*Test.ts", "src/restream/PackageStoretest.ts"]
+}

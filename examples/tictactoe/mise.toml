@@ -1,0 +1,7 @@
+[tools]
+go = "1.26.3"
+node = "lts"
+
+[tasks.generate-restream]
+description = "Generate Restream code"
+run = ["go tool github.com/boatkit-io/restream/cmd/codegen -project ."]

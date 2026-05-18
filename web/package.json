@@ -1,0 +1,60 @@
+{
+  "name": "@boatkit-io/restream",
+  "version": "0.0.1",
+  "description": "TypeScript helpers for ReStream clients.",
+  "type": "module",
+  "packageManager": "pnpm@11.1.2",
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/boatkit-io/restream.git",
+    "directory": "web"
+  },
+  "bugs": {
+    "url": "https://github.com/boatkit-io/restream/issues"
+  },
+  "homepage": "https://github.com/boatkit-io/restream#readme",
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/esm/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js",
+      "default": "./dist/esm/index.js"
+    }
+  },
+  "scripts": {
+    "clean": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\"",
+    "build": "pnpm run clean && tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json && pnpm run write-cjs-package-json",
+    "lint": "eslint .",
+    "test": "vitest run && pnpm run test:package",
+    "test:package": "pnpm run build && node scripts/smoke-package.cjs",
+    "typecheck": "tsc --noEmit",
+    "write-cjs-package-json": "node -e \"fs.mkdirSync('dist/cjs', { recursive: true }); fs.writeFileSync('dist/cjs/package.json', JSON.stringify({ type: 'commonjs' }, null, 2) + '\\n')\""
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.4.0",
+    "jest-matcher-deep-close-to": "^3.0.2",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.59.3",
+    "vitest": "^4.1.6"
+  },
+  "dependencies": {
+    "@boatkit-io/restream": "link:",
+    "resub": "^2.3.2",
+    "socket.io-client": "^4.8.3"
+  }
+}
