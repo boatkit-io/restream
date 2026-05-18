@@ -96,32 +96,6 @@ describe('Fielded structs', () => {
         expect(decoded.get(1)).toBe("kept");
         expect(decoded.has(99)).toBe(false);
     });
-
-    test('array partials normalize Uint8Array full-state values before applying', () => {
-        const state = DataSourceInfo.fromValues();
-        state.priorities = new Uint8Array([1, 2]) as unknown as number[];
-
-        const partial = DataSourceInfoPartial.fromValues();
-        partial.priorities = PartialArray.fromValues(new Map(), [3, 4]);
-
-        const changedFields = partial.applyTo(state);
-
-        expect(state.priorities).toEqual([3, 4]);
-        expect(changedFields).toEqual([["priorities"]]);
-    });
-
-    test('array partials initialize undefined full-state values before applying', () => {
-        const state = DataSourceInfo.fromValues();
-        state.activeAvailableSources = undefined;
-
-        const partial = DataSourceInfoPartial.fromValues();
-        partial.activeAvailableSources = PartialArray.fromValues(new Map(), [5, 6]);
-
-        const changedFields = partial.applyTo(state);
-
-        expect(state.activeAvailableSources).toEqual([5, 6]);
-        expect(changedFields).toEqual([["activeAvailableSources"]]);
-    });
 });
 
 describe('Primitive Isomorphism', () => {

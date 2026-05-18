@@ -62,3 +62,38 @@ export function deferred<T>(): Deferred<T> {
         reject,
     };
 }
+
+export function mapValueToObject(v: unknown): unknown {
+    switch (typeof v) {
+        case 'undefined':
+            return undefined;
+        case 'number':
+        case 'string':
+            return v;
+        case 'object':
+            switch (v!.constructor) {
+                case Date: {
+                    return (v as Date).toISOString();
+                }
+                case Map: {
+                    const o: { [k: string]: unknown } = {};
+                    for (const [k, vi] of (v as Map<string, unknown>).entries()) {
+                        o[k] = mapValueToObject(vi);
+                    }
+                    return o;
+                }
+                case Array: {
+                    return (v as Array<unknown>).map(o => mapValueToObject(o));
+                }
+                default: {
+                    const o: { [k: string]: unknown } = {};
+                    for (const [k, vi] of Object.entries(v!)) {
+                        o[k] = mapValueToObject(vi);
+                    }
+                    return o;
+                }
+            }
+        default:
+            return v;
+    }
+}

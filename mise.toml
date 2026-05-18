@@ -1,28 +1,25 @@
 [tools]
-go = "1.26.2"
+go = "1.26.3"
+golangci-lint = "2.12.0"
 node = "24"
 pnpm = "11.1.2"
 "go:gotest.tools/gotestsum" = "1.13.0"
-
-[tasks.test]
-description = "Run tests"
-run = ["gotestsum"]
 
 [tasks.codegen]
 description = "Generate restream-based code"
 run = ["go run ./cmd/codegen -project ."]
 
+[tasks.test]
+description = "Run tests"
+run = ["gotestsum", "cd web && pnpm test"]
+
+[tasks.lint]
+description = "Run linters"
+run = ["golangci-lint run", "cd web && pnpm lint"]
+
 [tasks.web-build]
 description = "Build the TypeScript web package"
 run = ["pnpm --dir web run build"]
-
-[tasks.web-lint]
-description = "Lint the TypeScript web package"
-run = ["pnpm --dir web run lint"]
-
-[tasks.web-test]
-description = "Test the TypeScript web package"
-run = ["pnpm --dir web test"]
 
 [tasks.web-publish-dry-run]
 description = "Dry-run the TypeScript web package publish"

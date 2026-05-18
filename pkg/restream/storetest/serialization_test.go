@@ -216,7 +216,7 @@ func TestBasicTypes(t *testing.T) {
 		return fmt.Sprintf("    [%q, [%s], %q],", tr.name, strings.Join(td, ","), tr.jsonStr)
 	})
 	tf := fmt.Sprintf("export default [\n%s\n];\n", strings.Join(testbits, "\n"))
-	os.WriteFile("../../web/src/restream/BasicTesterData.ts", []byte(tf), 0o644)
+	assert.NoError(t, os.WriteFile("../../../web/src/restream/BasicTesterData.ts", []byte(tf), 0o644))
 }
 
 func deepComparableEqual(a, b any) bool {
