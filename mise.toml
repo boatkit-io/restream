@@ -4,6 +4,7 @@ golangci-lint = "2.12.0"
 node = "24"
 pnpm = "11.1.2"
 "go:gotest.tools/gotestsum" = "1.13.0"
+"go:golang.org/x/tools/cmd/goimports" = "0.44.0"
 
 [tasks.codegen]
 description = "Generate restream-based code"
