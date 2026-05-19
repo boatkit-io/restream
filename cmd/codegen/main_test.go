@@ -60,6 +60,147 @@ type BoardStoreState struct {
 	}
 }
 
+func TestParseProjectIgnoresRestreamGeneratedGoFiles(t *testing.T) {
+	repoRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	projectDir := t.TempDir()
+	serverDir := filepath.Join(projectDir, "cmd", "server")
+	if err := os.MkdirAll(serverDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/generated-filter
+
+go 1.26.2
+
+require github.com/boatkit-io/restream v0.0.0
+
+replace github.com/boatkit-io/restream => `+repoRoot+`
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	sourcePath := filepath.Join(serverDir, "model.go")
+	if err := os.WriteFile(sourcePath, []byte(`package main
+
+// @restream.fields
+type Model struct {
+	Count int
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(serverDir, "already_rs.go"), []byte(restreamGeneratedFileBanner+`
+//
+//nolint:lll
+package main
+
+type AlreadyGenerated struct{}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	pt := NewProjTracking(projectDir, &restreamConfig{
+		InputDirs: []string{"cmd/server"},
+	})
+	if err := pt.parseProject(); err != nil {
+		t.Fatal(err)
+	}
+	if len(pt.files) != 1 || filepath.Base(pt.files[0].inFile) != "model.go" {
+		t.Fatalf("parsed files = %v, want only model.go", fileTrackingBaseNames(pt.files))
+	}
+
+	if err := pt.files[0].Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), restreamGeneratedFileBanner) {
+		t.Fatalf("source rewrite leaked generated banner:\n%s", string(out))
+	}
+}
+
+func TestRPCRequestGenerationExpandsGroupedParams(t *testing.T) {
+	repoRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	projectDir := t.TempDir()
+	serverDir := filepath.Join(projectDir, "cmd", "server")
+	if err := os.MkdirAll(serverDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/rpcparams
+
+go 1.26.2
+
+require github.com/boatkit-io/restream v0.0.0
+
+replace github.com/boatkit-io/restream => `+repoRoot+`
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(serverDir, "boardstore.go"), []byte(`package main
+
+import (
+	"reflect"
+
+	"github.com/boatkit-io/restream/pkg/restream"
+)
+
+var _ = reflect.TypeFor[int]
+
+func Register(rpcd *restream.RPCDispatcher) {
+	rpcd.RegisterRPCHandler("PlaceToken", 1, func(x, y int) error {
+		return nil
+	}, nil, nil)
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	pt := NewProjTracking(projectDir, &restreamConfig{
+		InputDirs: []string{"cmd/server"},
+	})
+	if err := pt.parseProject(); err != nil {
+		t.Fatal(err)
+	}
+	for _, ft := range pt.files {
+		if err := ft.Run(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out, err := os.ReadFile(filepath.Join(serverDir, "boardstore_rs.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+
+	for _, expected := range []string{
+		"X int",
+		"Y int",
+		`{Name: "X", FieldIdx: 0, VarInfo: &restream.VarInfoPrimitive{DataType: restream.SerializationTypeInt64, MappedType: restream.Ptr("int")}}`,
+		`{Name: "Y", FieldIdx: 1, VarInfo: &restream.VarInfoPrimitive{DataType: restream.SerializationTypeInt64, MappedType: restream.Ptr("int")}}`,
+		"restream.SerializeValue(s.Y, w, PlaceTokenRequestFieldInfo[1].VarInfo)",
+		"restream.DeserializeValue(&s.Y, r, PlaceTokenRequestFieldInfo[1].VarInfo)",
+	} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("generated RPC request missing expected %q:\n%s", expected, got)
+		}
+	}
+}
+
 func TestWriteTSFileUsesPackageRuntimeImportsByDefault(t *testing.T) {
 	projectDir := t.TempDir()
 	pt := NewProjTracking(projectDir, &restreamConfig{
@@ -99,6 +240,14 @@ func TestWriteTSFileUsesPackageRuntimeImportsByDefault(t *testing.T) {
 			t.Fatalf("generated TypeScript contains unexpected local runtime import %q:\n%s", unexpected, got)
 		}
 	}
+}
+
+func fileTrackingBaseNames(files []*FileTracking) []string {
+	out := make([]string, 0, len(files))
+	for _, ft := range files {
+		out = append(out, filepath.Base(ft.inFile))
+	}
+	return out
 }
 
 func TestWriteTSFileCanUseLocalRuntimeImports(t *testing.T) {
