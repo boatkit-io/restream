@@ -53,7 +53,6 @@
     "vitest": "^4.1.6"
   },
   "dependencies": {
-    "@boatkit-io/restream": "link:",
     "resub": "^2.3.2",
     "socket.io-client": "^4.8.3"
   }

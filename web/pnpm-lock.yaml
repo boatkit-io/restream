@@ -4,16 +4,10 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-overrides:
-  '@boatkit-io/restream': 'link:'
-
 importers:
 
   .:
     dependencies:
-      '@boatkit-io/restream':
-        specifier: 'link:'
-        version: 'link:'
       resub:
         specifier: ^2.3.2
         version: 2.3.2(react@19.2.6)

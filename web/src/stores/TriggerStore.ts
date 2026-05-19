@@ -7,6 +7,10 @@ import SubscribableEvent from '../utils/SubscribableEvent.js';
 
 const compoundKeyJoinerString = "%&";
 
+declare global {
+    var __DEV__: boolean | undefined;
+}
+
 export default abstract class TriggerStore<S extends object> extends StoreBase {
     protected static _storeMap: { [storeName: string]: TriggerStore<object> } = {};
 
@@ -39,7 +43,7 @@ export default abstract class TriggerStore<S extends object> extends StoreBase {
         private _partialType: { deserialized: (r: BinaryReader) => PartialFor<S> }) {
         super();
 
-        if (this._storeName in TriggerStore._storeMap) {
+        if ((typeof __DEV__ === 'undefined' || !__DEV__) && this._storeName in TriggerStore._storeMap) {
             // TODO: It's allowed to re-use a store in dev HMR
             throw new Error('Store already registered: ' + this._storeName);
         }

@@ -2,19 +2,15 @@ name: package release
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - "web/**"
-      - ".github/workflows/npm-release.yaml"
-  workflow_dispatch:
+    tags:
+      - "v*"
 
 permissions:
   contents: read
   id-token: write
 
 concurrency:
-  group: ${{ github.repository }}-${{ github.workflow }}
+  group: ${{ github.repository }}-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -37,8 +33,23 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
+      - name: Verify trusted publishing toolchain
+        run: |-
+          node -e '
+            const { execFileSync } = require("node:child_process");
+            const npmVersion = execFileSync("npm", ["--version"], { encoding: "utf8" }).trim();
+            const nodeVersion = process.versions.node;
+            const gte = (version, minimum) => version.localeCompare(minimum, undefined, { numeric: true }) >= 0;
+            if (!gte(nodeVersion, "22.14.0") || !gte(npmVersion, "11.5.1")) {
+              throw new Error(`Trusted publishing requires Node >=22.14.0 and npm >=11.5.1; got Node ${nodeVersion}, npm ${npmVersion}.`);
+            }
+            console.log(`Node ${nodeVersion}, npm ${npmVersion}`);
+          '
       - name: Install
         run: pnpm install --frozen-lockfile
+      - name: Set package version from tag
+        run: |-
+          npm pkg set "version=${GITHUB_REF_NAME#v}"
       - name: Lint
         run: pnpm run lint
       - name: Test
@@ -52,16 +63,14 @@ jobs:
       - name: Check published version
         id: published
         run: |-
-          if pnpm view "${{ steps.package.outputs.name }}@${{ steps.package.outputs.version }}" version >/dev/null 2>&1; then
+          if npm view "${{ steps.package.outputs.name }}@${{ steps.package.outputs.version }}" version >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Publish package
         if: steps.published.outputs.exists != 'true'
-        run: pnpm publish --access public --provenance --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
       - name: Skip existing package version
         if: steps.published.outputs.exists == 'true'
         run: echo "${{ steps.package.outputs.name }}@${{ steps.package.outputs.version }} is already published."
