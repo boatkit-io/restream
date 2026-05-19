@@ -350,6 +350,12 @@ func (st *socketTracker) emitPartialStoreUpdate(storeName string, partialBytes [
 
 // onRPCCall is a helper that is called when an RPC call message is received
 func (st *socketTracker) onRPCCall(params ...any) {
+	if st.rpch == nil {
+		st.log.Errorf("RPCCall received but no RPCHandlerFunc was provided")
+		st.conn.Disconnect(true)
+		return
+	}
+
 	var rpcMsg RPCCallMessage
 	if err := mapstructure.Decode(params[0], &rpcMsg); err != nil {
 		st.log.Errorf("Error parsing rpccall message: %+v", err)
