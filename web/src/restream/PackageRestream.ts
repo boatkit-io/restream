@@ -5,8 +5,8 @@ import BinaryReader from '../utils/BinaryReader.js';
 import BinaryWriter from '../utils/BinaryWriter.js';
 import * as ReStreamDecoders from '../utils/Decoders.js';
 import * as ReStreamEncoders from '../utils/Encoders.js';
-import { VarInfoPrimitive, VarInfoStruct, VarInfoGenericParam, VarInfoPointer, VarInfoArray, VarInfoMap, SerializationType } from '../utils/SerializationTypes.js';
-import type { VarInfo, FieldInfo, AppliablePartial, AppliableOnTopPartial } from '../utils/SerializationTypes.js';
+import { SerializationType, VarInfoArray, VarInfoGenericParam, VarInfoMap, VarInfoPointer, VarInfoPrimitive, VarInfoStruct } from '../utils/SerializationTypes.js';
+import type { AppliableOnTopPartial, AppliablePartial, FieldInfo, VarInfo } from '../utils/SerializationTypes.js';
 
 export type AccessLevel = number;
 

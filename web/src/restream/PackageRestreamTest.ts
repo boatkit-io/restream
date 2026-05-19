@@ -5,7 +5,7 @@ import BinaryReader from '../utils/BinaryReader.js';
 import BinaryWriter from '../utils/BinaryWriter.js';
 import * as ReStreamDecoders from '../utils/Decoders.js';
 import * as ReStreamEncoders from '../utils/Encoders.js';
-import { VarInfoPrimitive, VarInfoStruct, VarInfoPointer, VarInfoArray, SerializationType } from '../utils/SerializationTypes.js';
+import { SerializationType, VarInfoArray, VarInfoPointer, VarInfoPrimitive, VarInfoStruct } from '../utils/SerializationTypes.js';
 import type { FieldInfo } from '../utils/SerializationTypes.js';
 import { RPCStruct } from '../websocket/SocketHelper.js';
 

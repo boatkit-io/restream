@@ -1077,6 +1077,7 @@ func tsImportSortKey(imp tsImport) string {
 }
 
 func tsNamedImportString(imports []string) string {
+	slices.Sort(imports)
 	return fmt.Sprintf("{ %s }", strings.Join(imports, ", "))
 }
 
