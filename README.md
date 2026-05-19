@@ -206,25 +206,29 @@ socket.on('connect', () => {
 
 socket.open();
 
+// eslint-disable-next-line react-refresh/only-export-components
 function App() {
   const board = BoardStore.getBoard();
   const xTurn = BoardStore.getXTurn();
+  const nextToken = xTurn ? 'X' : 'O';
   
   return (
     <>
       <h1>Tic Tac Toe</h1>
+      <h2>Current Player: {nextToken}</h2>
       <div className="board">
         <table align="center">
-        {board.map((row, rowIndex) => (
-          <tr key={rowIndex}>
-            {row.map((cell, cellIndex) => (
-              <td key={cellIndex}>{cell || ' '}</td>
+          <tbody>
+            {board.map((row, rowIndex) => (
+              <tr key={rowIndex}>
+                {row.map((cell, cellIndex) => (
+                  <td key={cellIndex}>{cell || ' '}</td>
+                ))}
+              </tr>
             ))}
-          </tr>
-        ))}
+          </tbody>
         </table>
       </div>
-      <p>It is {xTurn ? 'X' : 'O'}'s turn</p>
     </>
   )
 }
@@ -243,7 +247,66 @@ Now open the URL it gives you (should be [http://localhost:5173/]) in a browser,
 
 ## RPCs
 
-TODO
+Let's add the ability to place a token on the game board.  In `boardstore.go`'s `NewBoardStore` function, start passing in a new `restream.RPCDispatcher`:
+
+```go
+func NewBoardStore(rpcd *restream.RPCDispatcher) (*BoardStore, error) {
+```
+
+Now add the following RPC registration to the bottom of the `NewBoardStore` function:
+
+```go
+rpcd.RegisterRPCHandler("PlaceToken", 1, func(x, y int) error {
+	partial := &BoardStoreStatePartial{
+		Board: restream.NewPartialArray[[]string](),
+	}
+	var newRow []string
+	var xTurn bool
+	s.storeData.ReadState(func(state *BoardStoreState) {
+		newRow = append([]string{}, state.Board[y]...)
+		xTurn = state.XTurn
+	})
+	if newRow[x] != "" {
+		return errors.New("cell already occupied")
+	}
+	if xTurn {
+		newRow[x] = "X"
+	} else {
+		newRow[x] = "O"
+	}
+	partial.Board.Set(y, newRow)
+	partial.XTurn = restream.Ptr(!xTurn)
+	s.storeData.ApplyPartial(partial)
+	return nil
+}, nil, nil)
+```
+
+Note the `, nil, nil` for the RPC types -- codegen will fill that in in a moment.  Next, we'll handle RPC dispatching.  In `main.go`, start setting up an RPCDispatcher at the top of your `main` function and pass it into your `NewBoardStore` function:
+
+```go
+	rpcd := restream.NewRPCDispatcher(log)
+	boardStore, err := NewBoardStore(rpcd)
+```
+
+Near the bottom of your `main` function, pass in the RPC handler function to the socket handler:
+
+```go
+		restream.AddSocketHandlers(conn, log, sdr, rpcd.FireRPC, func() (restream.AccessLevel, error) {
+```
+
+Now re-run codegen to generate the RPC types/signatures:
+
+```bash
+go tool github.com/boatkit-io/restream/cmd/codegen -project .
+```
+
+You should now have `PlaceTokenRequest` and `PlaceTokenResponse` types added to a new `boardstore_rs.go` file alongside `boardstore.go`, as well as that codegen should have filled in `reflect.TypeFor[PlaceTokenRequest](), reflect.TypeFor[PlaceTokenResponse]()` for the `nil, nil` type parameters in your RPC registration.  Let's add a click handler for it on the website:
+
+```typescript
+<td key={cellIndex} onClick={async () => { try { await rss.sendRPC(PlaceTokenRequest.fromValues(cellIndex, rowIndex)); } catch (error) { alert(error); } }}>{cell || ' '}</td>
+```
+
+It'll even auto pass the responses through, so RPCs can be bidirectional (i.e. they can get return values, even if they're errors)!  Now re-run the server and the website dev build should have picked up the change already.  You should be able to play a very simple game of multiplayer tic tac toe!  Open the site in multiple browsers to see the automatic streaming of all state.
 
 # Details
 

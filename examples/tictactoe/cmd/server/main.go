@@ -14,7 +14,8 @@ import (
 func main() {
 	log := logrus.New()
 
-	boardStore, err := NewBoardStore()
+	rpcd := restream.NewRPCDispatcher(log)
+	boardStore, err := NewBoardStore(rpcd)
 	if err != nil {
 		panic(err)
 	}
@@ -37,7 +38,7 @@ func main() {
 
 	if err := io.On("connection", func(clients ...any) {
 		conn := clients[0].(*socket.Socket)
-		restream.AddSocketHandlers(conn, log, sdr, nil, func() (restream.AccessLevel, error) {
+		restream.AddSocketHandlers(conn, log, sdr, rpcd.FireRPC, func() (restream.AccessLevel, error) {
 			return restream.AccessLevel(1), nil
 		})
 	}); err != nil {

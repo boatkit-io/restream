@@ -4,6 +4,7 @@ import BoardStore from './stores/BoardStore'
 
 import SocketIoClient from 'socket.io-client';
 import { withResubAutoSubscriptions } from 'resub';
+import { PlaceTokenRequest } from './restream/PackageMain';
 
 const socket = SocketIoClient('http://localhost:8080', {
   path: '/socket',
@@ -19,25 +20,29 @@ socket.on('connect', () => {
 
 socket.open();
 
+// eslint-disable-next-line react-refresh/only-export-components
 function App() {
   const board = BoardStore.getBoard();
   const xTurn = BoardStore.getXTurn();
-  
+  const nextToken = xTurn ? 'X' : 'O';
+
   return (
     <>
       <h1>Tic Tac Toe</h1>
+      <h2>Current Player: {nextToken}</h2>
       <div className="board">
         <table align="center">
-        {board.map((row, rowIndex) => (
-          <tr key={rowIndex}>
-            {row.map((cell, cellIndex) => (
-              <td key={cellIndex}>{cell || ' '}</td>
+          <tbody>
+            {board.map((row, rowIndex) => (
+              <tr key={rowIndex}>
+                {row.map((cell, cellIndex) => (
+                  <td key={cellIndex} onClick={async () => { try { await rss.sendRPC(PlaceTokenRequest.fromValues(cellIndex, rowIndex)); } catch (error) { alert(error); } }}>{cell || ' '}</td>
+                ))}
+              </tr>
             ))}
-          </tr>
-        ))}
+          </tbody>
         </table>
       </div>
-      <p>It is {xTurn ? 'X' : 'O'}'s turn</p>
     </>
   )
 }

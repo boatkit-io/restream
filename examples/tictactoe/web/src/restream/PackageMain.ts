@@ -3,7 +3,7 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import * as ReStreamDecoders from '@boatkit-io/restream';
 import * as ReStreamEncoders from '@boatkit-io/restream';
-import { BinaryReader, BinaryWriter, SerializationType, VarInfoArray, VarInfoPointer, VarInfoPrimitive, VarInfoStruct } from '@boatkit-io/restream';
+import { BinaryReader, BinaryWriter, RPCStruct, SerializationType, VarInfoArray, VarInfoPointer, VarInfoPrimitive, VarInfoStruct } from '@boatkit-io/restream';
 import type { FieldInfo } from '@boatkit-io/restream';
 import { PartialArray } from '@boatkit-io/restream';
 
@@ -110,4 +110,64 @@ export class BoardStoreStatePartial {
         if (this.xTurn !== undefined) { por.xTurn = this.xTurn; ret.push(["xTurn"]); }
         return ret;
     }
+}
+
+export class PlaceTokenRequest extends RPCStruct<PlaceTokenResponse,void> {
+    public x!: number;
+    public y!: number;
+    private constructor() { super("PlaceToken", PlaceTokenResponse); }
+
+    public static fromValues(
+        x: number = 0,
+        y: number = 0,
+    ) {
+        const o = new PlaceTokenRequest();
+        o.x = x;
+        o.y = y;
+        return o;
+    }
+
+	private static _fieldInfo: FieldInfo[] = [
+        {name: "X", fieldIdx: 0, varInfo: new VarInfoPrimitive(SerializationType.Int64, "int")},
+        {name: "Y", fieldIdx: 1, varInfo: new VarInfoPrimitive(SerializationType.Int64, "int")},
+	];
+    public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
+        const o = new PlaceTokenRequest();
+        o.x = ReStreamDecoders.deserializeValue(r, this._fieldInfo[0].varInfo);
+        o.y = ReStreamDecoders.deserializeValue(r, this._fieldInfo[1].varInfo);
+        return o;
+    }
+
+    public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
+        ReStreamEncoders.serializeValue(this.x, w, PlaceTokenRequest._fieldInfo[0].varInfo);
+        ReStreamEncoders.serializeValue(this.y, w, PlaceTokenRequest._fieldInfo[1].varInfo);
+    }
+}
+
+export class PlaceTokenResponse {
+    public error!: string|undefined;
+
+    private constructor() {}
+
+    public static fromValues(
+        error: string|undefined = undefined,
+    ) {
+        const o = new PlaceTokenResponse();
+        o.error = error;
+        return o;
+    }
+
+    public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
+        const o = new PlaceTokenResponse();
+        o.error = ReStreamDecoders.deserializeValue(r, this._fieldInfo[0].varInfo);
+        return o;
+    }
+
+    public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
+        ReStreamEncoders.serializeValue(this.error, w, PlaceTokenResponse._fieldInfo[0].varInfo);
+    }
+
+	private static _fieldInfo: FieldInfo[] = [
+        {name: "Error", fieldIdx: 0, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.String))},
+	];
 }
