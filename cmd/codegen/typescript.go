@@ -737,6 +737,9 @@ func (ft *FileTracking) addTSTypeRef(typeName string, isEnum bool) {
 	if pkgName == ft.fPackage.Name /*|| pkgName == "restream"*/ {
 		return
 	}
+	if pkgName == "restream" && isEnum && slices.Contains(restreamTypesToIgnore, refName) {
+		return
+	}
 
 	var has bool
 	var pkg *packages.Package

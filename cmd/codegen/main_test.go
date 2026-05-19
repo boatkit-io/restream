@@ -128,11 +128,6 @@ type AlreadyGenerated struct{}
 }
 
 func TestRPCRequestGenerationExpandsGroupedParams(t *testing.T) {
-	repoRoot, err := filepath.Abs("../..")
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	projectDir := t.TempDir()
 	serverDir := filepath.Join(projectDir, "cmd", "server")
 	if err := os.MkdirAll(serverDir, 0755); err != nil {
@@ -142,10 +137,6 @@ func TestRPCRequestGenerationExpandsGroupedParams(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/rpcparams
 
 go 1.26.2
-
-require github.com/boatkit-io/restream v0.0.0
-
-replace github.com/boatkit-io/restream => `+repoRoot+`
 `), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -154,13 +145,15 @@ replace github.com/boatkit-io/restream => `+repoRoot+`
 
 import (
 	"reflect"
-
-	"github.com/boatkit-io/restream/pkg/restream"
 )
 
 var _ = reflect.TypeFor[int]
 
-func Register(rpcd *restream.RPCDispatcher) {
+type testDispatcher struct{}
+
+func (*testDispatcher) RegisterRPCHandler(string, int, any, any, any) {}
+
+func Register(rpcd *testDispatcher) {
 	rpcd.RegisterRPCHandler("PlaceToken", 1, func(x, y int) error {
 		return nil
 	}, nil, nil)
