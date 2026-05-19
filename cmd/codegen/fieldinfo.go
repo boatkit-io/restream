@@ -286,6 +286,24 @@ func (ft *FileTracking) genFieldInfo(fieldList []*dst.Field) ([]*restream.FieldI
 	return fields, nil
 }
 
+// genParamFieldInfo generates FieldInfo structs for function params. Function params can share a type expression
+// across multiple names, as in func(x, y int), so each name has to become its own generated field.
+func (ft *FileTracking) genParamFieldInfo(fieldList []*dst.Field) ([]*restream.FieldInfo, error) {
+	fields := []*restream.FieldInfo{}
+	for _, fd := range fieldList {
+		for _, name := range fd.Names {
+			fdCopy := *fd
+			fdCopy.Names = []*dst.Ident{name}
+			fi, err := ft.getFieldInfo(&fdCopy, len(fields))
+			if err != nil {
+				return nil, err
+			}
+			fields = append(fields, fi)
+		}
+	}
+	return fields, nil
+}
+
 // genFieldInfoForType generates FieldInfo structs for a list of fields from the packages AST
 func (pt *ProjTracking) genFieldInfoForType(t *types.TypeName) ([]*restream.FieldInfo, error) {
 	st := t.Type().Underlying().(*types.Struct)

@@ -258,7 +258,7 @@ func (ft *FileTracking) parseFuncDecls() error { //nolint:gocyclo,funlen
 
 			fmt.Printf("Building RPC handlers for: %s\n", rpcn)
 
-			reqFields, err := ft.genFieldInfo(ftp.List)
+			reqFields, err := ft.genParamFieldInfo(ftp.List)
 			if err != nil {
 				return err
 			}
