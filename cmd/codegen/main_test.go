@@ -272,8 +272,8 @@ func TestWriteTSFileCanUseLocalRuntimeImports(t *testing.T) {
 		"import * as ReStreamEncoders from '../utils/Encoders.js';",
 		"import BinaryReader from '../utils/BinaryReader.js';",
 		"import BinaryWriter from '../utils/BinaryWriter.js';",
-		"import { VarInfoPrimitive, VarInfoStruct, VarInfoGenericParam, VarInfoPointer, VarInfoArray, VarInfoMap, VarInfoDynamic, SerializationType } from '../utils/SerializationTypes.js';",
-		"import type { VarInfo, FieldInfo, AppliablePartial, AppliableOnTopPartial } from '../utils/SerializationTypes.js';",
+		"import { SerializationType, VarInfoArray, VarInfoDynamic, VarInfoGenericParam, VarInfoMap, VarInfoPointer, VarInfoPrimitive, VarInfoStruct } from '../utils/SerializationTypes.js';",
+		"import type { AppliableOnTopPartial, AppliablePartial, FieldInfo, VarInfo } from '../utils/SerializationTypes.js';",
 	} {
 		if !strings.Contains(got, expected) {
 			t.Fatalf("generated TypeScript missing expected local import %q:\n%s", expected, got)
