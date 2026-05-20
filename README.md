@@ -1,6 +1,6 @@
 # ReStream
 
-ReStream is a data streaming framework based on [ReSub](https://github.com/microsoft/resub).  The intent is for golang serverside applications to be able to stream data to other golang services and web apps in real time, with fully-codegenned data stores and models based on the host golang side models.  There are also provisions for RPCs to use strongly-typed request/response models codegenned from golang-side functions to automatically be typesafe from the client side.  It uses similar patterns as protobuf for field serialization/deserialization, but is more compact and bespoke for golang/typescript, supporting a tight integration with native types.
+ReStream is a data streaming framework based on [ReSub](https://github.com/boatkit-io/resub).  The intent is for golang serverside applications to be able to stream data to other golang services and web apps in real time, with fully-codegenned data stores and models based on the host golang side models.  There are also provisions for RPCs to use strongly-typed request/response models codegenned from golang-side functions to automatically be typesafe from the client side.  It uses similar patterns as protobuf for field serialization/deserialization, but is more compact and bespoke for golang/typescript, supporting a tight integration with native types.
 
 # Getting Started/Example
 
@@ -154,6 +154,7 @@ func main() {
 
 	socketHandler := io.ServeHandler(&so)
 	router.Handle("/socket", socketHandler)
+	router.Handle("/socket/", socketHandler)
 
 	http.ListenAndServe(":8080", router)
 }
@@ -177,12 +178,50 @@ cd web
 pnpm install
 pnpm add socket.io-client
 pnpm add @boatkit-io/restream
-pnpm add resub
+pnpm add @boatkit-io/resub
 ```
 
-For now, because `ReSub` still uses legacy decorators, you have to go into your `tsconfig.app.json` file and add `"experimentalDecorators": true,` as a top level field.
+Unfortunately, currently, [Vite 8 doesn't properly support ECMA stage 3 decorators out of the box](https://github.com/oxc-project/oxc/issues/9170), so we have to apply a plugin to transform them properly.  Configure `vite.config.ts` to pull in a transform from the resub package to handle the decorators:
 
-Let's make a real quick UI.  Open the `App.tsx` file that the vite template auto-created and replace it with:
+```typescript
+import { defineConfig } from 'vite'
+import { standardDecorators } from '@boatkit-io/resub'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [standardDecorators(), react()],
+})
+```
+
+Let's set up the store on the client side.  Create a new `src/stores/BoardStore.ts` file:
+
+```typescript
+import { TriggerStore } from '@boatkit-io/restream';
+import { AutoSubscribeStore, autoSubscribe } from '@boatkit-io/resub';
+
+import { BoardStoreName, BoardStoreState, BoardStoreStatePartial } from '../restream/PackageMain';
+
+@AutoSubscribeStore
+class BoardStore extends TriggerStore<BoardStoreState> {
+    constructor() {
+        super(BoardStoreName, BoardStoreState, BoardStoreStatePartial);
+    }
+
+    @autoSubscribe
+    getBoard(): string[][] {
+        return (this._state.board ?? []).map((row) => row ?? []);
+    }
+
+    @autoSubscribe
+    getXTurn(): boolean {
+        return this._state.xTurn;
+    }
+}
+
+export default new BoardStore();
+```
+
+We've got our data ready to go, now let's make some UI.  Open the `App.tsx` file that the vite template auto-created and replace it with:
 
 ```typescript
 import { ReStreamSocket } from '@boatkit-io/restream';
@@ -190,7 +229,7 @@ import './App.css'
 import BoardStore from './stores/BoardStore'
 
 import SocketIoClient from 'socket.io-client';
-import { withResubAutoSubscriptions } from 'resub';
+import { withResubAutoSubscriptions } from '@boatkit-io/resub';
 
 const socket = SocketIoClient('http://localhost:8080', {
   path: '/socket',
@@ -236,7 +275,7 @@ function App() {
 export default withResubAutoSubscriptions(App)
 ```
 
-Note the `withResubAutoSubscriptions` at the bottom -- you have to wrap component rendering in that to get auto-subscriptions to work.
+Note the `withResubAutoSubscriptions` at the bottom -- you have to wrap component rendering in that to get resub auto-subscriptions to work.
 Let's start the web dev hot reload cycle:
 
 ```bash
@@ -312,7 +351,7 @@ It'll even auto pass the responses through, so RPCs can be bidirectional (i.e. t
 
 ## Stores
 
-The data model for resub is designed around Stores that hold all state and emit events when changes are made.  See [the ReSub complete example](https://github.com/microsoft/resub) to get a basic idea of how to think about stores.
+The data model for resub is designed around Stores that hold all state and emit events when changes are made.  See [the ReSub complete example](https://github.com/boatkit-io/resub) to get a basic idea of how to think about stores.
 
 In ReStream, we use the same store model as in ReSub, but the stores are created in golang and streamed over to codegenned TypeScript versions of the stores.  The pattern for ReStream stores is to first create a 
 

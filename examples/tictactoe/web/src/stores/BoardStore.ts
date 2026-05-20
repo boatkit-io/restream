@@ -1,5 +1,5 @@
 import { TriggerStore } from '@boatkit-io/restream';
-import { AutoSubscribeStore, autoSubscribe } from 'resub';
+import { AutoSubscribeStore, autoSubscribe } from '@boatkit-io/resub';
 
 import { BoardStoreName, BoardStoreState, BoardStoreStatePartial } from '../restream/PackageMain';
 
@@ -18,10 +18,6 @@ class BoardStore extends TriggerStore<BoardStoreState> {
     getXTurn(): boolean {
         return this._state.xTurn;
     }
-
-    // setMyMMSI(mmsi: MMSI) {
-    //     return ServiceSocket.sendRPC(AISSetMyMMSIRequest.fromValues(mmsi));
-    // }
 }
 
 export default new BoardStore();

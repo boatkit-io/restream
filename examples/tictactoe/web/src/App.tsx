@@ -3,7 +3,7 @@ import './App.css'
 import BoardStore from './stores/BoardStore'
 
 import SocketIoClient from 'socket.io-client';
-import { withResubAutoSubscriptions } from 'resub';
+import { withResubAutoSubscriptions } from '@boatkit-io/resub';
 import { PlaceTokenRequest } from './restream/PackageMain';
 
 const socket = SocketIoClient('http://localhost:8080', {

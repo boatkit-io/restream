@@ -1,4 +1,4 @@
-import { StoreBase, formCompoundKey } from 'resub';
+import { StoreBase, formCompoundKey } from '@boatkit-io/resub';
 
 import { StoreUpdateFullMessage, StoreUpdateMessage, StoreUpdateMessageKind, StoreUpdatePartialMessage } from '../websocket/SocketHelper.js';
 import BinaryReader from '../utils/BinaryReader.js';

@@ -46,6 +46,7 @@ func main() {
 
 	socketHandler := io.ServeHandler(&so)
 	router.Handle("/socket", socketHandler)
+	router.Handle("/socket/", socketHandler)
 
 	http.ListenAndServe(":8080", router)
 }

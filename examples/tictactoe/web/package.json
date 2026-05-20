@@ -11,10 +11,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@boatkit-io/restream": "^0.0.1",
+    "@boatkit-io/restream": "link:../../../web",
+    "@boatkit-io/resub": "^2.4.1",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
-    "resub": "^2.3.2",
     "socket.io-client": "^4.8.3"
   },
   "devDependencies": {

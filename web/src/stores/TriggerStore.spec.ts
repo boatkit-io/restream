@@ -1,4 +1,4 @@
-import { StoreBase } from 'resub';
+import { StoreBase } from '@boatkit-io/resub';
 import { beforeAll, describe, expect, test, vi } from 'vitest';
 
 import TriggerStore from './TriggerStore.js';
