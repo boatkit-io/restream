@@ -2,3 +2,4 @@ node_modules/
 dist/
 coverage/
 .pnpm-store/
+web/src/restream/BasicTesterData.ts

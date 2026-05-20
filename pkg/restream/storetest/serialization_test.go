@@ -4,15 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/boatkit-io/restream/pkg/binarystreams"
 	"github.com/boatkit-io/restream/pkg/restream"
-	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -20,6 +19,12 @@ type BTRet struct {
 	name    string
 	bytes   []byte
 	jsonStr string
+}
+
+type basicTesterFixtureRow struct {
+	Name    string `json:"name"`
+	Bytes   []int  `json:"bytes"`
+	JSONStr string `json:"jsonStr"`
 }
 
 type TestString string
@@ -78,13 +83,12 @@ func BasicTester[T any, TDO any](t *testing.T, iv T) BTRet {
 		assert.NoError(t, restream.SerializeDynamicValue(ivd, wd, vid))
 		assert.NoError(t, wd.Flush())
 
-		bs = bd.Bytes()
-		rd := binarystreams.NewReaderFromBytes(bs)
+		rd := binarystreams.NewReaderFromBytes(bd.Bytes())
 		var ovd any
 		assert.NoError(t, restream.DeserializeDynamicValue(&ovd, rd, vid))
 		assert.True(t, deepComparableEqual(any(iv), ovd))
 
-		ret.bytes = bs
+		ret.bytes = bd.Bytes()
 		ob, err := json.Marshal(ovd)
 		assert.NoError(t, err)
 		ret.jsonStr = string(ob)
@@ -210,13 +214,50 @@ func TestBasicTypes(t *testing.T) {
 			SetWhole(&TestState{BaseStruct: TestMapData{Number: 4}}).ApplyPartial(&TestStatePartial{BaseField: restream.Ptr("hello")})),
 	}
 
-	testRets = lo.Filter(testRets, func(tr BTRet, _ int) bool { return len(tr.bytes) > 0 })
-	testbits := lo.Map(testRets, func(tr BTRet, _ int) string {
-		td := lo.Map(tr.bytes, func(b byte, _ int) string { return strconv.FormatUint(uint64(b), 10) })
-		return fmt.Sprintf("    [%q, [%s], %q],", tr.name, strings.Join(td, ","), tr.jsonStr)
-	})
-	tf := fmt.Sprintf("export default [\n%s\n];\n", strings.Join(testbits, "\n"))
-	assert.NoError(t, os.WriteFile("../../../web/src/restream/BasicTesterData.ts", []byte(tf), 0o644))
+	fixturePath := writeBasicTesterFixture(t, testRets)
+	runBasicTesterSpec(t, fixturePath)
+}
+
+func writeBasicTesterFixture(t *testing.T, testRets []BTRet) string {
+	t.Helper()
+
+	rows := make([]basicTesterFixtureRow, 0, len(testRets))
+	for _, tr := range testRets {
+		if len(tr.bytes) == 0 {
+			continue
+		}
+		rows = append(rows, basicTesterFixtureRow{
+			Name:    tr.name,
+			Bytes:   bytesToInts(tr.bytes),
+			JSONStr: tr.jsonStr,
+		})
+	}
+
+	payload, err := json.Marshal(rows)
+	assert.NoError(t, err)
+
+	fixturePath := filepath.Join(t.TempDir(), "BasicTesterData.json")
+	assert.NoError(t, os.WriteFile(fixturePath, payload, 0o644))
+	return fixturePath
+}
+
+func bytesToInts(bs []byte) []int {
+	ret := make([]int, len(bs))
+	for i, b := range bs {
+		ret[i] = int(b)
+	}
+	return ret
+}
+
+func runBasicTesterSpec(t *testing.T, fixturePath string) {
+	t.Helper()
+
+	cmd := exec.Command("pnpm", "exec", "vitest", "run", "src/restream/BasicTester.spec.ts")
+	cmd.Dir = "../../../web"
+	cmd.Env = append(os.Environ(), "RESTREAM_BASIC_TESTER_DATA="+fixturePath)
+
+	out, err := cmd.CombinedOutput()
+	assert.NoError(t, err, string(out))
 }
 
 func deepComparableEqual(a, b any) bool {
