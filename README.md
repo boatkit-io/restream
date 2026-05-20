@@ -104,7 +104,7 @@ func (s *BoardStore) SubscribeToField(field []any, callback any) {
 }
 ```
 
-Now we have a basic store and state structure.  Let's get a basic service going.  Create a new `main.go` file in `cmd/server` with the following contents to do basic store setup and bolt it to a websocket listener via `mux`:
+Now we have a basic store and state structure.  Let's get a basic service going.  Create a new `main.go` file in `cmd/server` with the following contents to do basic store setup and bolt it to a websocket listener via the standard library HTTP server:
 
 ```go
 package main
@@ -114,7 +114,6 @@ import (
 
 	"github.com/boatkit-io/restream/pkg/restream"
 	"github.com/boatkit-io/restream/pkg/websocketencoder"
-	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
 	"github.com/zishang520/socket.io/servers/socket/v3"
 	"github.com/zishang520/socket.io/v3/pkg/types"
@@ -135,7 +134,7 @@ func main() {
 		panic(err)
 	}
 
-	router := mux.NewRouter()
+	router := http.NewServeMux()
 
 	so := socket.ServerOptions{}
 	so.SetParser(websocketencoder.NewParser())
@@ -153,7 +152,8 @@ func main() {
 		panic(err)
 	}
 
-	router.PathPrefix("/socket").Handler(io.ServeHandler(&so))
+	socketHandler := io.ServeHandler(&so)
+	router.Handle("/socket", socketHandler)
 
 	http.ListenAndServe(":8080", router)
 }
