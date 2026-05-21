@@ -7,4 +7,4 @@ export * from './utils/Decoders.js';
 export * from './utils/Encoders.js';
 export * from './utils/SerializationTypes.js';
 export { mapValueToObject } from './utils/TSUtils.js';
-export { ReStreamSocket, RPCCallError, RPCCallMessage, RPCResponseStruct, RPCStruct } from './websocket/SocketHelper.js';
+export { EventMessage, EventStruct, EventStructType, ReStreamSocket, RPCCallError, RPCCallMessage, RPCResponseStruct, RPCStruct } from './websocket/SocketHelper.js';

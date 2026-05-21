@@ -2,14 +2,17 @@ package main
 
 import (
 	"fmt"
+	"go/ast"
 	"go/token"
 	"go/types"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/boatkit-io/restream/pkg/restream"
 	"github.com/dave/dst"
+	"github.com/dave/dst/decorator"
 	"github.com/samber/lo"
 )
 
@@ -174,6 +177,11 @@ func (ft *FileTracking) parseStructDecls() error { //nolint:gocyclo,funlen
 
 // parseFuncDecls is an inner helper to parse all of the RPC functions from the file and see what we want to codegen from it
 func (ft *FileTracking) parseFuncDecls() error { //nolint:gocyclo,funlen
+	eventRegistrations, err := ft.typedEventRegistrations()
+	if err != nil {
+		return err
+	}
+
 	// First pass to get all function types
 	receiverLookup := map[string]*dst.FuncType{}
 	for _, d := range ft.f.Decls {
@@ -219,10 +227,65 @@ func (ft *FileTracking) parseFuncDecls() error { //nolint:gocyclo,funlen
 				continue
 			}
 			if sexid.Name != "rpcd" || se.Sel.Name != "RegisterRPCHandler" {
+				if se.Sel.Name != "RegisterEvent" {
+					continue
+				}
+
+				eventName, err := stringLiteralValue(xt.Args[0])
+				if err != nil {
+					return err
+				}
+				eventInfo, has := eventRegistrations[eventName]
+				if !has {
+					return fmt.Errorf("unable to resolve event registration type for %s", eventName)
+				}
+
+				eventTypeName := strings.ReplaceAll(eventName, ".", "")
+
+				fmt.Printf("Building Event packet for: %s\n", eventName)
+
+				if err := ft.buildGolangEventStruct(eventName, eventTypeName, eventInfo.Fields); err != nil {
+					return err
+				}
+
+				if err := ft.buildTSEventStruct(eventName, eventTypeName, eventInfo.Fields); err != nil {
+					return err
+				}
+
+				eventPacketType := fmt.Sprintf("%sEvent", eventTypeName)
+				fixed := false
+				if eventInfo.NeedsAddress && !isAddressOf(xt.Args[1]) {
+					fixed = true
+					xt.Args[1] = &dst.UnaryExpr{Op: token.AND, X: xt.Args[1]}
+				}
+				if len(xt.Args) < 3 {
+					fixed = true
+					xt.Args = append(xt.Args, genRPCArg(eventPacketType))
+				} else if !validateRPCArg(xt.Args[2], eventPacketType) {
+					fixed = true
+					xt.Args[2] = genRPCArg(eventPacketType)
+				}
+
+				if len(xt.Args) < 4 {
+					fixed = true
+					xt.Args = append(xt.Args, genReflectTypeArg(eventInfo.CallbackTypeExpr))
+				} else if !validateReflectTypeArg(xt.Args[3], eventInfo.CallbackTypeExpr) {
+					fixed = true
+					xt.Args[3] = genReflectTypeArg(eventInfo.CallbackTypeExpr)
+				}
+
+				if fixed {
+					ft.inputFileDirty = true
+					fmt.Printf("Fixed event types for %s\n", eventName)
+				}
+
 				continue
 			}
 
-			rpcn := strings.Trim(xt.Args[0].(*dst.BasicLit).Value, "\"")
+			rpcn, err := stringLiteralValue(xt.Args[0])
+			if err != nil {
+				return err
+			}
 			rpctn := strings.ReplaceAll(rpcn, ".", "")
 
 			var ftt *dst.FuncType
@@ -307,6 +370,174 @@ func (ft *FileTracking) parseFuncDecls() error { //nolint:gocyclo,funlen
 	return nil
 }
 
+type eventRegistrationInfo struct {
+	Fields           []*restream.FieldInfo
+	CallbackTypeExpr string
+	NeedsAddress     bool
+}
+
+func (ft *FileTracking) typedEventRegistrations() (map[string]eventRegistrationInfo, error) {
+	ret := map[string]eventRegistrationInfo{}
+	if ft.fPackage == nil || ft.fPackage.TypesInfo == nil {
+		return ret, nil
+	}
+
+	var targetFile *ast.File
+	for _, f := range ft.fPackage.Syntax {
+		if filepath.Clean(ft.pt.fset.Position(f.Pos()).Filename) == filepath.Clean(ft.inFile) {
+			targetFile = f
+			break
+		}
+	}
+	if targetFile == nil {
+		return ret, nil
+	}
+
+	var walkErr error
+	ast.Inspect(targetFile, func(n ast.Node) bool {
+		if walkErr != nil {
+			return false
+		}
+
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		se, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || se.Sel.Name != "RegisterEvent" {
+			return true
+		}
+		if len(call.Args) < 2 {
+			walkErr = fmt.Errorf("RegisterEvent call has %d args, expected at least 2", len(call.Args))
+			return false
+		}
+
+		eventName, err := astStringLiteralValue(call.Args[0])
+		if err != nil {
+			walkErr = err
+			return false
+		}
+
+		eventType := ft.fPackage.TypesInfo.TypeOf(call.Args[1])
+		signature, ok := subscribableEventSignature(eventType)
+		if !ok {
+			walkErr = fmt.Errorf(
+				"RegisterEvent for %s must pass a subscribableevent.Event, got %s (package errors: %+v)",
+				eventName, eventType, ft.fPackage.Errors,
+			)
+			return false
+		}
+		if signature.Results().Len() != 0 {
+			walkErr = fmt.Errorf("RegisterEvent for %s uses an event callback type with %d return values", eventName, signature.Results().Len())
+			return false
+		}
+
+		fields, err := ft.eventFieldsFromSignature(signature)
+		if err != nil {
+			walkErr = err
+			return false
+		}
+
+		ret[eventName] = eventRegistrationInfo{
+			Fields:           fields,
+			CallbackTypeExpr: callbackTypeExprFromFields(ft, fields),
+			NeedsAddress:     !isPointerType(eventType),
+		}
+		return true
+	})
+	if walkErr != nil {
+		return nil, walkErr
+	}
+
+	return ret, nil
+}
+
+func subscribableEventSignature(t types.Type) (*types.Signature, bool) {
+	if t == nil {
+		return nil, false
+	}
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem()
+	}
+
+	named, ok := t.(*types.Named)
+	if !ok || named.Obj() == nil || named.Obj().Pkg() == nil {
+		return nil, false
+	}
+	if named.Obj().Pkg().Path() != "github.com/boatkit-io/tugboat/pkg/subscribableevent" || named.Obj().Name() != "Event" {
+		return nil, false
+	}
+	if named.TypeArgs() == nil || named.TypeArgs().Len() != 1 {
+		return nil, false
+	}
+
+	callbackType := named.TypeArgs().At(0)
+	if callbackNamed, ok := callbackType.(*types.Named); ok {
+		callbackType = callbackNamed.Underlying()
+	}
+	signature, ok := callbackType.(*types.Signature)
+	return signature, ok
+}
+
+func (ft *FileTracking) eventFieldsFromSignature(signature *types.Signature) ([]*restream.FieldInfo, error) {
+	fields := []*restream.FieldInfo{}
+	params := signature.Params()
+	for idx := 0; idx < params.Len(); idx++ {
+		param := params.At(idx)
+		name := param.Name()
+		if name == "" || name == "_" {
+			name = fmt.Sprintf("Arg%d", idx)
+		} else {
+			name = toPublicName(name)
+		}
+
+		vi, err := ft.pt.getVarInfoForType(param.Type())
+		if err != nil {
+			return nil, err
+		}
+
+		fields = append(fields, &restream.FieldInfo{
+			Name:     name,
+			FieldIdx: idx,
+			VarInfo:  vi,
+		})
+	}
+	return fields, nil
+}
+
+func isPointerType(t types.Type) bool {
+	_, ok := t.(*types.Pointer)
+	return ok
+}
+
+func isAddressOf(expr dst.Expr) bool {
+	ue, ok := expr.(*dst.UnaryExpr)
+	return ok && ue.Op == token.AND
+}
+
+func callbackTypeExprFromFields(ft *FileTracking, fields []*restream.FieldInfo) string {
+	params := lo.Map(fields, func(fi *restream.FieldInfo, _ int) string {
+		return ft.getGolangTypeName(fi.VarInfo)
+	})
+	return fmt.Sprintf("func(%s)", strings.Join(params, ", "))
+}
+
+func stringLiteralValue(expr dst.Expr) (string, error) {
+	bl, ok := expr.(*dst.BasicLit)
+	if !ok {
+		return "", fmt.Errorf("expected string literal, got %T", expr)
+	}
+	return strconv.Unquote(bl.Value)
+}
+
+func astStringLiteralValue(expr ast.Expr) (string, error) {
+	bl, ok := expr.(*ast.BasicLit)
+	if !ok {
+		return "", fmt.Errorf("expected string literal, got %T", expr)
+	}
+	return strconv.Unquote(bl.Value)
+}
+
 // buildSerializers is a helper to build serializers for the configured BuildSerializers list
 func (pt *ProjTracking) buildSerializers() error {
 	if len(pt.config.BuildSerializers) == 0 {
@@ -361,6 +592,15 @@ func genRPCArg(structType string) dst.Expr {
 	}
 }
 
+// genReflectTypeArg generates an AST struct for reflect.TypeFor[typeExpr]().
+func genReflectTypeArg(typeExpr string) dst.Expr {
+	expr, err := parseDSTExpr(fmt.Sprintf("reflect.TypeFor[%s]()", typeExpr))
+	if err != nil {
+		panic(err)
+	}
+	return expr
+}
+
 // validateRPCArg is a helper for validating the type of the RPC arg
 func validateRPCArg(arg dst.Expr, expectedType string) bool {
 	ce, ok := arg.(*dst.CallExpr)
@@ -396,6 +636,48 @@ func validateRPCArg(arg dst.Expr, expectedType string) bool {
 		return false
 	}
 	return true
+}
+
+// validateReflectTypeArg is a helper for validating a reflect.TypeFor[typeExpr]() arg.
+func validateReflectTypeArg(arg dst.Expr, expectedTypeExpr string) bool {
+	return dstExprString(arg) == fmt.Sprintf("reflect.TypeFor[%s]()", expectedTypeExpr)
+}
+
+func parseDSTExpr(expr string) (dst.Expr, error) {
+	f, err := decorator.Parse("package main\nvar _ = " + expr)
+	if err != nil {
+		return nil, err
+	}
+
+	gd := f.Decls[0].(*dst.GenDecl)
+	vs := gd.Specs[0].(*dst.ValueSpec)
+	return vs.Values[0], nil
+}
+
+func dstExprString(expr dst.Expr) string {
+	f := &dst.File{
+		Name: dst.NewIdent("main"),
+		Decls: []dst.Decl{
+			&dst.GenDecl{
+				Tok: token.VAR,
+				Specs: []dst.Spec{
+					&dst.ValueSpec{
+						Names:  []*dst.Ident{dst.NewIdent("_")},
+						Values: []dst.Expr{expr},
+					},
+				},
+			},
+		},
+	}
+
+	var b strings.Builder
+	if err := decorator.Fprint(&b, f); err != nil {
+		panic(err)
+	}
+
+	out := b.String()
+	out = strings.TrimPrefix(out, "package main\n\nvar _ = ")
+	return strings.TrimSpace(out)
 }
 
 // walkStructDeps walks through the struct and finds all the structs that it references to add to the todo list

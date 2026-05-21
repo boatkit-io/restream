@@ -329,6 +329,8 @@ func (pt *ProjTracking) genFieldInfoForType(t *types.TypeName) ([]*restream.Fiel
 // getVarInfoForType calcualtes the VarInfo for a packages AST type
 func (pt *ProjTracking) getVarInfoForType(t types.Type) (restream.VarInfo, error) {
 	switch ot := t.(type) {
+	case *types.Alias:
+		return pt.getVarInfoForType(types.Unalias(ot))
 	case *types.Basic:
 		switch ot.Kind() {
 		case types.Bool:
@@ -362,7 +364,82 @@ func (pt *ProjTracking) getVarInfoForType(t types.Type) (restream.VarInfo, error
 		default:
 			return nil, fmt.Errorf("unsupported basic type in getVarInfoForType: %s", ot.String())
 		}
+	case *types.Pointer:
+		sub, err := pt.getVarInfoForType(ot.Elem())
+		if err != nil {
+			return nil, err
+		}
+		return &restream.VarInfoPointer{SubType: sub}, nil
+	case *types.Slice:
+		sub, err := pt.getVarInfoForType(ot.Elem())
+		if err != nil {
+			return nil, err
+		}
+		return &restream.VarInfoArray{ElemType: sub}, nil
+	case *types.Array:
+		sub, err := pt.getVarInfoForType(ot.Elem())
+		if err != nil {
+			return nil, err
+		}
+		return &restream.VarInfoArray{ElemType: sub}, nil
+	case *types.Map:
+		key, err := pt.getVarInfoForType(ot.Key())
+		if err != nil {
+			return nil, err
+		}
+		var elem restream.VarInfo
+		elemStruct, isSet := ot.Elem().Underlying().(*types.Struct)
+		if !isSet || elemStruct.NumFields() != 0 {
+			elem, err = pt.getVarInfoForType(ot.Elem())
+			if err != nil {
+				return nil, err
+			}
+		}
+		return &restream.VarInfoMap{KeyType: key, ElemType: elem}, nil
+	case *types.Interface:
+		return &restream.VarInfoDynamic{}, nil
+	case *types.Struct:
+		if ot.NumFields() == 0 {
+			return nil, nil
+		}
+		fields := make([]restream.FieldInfo, ot.NumFields())
+		for idx := 0; idx < ot.NumFields(); idx++ {
+			fd := ot.Field(idx)
+			vi, err := pt.getVarInfoForType(fd.Type())
+			if err != nil {
+				return nil, err
+			}
+			fields[idx] = restream.FieldInfo{
+				Name:     fd.Name(),
+				FieldIdx: idx,
+				VarInfo:  vi,
+			}
+		}
+		return &restream.VarInfoStruct{FieldList: fields}, nil
+	case *types.TypeParam:
+		return &restream.VarInfoGenericParam{Name: ot.Obj().Name()}, nil
 	case *types.Named:
+		if ot.Obj().Pkg() != nil && ot.Obj().Pkg().Path() == "time" && ot.Obj().Name() == "Time" {
+			return &restream.VarInfoPrimitive{DataType: restream.SerializationTypeTime}, nil
+		}
+		if _, ok := ot.Underlying().(*types.Struct); ok {
+			vis := &restream.VarInfoStruct{
+				Name:    ot.Obj().Name(),
+				Package: ot.Obj().Pkg().Name(),
+			}
+			if ot.TypeArgs() != nil && ot.TypeArgs().Len() > 0 {
+				vis.GenericTypes = make([]restream.VarInfo, ot.TypeArgs().Len())
+				for idx := 0; idx < ot.TypeArgs().Len(); idx++ {
+					vi, err := pt.getVarInfoForType(ot.TypeArgs().At(idx))
+					if err != nil {
+						return nil, err
+					}
+					vis.GenericTypes[idx] = vi
+				}
+			}
+			return vis, nil
+		}
+
 		vi, err := pt.getVarInfoForType(ot.Underlying())
 		if err != nil {
 			return nil, err

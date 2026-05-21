@@ -64,6 +64,13 @@ type StoreUpdatePartialMessage struct {
 	Partial socketTypes.BufferInterface `json:"partial"`
 }
 
+// EventMessage is emitted when a server-side EventDispatcher registered event fires.
+type EventMessage struct {
+	Time      int64                       `json:"time"`
+	EventName string                      `json:"eventName"`
+	Event     socketTypes.BufferInterface `json:"event"`
+}
+
 // RPCCallMessage is a message sent by the client with an RPC call (i.e. a `BlahStore.SetXYZ` message/call)
 type RPCCallMessage struct {
 	CallID     int                         `json:"callID"`
@@ -90,6 +97,9 @@ const (
 	// SocketEventNameStoreSubscription - Store Subscription
 	SocketEventNameStoreSubscription = "storesub"
 
+	// SocketEventNameEvent - Server-originated EventDispatcher event
+	SocketEventNameEvent = "event"
+
 	// SocketEventNameRPCCall - RPC Call
 	SocketEventNameRPCCall = "rpccall"
 	// SocketEventNameRPCCallResponse - RPC Call Response
@@ -109,6 +119,7 @@ type socketTracker struct {
 	log          *logrus.Logger
 	sr           *StoreRegistry
 	rpch         RPCHandlerFunc
+	ed           *EventDispatcher
 	accessLookup AccessLookupFunc
 
 	emitQueueMutex sync.RWMutex
@@ -117,18 +128,27 @@ type socketTracker struct {
 	conn *socket.Socket
 
 	partialApplySubID subscribableevent.SubscriptionId
+	eventSubID        subscribableevent.SubscriptionId
 
 	storeSubscriptions map[string]map[string]int
 	subscriptionMutex  smartmutex.SmartMutex
 	disconnectOnce     sync.Once
 }
 
-func AddSocketHandlers(conn *socket.Socket, log *logrus.Logger, sr *StoreRegistry, rpch RPCHandlerFunc, accessLookup AccessLookupFunc) error {
+func AddSocketHandlers(
+	conn *socket.Socket,
+	log *logrus.Logger,
+	sr *StoreRegistry,
+	rpch RPCHandlerFunc,
+	ed *EventDispatcher,
+	accessLookup AccessLookupFunc,
+) error {
 	st := &socketTracker{
 		conn:         conn,
 		log:          log,
 		sr:           sr,
 		rpch:         rpch,
+		ed:           ed,
 		accessLookup: accessLookup,
 
 		emitQueue:          make(chan emitMessage, 100),
@@ -151,6 +171,9 @@ func AddSocketHandlers(conn *socket.Socket, log *logrus.Logger, sr *StoreRegistr
 	}
 
 	st.partialApplySubID = st.sr.SubscribeToPartialApplies(st.PartialCallback)
+	if st.ed != nil {
+		st.eventSubID = st.ed.SubscribeToEvents(st.EventCallback)
+	}
 
 	st.handleEmitQueue()
 
@@ -172,6 +195,9 @@ func (s *socketTracker) cleanupDisconnect() {
 
 	if s.sr != nil {
 		s.sr.UnsubscribeFromPartialApplies(s.partialApplySubID) //nolint:errcheck // Why: Best effort
+	}
+	if s.ed != nil {
+		s.ed.UnsubscribeFromEvents(s.eventSubID) //nolint:errcheck // Why: Best effort
 	}
 
 	s.subscriptionMutex.RLock()
@@ -346,6 +372,17 @@ func (st *socketTracker) emitPartialStoreUpdate(storeName string, partialBytes [
 	}
 
 	st.emitMessage(SocketEventNameStoreUpdate, m)
+}
+
+// EventCallback is registered with the EventDispatcher to relay server-side events to the websocket client.
+func (st *socketTracker) EventCallback(eventName string, eventBytes []byte) {
+	m := EventMessage{
+		Time:      time.Now().UnixMilli(),
+		EventName: eventName,
+		Event:     socketTypes.NewBytesBuffer(eventBytes),
+	}
+
+	st.emitMessage(SocketEventNameEvent, m)
 }
 
 // onRPCCall is a helper that is called when an RPC call message is received

@@ -368,6 +368,29 @@ func TestViewerSocketKeyedCatchupUsesRelayStorePartial(t *testing.T) {
 	}
 }
 
+func TestViewerSocketEmitsEventDispatcherMessages(t *testing.T) {
+	socket := &socketTracker{
+		emitQueue: make(chan emitMessage, 1),
+	}
+
+	socket.EventCallback("call", []byte{1, 2, 3})
+
+	emitted := <-socket.emitQueue
+	if emitted.Name != SocketEventNameEvent {
+		t.Fatalf("expected %s event, got %s", SocketEventNameEvent, emitted.Name)
+	}
+	message, ok := emitted.Message.(EventMessage)
+	if !ok {
+		t.Fatalf("expected event message, got %T", emitted.Message)
+	}
+	if message.EventName != "call" {
+		t.Fatalf("expected event name call, got %s", message.EventName)
+	}
+	if string(message.Event.Bytes()) != string([]byte{1, 2, 3}) {
+		t.Fatalf("unexpected event bytes: %#v", message.Event.Bytes())
+	}
+}
+
 const viewerSocketTestStoreName = "test-store"
 
 func TestViewerSocketDisconnectCleanupIsIdempotent(_ *testing.T) {

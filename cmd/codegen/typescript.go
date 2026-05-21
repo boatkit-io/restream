@@ -31,6 +31,8 @@ const (
 // them in separately in a kinda hacky way
 var restreamTypesToIgnore = []string{"SerializationType", "_SerializationTypeName"}
 
+const restreamIgnoreAnnotation = "@restream.Ignore"
+
 // createTSStructSerializers is an inner helper to produce Typescript-based structs and serialization helpers from the
 // source structures
 func (ft *FileTracking) createTSStructSerializers(si StructInfo, fields []*restream.FieldInfo, partialFields []*restream.FieldInfo) error {
@@ -447,7 +449,7 @@ func (ft *FileTracking) createTSPerFileData() error {
 				continue
 			}
 
-			if slices.Contains(restreamTypesToIgnore, vs.Names[0].Name) {
+			if slices.Contains(restreamTypesToIgnore, vs.Names[0].Name) || hasRestreamIgnoreAnnotation(gd, vs) {
 				continue
 			}
 
@@ -458,6 +460,15 @@ func (ft *FileTracking) createTSPerFileData() error {
 	}
 
 	return nil
+}
+
+func hasRestreamIgnoreAnnotation(gd *dst.GenDecl, vs *dst.ValueSpec) bool {
+	for _, dec := range append(gd.Decorations().Start.All(), vs.Decorations().Start.All()...) {
+		if strings.Contains(dec, restreamIgnoreAnnotation) {
+			return true
+		}
+	}
+	return false
 }
 
 // genTSEnumDecl builds a typescript enum/type mapping for a given const type, scoped to within a file
@@ -726,6 +737,32 @@ func (ft *FileTracking) buildTSRPCStructs(rpcn, rpctn string, reqFields []*restr
 	return nil
 }
 
+// buildTSEventStruct is a helper to build the typescript event packet struct.
+func (ft *FileTracking) buildTSEventStruct(eventName, eventTypeName string, eventFields []*restream.FieldInfo) error {
+	si := StructInfo{Name: eventTypeName + "Event"}
+	outTS := fmt.Sprintf("export class %s extends EventStruct {\n", si.Name)
+	for _, fi := range eventFields {
+		outTS += fmt.Sprintf("    public %s!: %s;\n", getTSFieldName(fi), ft.getTSType(fi.VarInfo))
+	}
+
+	outTS += "\n"
+	outTS += fmt.Sprintf("    public static readonly eventBoundName = %q;\n", eventName)
+	outTS += fmt.Sprintf("    private constructor() { super(%s.eventBoundName); }\n\n", si.Name)
+
+	outTS += ft.genTSFromValuesConstructor(si, eventFields) + "\n"
+	outTS += genTSFieldInfo(eventFields)
+	outTS += ft.genTSNonFieldedStructSerializers(si, eventFields)
+	outTS += "}\n"
+
+	deps := map[string]struct{}{}
+	for _, fi := range eventFields {
+		ft.documentTSSamePackageTypeDeps(fi.VarInfo, deps)
+	}
+	ft.tsGenEntries = append(ft.tsGenEntries, fdef{name: si.Name, defs: outTS, typ: fdefTypeOther, deps: lo.Keys(deps)})
+
+	return nil
+}
+
 // addTSTypeRef adds a marker for later processing that a type was referenced by a source structure, so we know to pull
 // that into the output typescript later on after the main storestate structs.
 func (ft *FileTracking) addTSTypeRef(typeName string, isEnum bool) {
@@ -940,7 +977,7 @@ func (pt *ProjTracking) tsRuntimeImports() ([]tsImport, error) {
 			},
 			{
 				Path:    "../websocket/SocketHelper.js",
-				Imports: []string{"RPCResponseStruct", "RPCStruct"},
+				Imports: []string{"EventStruct", "RPCResponseStruct", "RPCStruct"},
 			},
 		}, nil
 	case tsRuntimeImportModePackage:
@@ -957,7 +994,7 @@ func (pt *ProjTracking) tsRuntimeImports() ([]tsImport, error) {
 			{
 				Path: runtimeImportPath,
 				Imports: []string{
-					"BinaryReader", "BinaryWriter", "RPCResponseStruct", "RPCStruct",
+					"BinaryReader", "BinaryWriter", "EventStruct", "RPCResponseStruct", "RPCStruct",
 					"SerializationType", "VarInfoArray", "VarInfoDynamic", "VarInfoGenericParam", "VarInfoMap",
 					"VarInfoPointer", "VarInfoPrimitive", "VarInfoStruct",
 				},

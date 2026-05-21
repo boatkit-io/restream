@@ -7,7 +7,7 @@ import * as ReStreamDecoders from '../utils/Decoders.js';
 import * as ReStreamEncoders from '../utils/Encoders.js';
 import { SerializationType, VarInfoArray, VarInfoPointer, VarInfoPrimitive, VarInfoStruct } from '../utils/SerializationTypes.js';
 import type { FieldInfo } from '../utils/SerializationTypes.js';
-import { RPCStruct } from '../websocket/SocketHelper.js';
+import { EventStruct, RPCStruct } from '../websocket/SocketHelper.js';
 
 export const AccessLevelAdmin = 2;
 
@@ -167,6 +167,34 @@ export class call3Response {
         {name: "Result", fieldIdx: 0, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Int64, "int"))},
         {name: "Error", fieldIdx: 1, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.String))},
 	];
+}
+
+export class callEvent extends EventStruct {
+    public test!: number;
+
+    public static readonly eventBoundName = "call";
+    private constructor() { super(callEvent.eventBoundName); }
+
+    public static fromValues(
+        test: number = 0,
+    ) {
+        const o = new callEvent();
+        o.test = test;
+        return o;
+    }
+
+	private static _fieldInfo: FieldInfo[] = [
+        {name: "Test", fieldIdx: 0, varInfo: new VarInfoPrimitive(SerializationType.Int64, "int")},
+	];
+    public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
+        const o = new callEvent();
+        o.test = ReStreamDecoders.deserializeValue(r, this._fieldInfo[0].varInfo);
+        return o;
+    }
+
+    public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
+        ReStreamEncoders.serializeValue(this.test, w, callEvent._fieldInfo[0].varInfo);
+    }
 }
 
 export class callRequest extends RPCStruct<callResponse,number> {

@@ -335,6 +335,23 @@ func (ft *FileTracking) buildGolangRPCStructs(rpcn, rpctn string, reqFields []*r
 	return nil
 }
 
+// buildGolangEventStruct is a helper to build the golang event packet struct.
+func (ft *FileTracking) buildGolangEventStruct(eventName, eventTypeName string, eventFields []*restream.FieldInfo) error {
+	out := fmt.Sprintf("// %sEvent is an event packet object for the %s event\n", eventTypeName, eventName)
+	out += fmt.Sprintf("type %sEvent struct { //nolint:revive\n", eventTypeName)
+	for _, fi := range eventFields {
+		out += fmt.Sprintf("    %s %s\n", fi.Name, ft.getGolangTypeName(fi.VarInfo))
+	}
+	out += "}\n\n"
+
+	si := StructInfo{Name: eventTypeName + "Event"}
+	out += createGolangStructNonFieldedSerializers(si, eventFields, true) + "\n"
+
+	ft.goGenEntries = append(ft.goGenEntries, fdef{name: eventTypeName + "Event", defs: out})
+
+	return nil
+}
+
 // writeGoStructs writes out the golang generated structures
 func (ft *FileTracking) writeGoStructs() error {
 	fmt.Printf("Writing out golang gen at: %s\n", ft.outFile)

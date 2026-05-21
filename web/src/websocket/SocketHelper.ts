@@ -11,6 +11,11 @@ interface RPCWaiting {
     responseType: Deserializable<RPCResponseStruct<unknown>>;
 }
 
+interface EventSubscription {
+    eventType: EventStructType<EventStruct>;
+    callback: (event: EventStruct) => void;
+}
+
 export abstract class RPCStruct<RS extends RPCResponseStruct<RT>, RT> implements Serializable {
     constructor(public readonly rpcBoundName: string, public readonly responseType: Deserializable<RS>) { }
 
@@ -22,9 +27,17 @@ export abstract class RPCResponseStruct<RT = void> {
     public error: string | undefined;
 }
 
+export abstract class EventStruct {
+    constructor(public readonly eventBoundName: string) { }
+}
+
+export type EventStructType<ES extends EventStruct> = Deserializable<ES> & { readonly eventBoundName: string };
+
 enum SocketEventNames {
     StoreUpdate = 'storeupdate',
     StoreSubscription = 'storesub',
+
+    Event = 'event',
 
     RPCCall = 'rpccall',
     RPCCallResponse = 'rpccallresp',
@@ -63,6 +76,12 @@ export interface StoreUpdatePartialMessage extends StoreUpdateMessage {
     partial: ArrayBuffer;
 }
 
+export interface EventMessage {
+    time: number;
+    eventName: string;
+    event: ArrayBufferLike;
+}
+
 export interface RPCCallMessage {
     callID: number;
     methodName: string;
@@ -88,6 +107,7 @@ export class ReStreamSocket {
 
     private _rpcCallID = 1;
     private _rpcCallsPending = new Map<number, RPCWaiting>();
+    private _eventSubscriptions = new Map<string, Set<EventSubscription>>();
 
     constructor(socket: Socket) {
         this._socket = socket;
@@ -104,6 +124,20 @@ export class ReStreamSocket {
             this._timestampOffset = Date.now() - message.time;
 
             TriggerStore.handleUpdateMessage(message);
+        });
+
+        socket.on(SocketEventNames.Event, (message: EventMessage) => {
+            this._timestampOffset = Date.now() - message.time;
+
+            const subscriptions = this._eventSubscriptions.get(message.eventName);
+            if (!subscriptions) {
+                return;
+            }
+
+            for (const subscription of [...subscriptions]) {
+                const event = subscription.eventType.deserialized(new BinaryReader(message.event), undefined);
+                subscription.callback(event);
+            }
         });
 
         socket.on(SocketEventNames.RPCCallResponse, (message: RPCCallResponseMessage) => {
@@ -188,5 +222,27 @@ export class ReStreamSocket {
         this._socket.emit(SocketEventNames.RPCCall, msg);
 
         return def.promise as Promise<RT>;
+    }
+
+    subscribeToEvent<ES extends EventStruct>(eventType: EventStructType<ES>, callback: (event: ES) => void): () => void {
+        const eventName = eventType.eventBoundName;
+        let subscriptions = this._eventSubscriptions.get(eventName);
+        if (!subscriptions) {
+            subscriptions = new Set();
+            this._eventSubscriptions.set(eventName, subscriptions);
+        }
+
+        const subscription: EventSubscription = {
+            eventType,
+            callback: (event) => callback(event as ES),
+        };
+        subscriptions.add(subscription);
+
+        return () => {
+            subscriptions!.delete(subscription);
+            if (subscriptions!.size === 0) {
+                this._eventSubscriptions.delete(eventName);
+            }
+        };
     }
 }

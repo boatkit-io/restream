@@ -127,6 +127,56 @@ type AlreadyGenerated struct{}
 	}
 }
 
+func TestConstIgnoreAnnotationSkipsTSConst(t *testing.T) {
+	projectDir := t.TempDir()
+	serverDir := filepath.Join(projectDir, "cmd", "server")
+	if err := os.MkdirAll(serverDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/constignore
+
+go 1.26.2
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(serverDir, "consts.go"), []byte(`package main
+
+// @restream.Ignore
+const HiddenConst = "hidden"
+
+const VisibleConst = "visible"
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	pt := NewProjTracking(projectDir, &restreamConfig{
+		InputDirs: []string{"cmd/server"},
+	})
+	if err := pt.parseProject(); err != nil {
+		t.Fatal(err)
+	}
+	for _, ft := range pt.files {
+		if err := ft.Run(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	generated := ""
+	for _, ft := range pt.files {
+		for _, entry := range ft.tsGenEntries {
+			generated += entry.defs
+		}
+	}
+	if strings.Contains(generated, "HiddenConst") {
+		t.Fatalf("ignored const was generated:\n%s", generated)
+	}
+	if !strings.Contains(generated, `export const VisibleConst = "visible";`) {
+		t.Fatalf("visible const was not generated:\n%s", generated)
+	}
+}
+
 func TestRPCRequestGenerationExpandsGroupedParams(t *testing.T) {
 	projectDir := t.TempDir()
 	serverDir := filepath.Join(projectDir, "cmd", "server")
@@ -194,6 +244,125 @@ func Register(rpcd *testDispatcher) {
 	}
 }
 
+func TestEventGenerationExpandsGroupedParams(t *testing.T) {
+	repoRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	projectDir := t.TempDir()
+	serverDir := filepath.Join(projectDir, "cmd", "server")
+	if err := os.MkdirAll(serverDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	tugboatDir := filepath.Join(projectDir, "tugboat")
+	tugboatSubscribableDir := filepath.Join(tugboatDir, "pkg", "subscribableevent")
+	if err := os.MkdirAll(tugboatSubscribableDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tugboatDir, "go.mod"), []byte(`module github.com/boatkit-io/tugboat
+
+go 1.26.2
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tugboatSubscribableDir, "subscribableevent.go"), []byte(`package subscribableevent
+
+type Event[F any] struct{}
+
+func NewEvent[F any]() Event[F] {
+	return Event[F]{}
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/eventparams
+
+go 1.26.2
+
+require (
+	github.com/boatkit-io/restream v0.0.0
+	github.com/boatkit-io/tugboat v0.8.9
+)
+
+replace github.com/boatkit-io/restream => `+repoRoot+`
+replace github.com/boatkit-io/tugboat => ./tugboat
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	sourcePath := filepath.Join(serverDir, "boardstore.go")
+	if err := os.WriteFile(sourcePath, []byte(`package main
+
+import (
+	"reflect"
+
+	"github.com/boatkit-io/tugboat/pkg/subscribableevent"
+)
+
+type testDispatcher struct{}
+
+func (*testDispatcher) RegisterEvent(string, any, ...reflect.Type) {}
+
+type tokenPlacedCallback func(x, y int)
+
+func Register(eventDispatcher *testDispatcher) {
+	tokenPlaced := subscribableevent.NewEvent[tokenPlacedCallback]()
+	eventDispatcher.RegisterEvent("TokenPlaced", tokenPlaced, nil, nil)
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	pt := NewProjTracking(projectDir, &restreamConfig{
+		InputDirs: []string{"cmd/server"},
+	})
+	if err := pt.parseProject(); err != nil {
+		t.Fatal(err)
+	}
+	for _, ft := range pt.files {
+		if err := ft.Run(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out, err := os.ReadFile(filepath.Join(serverDir, "boardstore_rs.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+
+	for _, expected := range []string{
+		"type TokenPlacedEvent struct",
+		"X int",
+		"Y int",
+		`{Name: "X", FieldIdx: 0, VarInfo: &restream.VarInfoPrimitive{DataType: restream.SerializationTypeInt64, MappedType: restream.Ptr("int")}}`,
+		`{Name: "Y", FieldIdx: 1, VarInfo: &restream.VarInfoPrimitive{DataType: restream.SerializationTypeInt64, MappedType: restream.Ptr("int")}}`,
+		"restream.SerializeValue(s.Y, w, TokenPlacedEventFieldInfo[1].VarInfo)",
+		"restream.DeserializeValue(&s.Y, r, TokenPlacedEventFieldInfo[1].VarInfo)",
+	} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("generated event packet missing expected %q:\n%s", expected, got)
+		}
+	}
+
+	sourceOut, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(sourceOut)
+	for _, expected := range []string{
+		"eventDispatcher.RegisterEvent(\"TokenPlaced\", &tokenPlaced",
+		"reflect.TypeFor[TokenPlacedEvent]()",
+		"reflect.TypeFor[func(int, int)]()",
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("rewritten source missing expected %q:\n%s", expected, source)
+		}
+	}
+}
+
 func TestWriteTSFileUsesPackageRuntimeImportsByDefault(t *testing.T) {
 	projectDir := t.TempDir()
 	pt := NewProjTracking(projectDir, &restreamConfig{
@@ -215,7 +384,7 @@ func TestWriteTSFileUsesPackageRuntimeImportsByDefault(t *testing.T) {
 	for _, expected := range []string{
 		"import * as ReStreamDecoders from '@boatkit-io/restream';",
 		"import * as ReStreamEncoders from '@boatkit-io/restream';",
-		"import { BinaryReader, BinaryWriter, RPCResponseStruct, RPCStruct, SerializationType, VarInfoArray, VarInfoDynamic, VarInfoGenericParam, VarInfoMap, VarInfoPointer, VarInfoPrimitive, VarInfoStruct } from '@boatkit-io/restream';",
+		"import { BinaryReader, BinaryWriter, EventStruct, RPCResponseStruct, RPCStruct, SerializationType, VarInfoArray, VarInfoDynamic, VarInfoGenericParam, VarInfoMap, VarInfoPointer, VarInfoPrimitive, VarInfoStruct } from '@boatkit-io/restream';",
 		"import type { AppliableOnTopPartial, AppliablePartial, FieldInfo, VarInfo } from '@boatkit-io/restream';",
 		"import { SharedType } from './PackageShared.js';",
 	} {

@@ -4,7 +4,8 @@ import BoardStore from './stores/BoardStore'
 
 import SocketIoClient from 'socket.io-client';
 import { withResubAutoSubscriptions } from '@boatkit-io/resub';
-import { PlaceTokenRequest } from './restream/PackageMain';
+import { useEffect, useState } from 'react';
+import { PlaceTokenRequest, ServerTimeEvent } from './restream/PackageMain';
 
 const socket = SocketIoClient('http://localhost:8080', {
   path: '/socket',
@@ -25,11 +26,17 @@ function App() {
   const board = BoardStore.getBoard();
   const xTurn = BoardStore.getXTurn();
   const nextToken = xTurn ? 'X' : 'O';
+  const [lastServerTime, setLastServerTime] = useState<Date>();
+
+  useEffect(() => rss.subscribeToEvent(ServerTimeEvent, (event) => {
+    setLastServerTime(event.currentTime);
+  }), []);
 
   return (
     <>
       <h1>Tic Tac Toe</h1>
       <h2>Current Player: {nextToken}</h2>
+      <h2>Last Server Time: {lastServerTime ? lastServerTime.toLocaleString() : 'waiting...'}</h2>
       <div className="board">
         <table align="center">
           <tbody>

@@ -3,7 +3,7 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import * as ReStreamDecoders from '@boatkit-io/restream';
 import * as ReStreamEncoders from '@boatkit-io/restream';
-import { BinaryReader, BinaryWriter, RPCStruct, SerializationType, VarInfoArray, VarInfoPointer, VarInfoPrimitive, VarInfoStruct } from '@boatkit-io/restream';
+import { BinaryReader, BinaryWriter, EventStruct, RPCStruct, SerializationType, VarInfoArray, VarInfoPointer, VarInfoPrimitive, VarInfoStruct } from '@boatkit-io/restream';
 import type { FieldInfo } from '@boatkit-io/restream';
 import { PartialArray } from '@boatkit-io/restream';
 
@@ -170,4 +170,32 @@ export class PlaceTokenResponse {
 	private static _fieldInfo: FieldInfo[] = [
         {name: "Error", fieldIdx: 0, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.String))},
 	];
+}
+
+export class ServerTimeEvent extends EventStruct {
+    public currentTime!: Date;
+
+    public static readonly eventBoundName = "ServerTime";
+    private constructor() { super(ServerTimeEvent.eventBoundName); }
+
+    public static fromValues(
+        currentTime: Date = new Date(0),
+    ) {
+        const o = new ServerTimeEvent();
+        o.currentTime = currentTime;
+        return o;
+    }
+
+	private static _fieldInfo: FieldInfo[] = [
+        {name: "CurrentTime", fieldIdx: 0, varInfo: new VarInfoPrimitive(SerializationType.Time)},
+	];
+    public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
+        const o = new ServerTimeEvent();
+        o.currentTime = ReStreamDecoders.deserializeValue(r, this._fieldInfo[0].varInfo);
+        return o;
+    }
+
+    public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
+        ReStreamEncoders.serializeValue(this.currentTime, w, ServerTimeEvent._fieldInfo[0].varInfo);
+    }
 }

@@ -145,7 +145,7 @@ func main() {
 
 	if err := io.On("connection", func(clients ...any) {
 		conn := clients[0].(*socket.Socket)
-		restream.AddSocketHandlers(conn, log, sdr, nil, func() (restream.AccessLevel, error) {
+		restream.AddSocketHandlers(conn, log, sdr, nil, nil, func() (restream.AccessLevel, error) {
 			return restream.AccessLevel(1), nil
 		})
 	}); err != nil {
@@ -330,7 +330,7 @@ Note the `, nil, nil` for the RPC types -- codegen will fill that in in a moment
 Near the bottom of your `main` function, pass in the RPC handler function to the socket handler:
 
 ```go
-		restream.AddSocketHandlers(conn, log, sdr, rpcd.FireRPC, func() (restream.AccessLevel, error) {
+		restream.AddSocketHandlers(conn, log, sdr, rpcd.FireRPC, nil, func() (restream.AccessLevel, error) {
 ```
 
 Now re-run codegen to generate the RPC types/signatures:
@@ -346,6 +346,103 @@ You should now have `PlaceTokenRequest` and `PlaceTokenResponse` types added to 
 ```
 
 It'll even auto pass the responses through, so RPCs can be bidirectional (i.e. they can get return values, even if they're errors)!  Now re-run the server and the website dev build should have picked up the change already.  You should be able to play a very simple game of multiplayer tic tac toe!  Open the site in multiple browsers to see the automatic streaming of all state.
+
+## Events
+
+Stores are great when you have state that should be synchronized and remembered.  Sometimes you just want the server to emit a typed event without making it part of store state.  Let's add a simple clock event that fires from the server every 500ms and shows the most recent value next to the current player.
+
+In `main.go`, add imports for `time` and the subscribable event package:
+
+```go
+import (
+	"net/http"
+	"time"
+
+	"github.com/boatkit-io/restream/pkg/restream"
+	"github.com/boatkit-io/restream/pkg/websocketencoder"
+	"github.com/boatkit-io/tugboat/pkg/subscribableevent"
+	"github.com/sirupsen/logrus"
+	"github.com/zishang520/socket.io/servers/socket/v3"
+	"github.com/zishang520/socket.io/v3/pkg/types"
+)
+```
+
+Now define the event callback signature near the top of the file:
+
+```go
+type serverTimeCallback func(currentTime time.Time)
+```
+
+The parameter names and types on this callback are what codegen uses to build the event packet.  In this case, we'll get a `ServerTimeEvent` packet with a `CurrentTime` field in Go and a `currentTime` field in TypeScript.
+
+Next, create an `EventDispatcher`, create the event, and register it.  Add this right after the RPC dispatcher setup:
+
+```go
+eventd := restream.NewEventDispatcher(log)
+serverTimeEvent := subscribableevent.NewEvent[serverTimeCallback]()
+eventd.RegisterEvent("ServerTime", &serverTimeEvent, nil, nil)
+```
+
+The `RegisterEvent` call works like `RegisterRPCHandler`: the string is the websocket event name, the second argument must be a `subscribableevent.Event`, and the trailing `nil, nil` values are filled in by codegen with the generated event packet type and the reflected callback signature.
+
+Pass the event dispatcher into the socket handler:
+
+```go
+restream.AddSocketHandlers(conn, log, sdr, rpcd.FireRPC, eventd, func() (restream.AccessLevel, error) {
+```
+
+Then add a ticker that fires the event:
+
+```go
+go func() {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for t := range ticker.C {
+		serverTimeEvent.Fire(t)
+	}
+}()
+```
+
+Now re-run codegen:
+
+```bash
+go tool github.com/boatkit-io/restream/cmd/codegen -project .
+```
+
+Codegen will create the `ServerTimeEvent` packet in the generated Go and TypeScript files.  It will also replace the `nil, nil` parameters on `RegisterEvent` with something like:
+
+```go
+eventd.RegisterEvent("ServerTime", &serverTimeEvent, reflect.TypeFor[ServerTimeEvent](), reflect.TypeFor[func(time.Time)]())
+```
+
+On the client, import React state helpers and the generated event type:
+
+```typescript
+import { useEffect, useState } from 'react';
+import { PlaceTokenRequest, ServerTimeEvent } from './restream/PackageMain';
+```
+
+Inside `App`, subscribe to the event and keep the latest value:
+
+```typescript
+const [lastServerTime, setLastServerTime] = useState<Date>();
+
+useEffect(() => rss.subscribeToEvent(ServerTimeEvent, (event) => {
+  setLastServerTime(event.currentTime);
+}), []);
+```
+
+`subscribeToEvent` takes the generated event class, so the client subscribes using the same bound event name and serializer that codegen produced from the Go callback signature.  It returns an unsubscribe function, and returning it from `useEffect` cleans up the websocket listener when the component unmounts.
+
+Finally, show the latest event value next to the player indicator:
+
+```typescript
+<h2>Current Player: {nextToken}</h2>
+<h2>Last Server Time: {lastServerTime ? lastServerTime.toLocaleString() : 'waiting...'}</h2>
+```
+
+Restart the server, and the Vite dev server should pick up the generated TypeScript changes.  The game board will keep using store updates for durable board state, while the clock line updates from unprompted server-originated events.
 
 # Details
 
