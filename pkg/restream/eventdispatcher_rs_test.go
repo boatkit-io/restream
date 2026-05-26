@@ -32,3 +32,29 @@ func (s *callEvent) Deserialize(r *binarystreams.Reader, _ *VarInfoStruct) error
 	}
 	return nil
 }
+
+// callEvent is an event packet object for the call event
+type callEvent struct { //nolint:revive
+	Test int
+}
+
+// callEventFieldInfo is the static field info for the callEvent struct
+var callEventFieldInfo = []FieldInfo{
+	{Name: "Test", FieldIdx: 0, VarInfo: &VarInfoPrimitive{DataType: SerializationTypeInt64, MappedType: Ptr("int")}},
+}
+
+// Serialize serializes this structure to a binary writer
+func (s *callEvent) Serialize(w *binarystreams.Writer, _ *VarInfoStruct) error {
+	if err := SerializeValue(s.Test, w, callEventFieldInfo[0].VarInfo); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Deserialize deserializes data from a binary reader into this struct
+func (s *callEvent) Deserialize(r *binarystreams.Reader, _ *VarInfoStruct) error {
+	if err := DeserializeValue(&s.Test, r, callEventFieldInfo[0].VarInfo); err != nil {
+		return err
+	}
+	return nil
+}
