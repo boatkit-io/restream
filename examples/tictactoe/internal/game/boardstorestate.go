@@ -1,4 +1,4 @@
-package main
+package game
 
 // @restream.partials
 type BoardStoreState struct {

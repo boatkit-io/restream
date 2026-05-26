@@ -9,6 +9,8 @@ import { PartialArray } from '@boatkit-io/restream';
 
 export const BoardStoreName = "BoardStore";
 
+export const ServerTimeEventName = "ServerTime";
+
 export class BoardStoreState {
     public board!: (string[]|undefined)[]|undefined;
     public xTurn!: boolean;

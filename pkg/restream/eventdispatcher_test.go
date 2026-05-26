@@ -37,3 +37,57 @@ func TestEventDispatcherSubscribesAndSerializesEvents(t *testing.T) {
 		t.Fatalf("expected event packet test=4, got %d", packet.Test)
 	}
 }
+
+func TestEventDispatcherFiresSerializedEvent(t *testing.T) {
+	eventd := NewEventDispatcher(logrus.StandardLogger())
+	event := subscribableevent.NewEvent[eventDispatcherTestCallback]()
+
+	var gotTyped int
+	event.Subscribe(func(test int) {
+		gotTyped = test
+	})
+
+	var gotName string
+	var gotBytes []byte
+	eventd.SubscribeToEvents(func(eventName string, eventBytes []byte) {
+		gotName = eventName
+		gotBytes = eventBytes
+	})
+
+	eventd.RegisterEvent("call", &event, reflect.TypeFor[callEvent](), reflect.TypeFor[func(int)]())
+
+	eventBytes, err := SerializeToBytes(&callEvent{Test: 7}, nil)
+	if err != nil {
+		t.Fatalf("event packet serialize failed: %v", err)
+	}
+	if err := eventd.FireSerializedEvent("call", eventBytes); err != nil {
+		t.Fatalf("FireSerializedEvent failed: %v", err)
+	}
+
+	if gotTyped != 7 {
+		t.Fatalf("expected typed event test=7, got %d", gotTyped)
+	}
+	if gotName != "call" {
+		t.Fatalf("expected event name call, got %q", gotName)
+	}
+
+	var packet callEvent
+	if err := packet.Deserialize(binarystreams.NewReaderFromBytes(gotBytes), nil); err != nil {
+		t.Fatalf("event packet deserialize failed: %v", err)
+	}
+	if packet.Test != 7 {
+		t.Fatalf("expected event packet test=7, got %d", packet.Test)
+	}
+}
+
+func TestEventDispatcherFiresSerializedEventErrorsForUnknownEvent(t *testing.T) {
+	eventd := NewEventDispatcher(logrus.StandardLogger())
+
+	eventBytes, err := SerializeToBytes(&callEvent{Test: 7}, nil)
+	if err != nil {
+		t.Fatalf("event packet serialize failed: %v", err)
+	}
+	if err := eventd.FireSerializedEvent("missing", eventBytes); err == nil {
+		t.Fatal("expected FireSerializedEvent to fail for unknown event")
+	}
+}

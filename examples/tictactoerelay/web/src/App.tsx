@@ -7,7 +7,11 @@ import { withResubAutoSubscriptions } from '@boatkit-io/resub';
 import { useEffect, useState } from 'react';
 import { PlaceTokenRequest, ServerTimeEvent } from './restream/PackageGame';
 
-const socket = SocketIoClient('http://localhost:8080', {
+const params = new URLSearchParams(window.location.search);
+const connectionMode = params.get('mode') === 'relay' ? 'relay' : 'direct';
+const serverURL = connectionMode === 'relay' ? 'http://localhost:8090' : 'http://localhost:8080';
+
+const socket = SocketIoClient(serverURL, {
   path: '/socket',
   reconnection: true,
 });
@@ -34,7 +38,14 @@ function App() {
 
   return (
     <>
-      <h1>Tic Tac Toe</h1>
+      <h1>Tic Tac Toe Relay</h1>
+      <p>
+        Connected to {connectionMode === 'relay' ? 'cloud relay on :8090' : 'direct server on :8080'}.
+        {' '}
+        <a href="?mode=direct">Direct</a>
+        {' | '}
+        <a href="?mode=relay">Relay</a>
+      </p>
       <h2>Current Player: {nextToken}</h2>
       <h2>Last Server Time: {lastServerTime ? lastServerTime.toLocaleString() : 'waiting...'}</h2>
       <div className="board">

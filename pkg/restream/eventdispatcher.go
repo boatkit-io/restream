@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/boatkit-io/restream/pkg/binarystreams"
 	"github.com/boatkit-io/restream/pkg/smartmutex"
 	"github.com/boatkit-io/tugboat/pkg/subscribableevent"
 	"github.com/sirupsen/logrus"
@@ -102,6 +103,39 @@ func (d *EventDispatcher) SubscribeToEvents(cb EventCallbackFunc) subscribableev
 // UnsubscribeFromEvents removes a subscription created with SubscribeToEvents.
 func (d *EventDispatcher) UnsubscribeFromEvents(sid subscribableevent.SubscriptionId) error {
 	return d.eventCallbacks.Unsubscribe(sid)
+}
+
+// FireSerializedEvent deserializes a generated event packet and fires the registered typed event.
+func (d *EventDispatcher) FireSerializedEvent(name string, eventBytes []byte) error {
+	d.mutex.RLock()
+	info, exists := d.eventLookup[name]
+	d.mutex.RUnlock()
+	if !exists {
+		return fmt.Errorf("unknown event %s", name)
+	}
+
+	eventPacketValue := reflect.New(info.EventPacketType)
+	eventPacket := eventPacketValue.Interface().(Serializable)
+	if err := eventPacket.Deserialize(binarystreams.NewReaderFromBytes(eventBytes), nil); err != nil {
+		return err
+	}
+
+	eventPacketElem := eventPacketValue.Elem()
+	args := make([]reflect.Value, eventPacketElem.NumField())
+	for idx := 0; idx < eventPacketElem.NumField(); idx++ {
+		arg := eventPacketElem.Field(idx)
+		callbackArgType := info.CallbackType.In(idx)
+		if !arg.Type().AssignableTo(callbackArgType) {
+			if !arg.Type().ConvertibleTo(callbackArgType) {
+				return fmt.Errorf("event %s field %d has type %+v, cannot assign to callback arg %+v", name, idx, arg.Type(), callbackArgType)
+			}
+			arg = arg.Convert(callbackArgType)
+		}
+		args[idx] = arg
+	}
+
+	info.EventValue.MethodByName("Fire").Call(args)
+	return nil
 }
 
 func eventSubscribeMethod(event any) (reflect.Value, reflect.Value, reflect.Type) {
