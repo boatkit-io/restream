@@ -56,24 +56,30 @@ jobs:
       - name: Get next version
         id: next_version
         run: |-
-          NEXT_VERSION=$(mise run next-version)
-          echo "version=${NEXT_VERSION}" >> "$GITHUB_OUTPUT"
-
-          # If this version already exists, we're not releasing
-          # anything. Cancel.
-          if git rev-parse "${NEXT_VERSION}" &>/dev/null; then
-            echo "Version ${NEXT_VERSION} already exists. Canceling release."
-            exit 78
+          mise run next-version
+      - name: Skip Release
+        if: steps.next_version.outputs.hasNextVersion != 'true'
+        run: |-
+          echo "No release required; latest version remains ${{ steps.next_version.outputs.version }}."
+      - name: Verify Release Tag
+        if: steps.next_version.outputs.hasNextVersion == 'true'
+        run: |-
+          if git rev-parse "${{ steps.next_version.outputs.version }}" &>/dev/null; then
+            echo "Version ${{ steps.next_version.outputs.version }} already exists. This release cannot continue."
+            exit 1
           fi
       - name: Create Tag
+        if: steps.next_version.outputs.hasNextVersion == 'true'
         run: |-
           git tag -s \
             -a "${{ steps.next_version.outputs.version }}" \
             -m "Release ${{ steps.next_version.outputs.version }}"
       - name: Push Tag
+        if: steps.next_version.outputs.hasNextVersion == 'true'
         run: |-
           git push origin "refs/tags/${{ steps.next_version.outputs.version }}"
       - name: Create Release
+        if: steps.next_version.outputs.hasNextVersion == 'true'
         run: |-
           gh release create "${{ steps.next_version.outputs.version }}" \
             --generate-notes
