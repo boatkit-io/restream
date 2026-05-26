@@ -277,7 +277,7 @@ Both pages should show the same board. Clicks through either page call the same 
 
 ## Codegen
 
-Because this example still uses the same `internal/game` package as the base example, codegen is unchanged:
+Because this example still uses the same `internal/game` package as the base example, codegen uses the same command. The copied `BoardStore` uses `@restream.store(BoardStore)`, so this also regenerates `BoardStoreName`, the Store interface methods, and the TypeScript store-name constant from the annotation:
 
 ```bash
 go tool github.com/boatkit-io/restream/cmd/codegen -project .

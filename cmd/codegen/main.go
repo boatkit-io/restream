@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -143,6 +144,7 @@ func NewProjTracking(ppRoot string, config *restreamConfig) *ProjTracking {
 		files:          []*FileTracking{},
 		packagesByPath: map[string]map[*packages.Package]struct{}{},
 		packagesByName: map[string]map[*packages.Package]struct{}{},
+		storeStateRefs: map[*dst.TypeSpec]storeStateRef{},
 
 		goGenEntries: []fdef{},
 
@@ -164,6 +166,7 @@ type ProjTracking struct {
 	files          []*FileTracking
 	packagesByPath map[string]map[*packages.Package]struct{}
 	packagesByName map[string]map[*packages.Package]struct{}
+	storeStateRefs map[*dst.TypeSpec]storeStateRef
 
 	goGenEntries []fdef
 
@@ -213,12 +216,22 @@ func (pt *ProjTracking) parseProject() error {
 				isTest := strings.HasSuffix(filename, "_test.go")
 				ppkg, err := pt.getPackageForName(pkg.Name, isTest)
 				if err != nil {
-					return fmt.Errorf("package %s not found in project packages list", pkg.Name)
+					packageNames := lo.Keys(pt.packagesByName)
+					slices.Sort(packageNames)
+					return fmt.Errorf(
+						"package %s not found in project packages list; available packages: %s",
+						pkg.Name,
+						strings.Join(packageNames, ", "),
+					)
 				}
 				ft := NewFileTracking(pt, filename, f, ppkg)
 				pt.files = append(pt.files, ft)
 			}
 		}
+	}
+
+	if err := pt.ensureStoreStateStructs(); err != nil {
+		return err
 	}
 
 	fmt.Printf("Done parsing project, took %s\n", time.Since(startTime))
@@ -249,6 +262,10 @@ func (pt *ProjTracking) parseFile(fn string) error {
 	ft := NewFileTracking(pt, fn, f, pkgsl[0])
 	pt.files = append(pt.files, ft)
 	pt.addPackage(pkgsl[0])
+
+	if err := pt.ensureStoreStateStructs(); err != nil {
+		return err
+	}
 
 	return nil
 }

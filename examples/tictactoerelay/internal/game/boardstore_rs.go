@@ -8,6 +8,24 @@ import (
 	"github.com/boatkit-io/restream/pkg/restream"
 )
 
+// BoardStoreName is the restream store name for BoardStore
+const BoardStoreName = "BoardStore"
+
+// GetName is an implementation of the Store.GetName call
+func (s *BoardStore) GetName() string {
+	return BoardStoreName
+}
+
+// GetStoreData is an implementation of the Store.GetStoreData call
+func (s *BoardStore) GetStoreData() restream.StoreDataBase {
+	return s.storeData
+}
+
+// SubscribeToField implements the restream.Store interface
+func (s *BoardStore) SubscribeToField(field []any, callback any) {
+	s.storeData.SubscribeToField(field, callback)
+}
+
 // PlaceTokenRequest is a request object for the PlaceToken RPC call
 type PlaceTokenRequest struct { //nolint:revive
 	X int

@@ -5,8 +5,10 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -43,6 +45,7 @@ func (ft *FileTracking) parseStructDecls() error { //nolint:gocyclo,funlen
 		serializers := false
 		fielded := false
 		partial := false
+		storeName := ""
 		for _, dec := range dt.Decorations().Start {
 			if strings.Contains(dec, "@restream.serializers") {
 				serializers = true
@@ -56,6 +59,33 @@ func (ft *FileTracking) parseStructDecls() error { //nolint:gocyclo,funlen
 				fielded = true
 				partial = true
 			}
+			parsedStoreName, err := parseRestreamStoreAnnotation(dec)
+			if err != nil {
+				return err
+			}
+			if parsedStoreName != "" {
+				storeName = parsedStoreName
+			}
+		}
+
+		if storeName != "" {
+			si := StructInfo{
+				Name: s.Name.Name,
+			}
+			if s.TypeParams != nil {
+				si.GenericParams = lo.Map(s.TypeParams.List, func(t *dst.Field, _ int) string {
+					return t.Names[0].Name
+				})
+			}
+			stateRef, err := ft.pt.storeStateRefForStore(ft, s)
+			if err != nil {
+				return err
+			}
+			if err := ft.ensureStoreDataMember(s, stateRef); err != nil {
+				return err
+			}
+			ft.createGoStoreMethods(si, storeName)
+			ft.createTSStoreNameConst(si.Name, storeName)
 		}
 
 		if !serializers {
@@ -97,45 +127,47 @@ func (ft *FileTracking) parseStructDecls() error { //nolint:gocyclo,funlen
 		if _, has := ft.fieldedStructs[s]; has {
 			fielded = true
 
-			// Get the highest field count off the struct, if it exists
-			maxFieldNum := byte(0)
-			dec := st.Fields.List[0].Decorations()
-			decAll := dec.Start.All()
-			if len(decAll) > 0 {
-				res := regexp.MustCompile(`// MAXFIELD\((\d+)\)`).FindAllStringSubmatch(decAll[0], 1)
-				if len(res) == 1 && len(res[0]) == 2 {
-					tc, err := strconv.ParseUint(res[0][1], 10, 8)
+			if len(st.Fields.List) > 0 {
+				// Get the highest field count off the struct, if it exists
+				maxFieldNum := byte(0)
+				dec := st.Fields.List[0].Decorations()
+				decAll := dec.Start.All()
+				if len(decAll) > 0 {
+					res := regexp.MustCompile(`// MAXFIELD\((\d+)\)`).FindAllStringSubmatch(decAll[0], 1)
+					if len(res) == 1 && len(res[0]) == 2 {
+						tc, err := strconv.ParseUint(res[0][1], 10, 8)
+						if err != nil {
+							return err
+						}
+						maxFieldNum = byte(tc)
+					}
+				}
+
+				// provision fieldids for all fields
+				for idx, fd := range st.Fields.List {
+					ti, changed, err := ft.getOrGenerateTagInfo(fd, idx, &maxFieldNum)
 					if err != nil {
 						return err
 					}
-					maxFieldNum = byte(tc)
+					if changed {
+						ft.inputFileDirty = true
+						tagStr, err := genTagString(fd, ti)
+						if err != nil {
+							return err
+						}
+						fd.Tag = &dst.BasicLit{
+							Kind:  token.STRING,
+							Value: tagStr,
+						}
+					}
 				}
-			}
 
-			// provision fieldids for all fields
-			for idx, fd := range st.Fields.List {
-				ti, changed, err := ft.getOrGenerateTagInfo(fd, idx, &maxFieldNum)
-				if err != nil {
-					return err
-				}
-				if changed {
+				// update MAXFIELD as needed
+				newMaxFieldLine := fmt.Sprintf("// MAXFIELD(%d)", maxFieldNum)
+				if decAll == nil || (len(decAll) > 0 && decAll[0] != newMaxFieldLine) {
+					dec.Start = []string{newMaxFieldLine}
 					ft.inputFileDirty = true
-					tagStr, err := genTagString(fd, ti)
-					if err != nil {
-						return err
-					}
-					fd.Tag = &dst.BasicLit{
-						Kind:  token.STRING,
-						Value: tagStr,
-					}
 				}
-			}
-
-			// update MAXFIELD as needed
-			newMaxFieldLine := fmt.Sprintf("// MAXFIELD(%d)", maxFieldNum)
-			if decAll == nil || (len(decAll) > 0 && decAll[0] != newMaxFieldLine) {
-				dec.Start = []string{newMaxFieldLine}
-				ft.inputFileDirty = true
 			}
 		}
 
@@ -173,6 +205,634 @@ func (ft *FileTracking) parseStructDecls() error { //nolint:gocyclo,funlen
 	}
 
 	return nil
+}
+
+func parseRestreamStoreAnnotation(dec string) (string, error) {
+	const annotation = "@restream.store"
+
+	idx := strings.Index(dec, annotation)
+	if idx == -1 {
+		return "", nil
+	}
+
+	args := strings.TrimSpace(dec[idx+len(annotation):])
+	if !strings.HasPrefix(args, "(") {
+		return "", fmt.Errorf("%s requires a store name in parentheses", annotation)
+	}
+	endIdx := strings.Index(args, ")")
+	if endIdx == -1 {
+		return "", fmt.Errorf("%s annotation is missing a closing parenthesis", annotation)
+	}
+
+	storeName := strings.TrimSpace(args[1:endIdx])
+	if storeName == "" {
+		return "", fmt.Errorf("%s requires a non-empty store name", annotation)
+	}
+
+	if unquoted, err := strconv.Unquote(storeName); err == nil {
+		storeName = unquoted
+	}
+
+	return storeName, nil
+}
+
+type storeTypeDecl struct {
+	ft      *FileTracking
+	declIdx int
+	spec    *dst.TypeSpec
+}
+
+type structTypeDecl struct {
+	ft   *FileTracking
+	gd   *dst.GenDecl
+	spec *dst.TypeSpec
+}
+
+type storeStateRef struct {
+	TypeName    string
+	Qualifier   string
+	PackagePath string
+}
+
+func (r storeStateRef) typeExpr() string {
+	if r.Qualifier != "" {
+		return r.Qualifier + "." + r.TypeName
+	}
+	return r.TypeName
+}
+
+func (r storeStateRef) partialTypeExpr() string {
+	if r.Qualifier != "" {
+		return r.Qualifier + "." + r.TypeName + "Partial"
+	}
+	return r.TypeName + "Partial"
+}
+
+func (r storeStateRef) displayName() string {
+	if r.PackagePath != "" {
+		return r.PackagePath + "." + r.TypeName
+	}
+	return r.typeExpr()
+}
+
+func (pt *ProjTracking) ensureStoreStateStructs() error {
+	storeDecls := []storeTypeDecl{}
+	for _, ft := range pt.files {
+		for idx, d := range ft.f.Decls {
+			gd, ok := d.(*dst.GenDecl)
+			if !ok || gd.Tok != token.TYPE || len(gd.Specs) < 1 {
+				continue
+			}
+
+			s, ok := gd.Specs[0].(*dst.TypeSpec)
+			if !ok {
+				continue
+			}
+			if _, ok := s.Type.(*dst.StructType); !ok {
+				continue
+			}
+
+			for _, dec := range gd.Decorations().Start {
+				storeName, err := parseRestreamStoreAnnotation(dec)
+				if err != nil {
+					return err
+				}
+				if storeName != "" {
+					storeDecls = append(storeDecls, storeTypeDecl{ft: ft, declIdx: idx, spec: s})
+					break
+				}
+			}
+		}
+	}
+
+	for idx := len(storeDecls) - 1; idx >= 0; idx-- {
+		storeDecl := storeDecls[idx]
+		stateRef, err := pt.storeStateRefForStore(storeDecl.ft, storeDecl.spec)
+		if err != nil {
+			return err
+		}
+
+		stateFt, gd, _, exists := pt.findStructTypeSpecForStateRef(storeDecl.ft, stateRef)
+		if exists {
+			stateFt.ensurePartialsAnnotation(gd)
+			continue
+		}
+
+		stateFt, insertIdx, err := pt.storeStateInsertTarget(storeDecl, stateRef)
+		if err != nil {
+			return err
+		}
+		stateFt.insertStoreStateStruct(stateRef.TypeName, insertIdx)
+	}
+	return nil
+}
+
+func (pt *ProjTracking) storeStateRefForStore(sourceFt *FileTracking, storeSpec *dst.TypeSpec) (storeStateRef, error) {
+	if stateRef, ok := pt.storeStateRefs[storeSpec]; ok {
+		return stateRef, nil
+	}
+
+	stateRef, err := pt.resolveStoreStateRef(sourceFt, storeSpec)
+	if err != nil {
+		return storeStateRef{}, err
+	}
+	pt.storeStateRefs[storeSpec] = stateRef
+	return stateRef, nil
+}
+
+func (pt *ProjTracking) resolveStoreStateRef(sourceFt *FileTracking, storeSpec *dst.TypeSpec) (storeStateRef, error) {
+	if stateRef, ok, err := sourceFt.storeDataStateRef(storeSpec); err != nil || ok {
+		return stateRef, err
+	}
+	return pt.resolveConventionalStoreStateRef(sourceFt, storeSpec.Name.Name+"State")
+}
+
+func (ft *FileTracking) storeDataStateRef(storeSpec *dst.TypeSpec) (storeStateRef, bool, error) {
+	st, ok := storeSpec.Type.(*dst.StructType)
+	if !ok {
+		return storeStateRef{}, false, nil
+	}
+
+	for _, fd := range st.Fields.List {
+		hasStoreDataName := slices.ContainsFunc(fd.Names, func(name *dst.Ident) bool {
+			return name.Name == "storeData"
+		})
+		if !hasStoreDataName {
+			continue
+		}
+		return ft.storeDataStateRefFromType(fd.Type)
+	}
+
+	return storeStateRef{}, false, nil
+}
+
+func (ft *FileTracking) storeDataStateRefFromType(expr dst.Expr) (storeStateRef, bool, error) {
+	expr = derefTypeExpr(expr)
+
+	var storeDataType dst.Expr
+	indices := []dst.Expr{}
+	switch expr := expr.(type) {
+	case *dst.IndexExpr:
+		storeDataType = expr.X
+		indices = append(indices, expr.Index)
+	case *dst.IndexListExpr:
+		storeDataType = expr.X
+		indices = expr.Indices
+	default:
+		return storeStateRef{}, false, nil
+	}
+
+	if typeExprName(storeDataType) != "StoreData" || len(indices) == 0 {
+		return storeStateRef{}, false, nil
+	}
+
+	stateRef, ok, err := ft.stateRefFromTypeExpr(indices[0])
+	if err != nil || !ok {
+		return storeStateRef{}, ok, err
+	}
+	return stateRef, true, nil
+}
+
+func (ft *FileTracking) stateRefFromTypeExpr(expr dst.Expr) (storeStateRef, bool, error) {
+	expr = derefTypeExpr(expr)
+	switch expr := expr.(type) {
+	case *dst.Ident:
+		if expr.Name == "any" || expr.Name == "interface{}" {
+			return storeStateRef{}, false, nil
+		}
+		return storeStateRef{TypeName: expr.Name}, true, nil
+	case *dst.SelectorExpr:
+		qualifier, ok := expr.X.(*dst.Ident)
+		if !ok {
+			return storeStateRef{}, false, nil
+		}
+		stateRef := storeStateRef{
+			TypeName:  expr.Sel.Name,
+			Qualifier: qualifier.Name,
+		}
+		if pkg := ft.importLookup[qualifier.Name]; pkg != nil {
+			stateRef.PackagePath = pkg.PkgPath
+		}
+		return stateRef, true, nil
+	default:
+		return storeStateRef{}, false, nil
+	}
+}
+
+func derefTypeExpr(expr dst.Expr) dst.Expr {
+	for {
+		starExpr, ok := expr.(*dst.StarExpr)
+		if !ok {
+			return expr
+		}
+		expr = starExpr.X
+	}
+}
+
+func typeExprName(expr dst.Expr) string {
+	switch expr := expr.(type) {
+	case *dst.Ident:
+		return expr.Name
+	case *dst.SelectorExpr:
+		return expr.Sel.Name
+	default:
+		return ""
+	}
+}
+
+func (pt *ProjTracking) resolveConventionalStoreStateRef(
+	sourceFt *FileTracking,
+	stateTypeName string,
+) (storeStateRef, error) {
+	if _, _, _, exists := pt.findStructTypeSpecInPackage(sourceFt, stateTypeName); exists {
+		return storeStateRef{TypeName: stateTypeName}, nil
+	}
+
+	matches := pt.findStructTypeSpecs(stateTypeName)
+	switch len(matches) {
+	case 0:
+		return storeStateRef{TypeName: stateTypeName}, nil
+	case 1:
+		match := matches[0]
+		if samePackage(sourceFt, match.ft) {
+			return storeStateRef{TypeName: stateTypeName}, nil
+		}
+		qualifier, err := sourceFt.ensurePackageImportName(match.ft)
+		if err != nil {
+			return storeStateRef{}, err
+		}
+		return storeStateRef{
+			TypeName:    stateTypeName,
+			Qualifier:   qualifier,
+			PackagePath: match.ft.fPackage.PkgPath,
+		}, nil
+	default:
+		packageNames := lo.Map(matches, func(match structTypeDecl, _ int) string {
+			if match.ft.fPackage != nil && match.ft.fPackage.PkgPath != "" {
+				return match.ft.fPackage.PkgPath
+			}
+			return match.ft.f.Name.Name
+		})
+		return storeStateRef{}, fmt.Errorf(
+			"multiple %s structs found across input dirs (%s); add an explicit storeData field to choose one",
+			stateTypeName,
+			strings.Join(packageNames, ", "),
+		)
+	}
+}
+
+func (pt *ProjTracking) storeStateInsertTarget(
+	storeDecl storeTypeDecl,
+	stateRef storeStateRef,
+) (*FileTracking, int, error) {
+	if stateRef.PackagePath == "" && stateRef.Qualifier == "" {
+		return storeDecl.ft, storeDecl.declIdx, nil
+	}
+
+	targetFt := pt.firstFileForStateRef(storeDecl.ft, stateRef)
+	if targetFt == nil {
+		return nil, 0, fmt.Errorf(
+			"store state %s is referenced by %s but was not found in parsed input dirs",
+			stateRef.displayName(),
+			storeDecl.spec.Name.Name,
+		)
+	}
+	return targetFt, len(targetFt.f.Decls), nil
+}
+
+func (ft *FileTracking) insertStoreStateStruct(stateTypeName string, insertIdx int) {
+	stateDecl := &dst.GenDecl{
+		Tok: token.TYPE,
+		Specs: []dst.Spec{
+			&dst.TypeSpec{
+				Name: dst.NewIdent(stateTypeName),
+				Type: &dst.StructType{
+					Fields: &dst.FieldList{},
+				},
+			},
+		},
+	}
+	stateDecl.Decorations().Start.Append("// @restream.partials")
+	ft.f.Decls = slices.Insert(ft.f.Decls, insertIdx, dst.Decl(stateDecl))
+	ft.inputFileDirty = true
+}
+
+func (pt *ProjTracking) findStructTypeSpecForStateRef(
+	sourceFt *FileTracking,
+	stateRef storeStateRef,
+) (*FileTracking, *dst.GenDecl, *dst.TypeSpec, bool) {
+	if stateRef.PackagePath != "" {
+		return pt.findStructTypeSpecInPackagePath(stateRef.PackagePath, stateRef.TypeName)
+	}
+
+	if stateRef.Qualifier != "" {
+		if pkg := sourceFt.importLookup[stateRef.Qualifier]; pkg != nil && pkg.PkgPath != "" {
+			return pt.findStructTypeSpecInPackagePath(pkg.PkgPath, stateRef.TypeName)
+		}
+
+		for _, ft := range pt.files {
+			if ft.f.Name.Name != stateRef.Qualifier {
+				continue
+			}
+			gd, spec, exists := ft.findStructTypeSpec(stateRef.TypeName)
+			if exists {
+				return ft, gd, spec, true
+			}
+		}
+		return nil, nil, nil, false
+	}
+
+	return pt.findStructTypeSpecInPackage(sourceFt, stateRef.TypeName)
+}
+
+func (pt *ProjTracking) findStructTypeSpecInPackage(
+	sourceFt *FileTracking,
+	typeName string,
+) (*FileTracking, *dst.GenDecl, *dst.TypeSpec, bool) {
+	for _, ft := range pt.files {
+		if !samePackage(sourceFt, ft) {
+			continue
+		}
+		gd, spec, exists := ft.findStructTypeSpec(typeName)
+		if exists {
+			return ft, gd, spec, true
+		}
+	}
+	return nil, nil, nil, false
+}
+
+func (pt *ProjTracking) findStructTypeSpecInPackagePath(
+	packagePath string,
+	typeName string,
+) (*FileTracking, *dst.GenDecl, *dst.TypeSpec, bool) {
+	for _, ft := range pt.files {
+		if ft.fPackage == nil || ft.fPackage.PkgPath != packagePath {
+			continue
+		}
+		gd, spec, exists := ft.findStructTypeSpec(typeName)
+		if exists {
+			return ft, gd, spec, true
+		}
+	}
+	return nil, nil, nil, false
+}
+
+func (pt *ProjTracking) findStructTypeSpecs(typeName string) []structTypeDecl {
+	matches := []structTypeDecl{}
+	for _, ft := range pt.files {
+		gd, spec, exists := ft.findStructTypeSpec(typeName)
+		if exists {
+			matches = append(matches, structTypeDecl{
+				ft:   ft,
+				gd:   gd,
+				spec: spec,
+			})
+		}
+	}
+	return matches
+}
+
+func (pt *ProjTracking) firstFileForStateRef(sourceFt *FileTracking, stateRef storeStateRef) *FileTracking {
+	if stateRef.PackagePath != "" {
+		for _, ft := range pt.files {
+			if ft.fPackage != nil && ft.fPackage.PkgPath == stateRef.PackagePath {
+				return ft
+			}
+		}
+	}
+
+	if stateRef.Qualifier != "" {
+		if pkg := sourceFt.importLookup[stateRef.Qualifier]; pkg != nil && pkg.PkgPath != "" {
+			for _, ft := range pt.files {
+				if ft.fPackage != nil && ft.fPackage.PkgPath == pkg.PkgPath {
+					return ft
+				}
+			}
+		}
+
+		for _, ft := range pt.files {
+			if ft.f.Name.Name == stateRef.Qualifier {
+				return ft
+			}
+		}
+	}
+
+	if stateRef.PackagePath == "" && stateRef.Qualifier == "" {
+		return sourceFt
+	}
+	return nil
+}
+
+func samePackage(a, b *FileTracking) bool {
+	if a.fPackage != nil && b.fPackage != nil && a.fPackage.PkgPath != "" && b.fPackage.PkgPath != "" {
+		return a.fPackage.PkgPath == b.fPackage.PkgPath
+	}
+	return a.f.Name.Name == b.f.Name.Name
+}
+
+func (ft *FileTracking) findStructTypeSpec(typeName string) (*dst.GenDecl, *dst.TypeSpec, bool) {
+	for _, d := range ft.f.Decls {
+		gd, ok := d.(*dst.GenDecl)
+		if !ok || gd.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			s, ok := spec.(*dst.TypeSpec)
+			if !ok || s.Name.Name != typeName {
+				continue
+			}
+			if _, ok := s.Type.(*dst.StructType); !ok {
+				continue
+			}
+			return gd, s, true
+		}
+	}
+	return nil, nil, false
+}
+
+func (ft *FileTracking) ensurePartialsAnnotation(gd *dst.GenDecl) {
+	for _, dec := range gd.Decorations().Start {
+		if strings.Contains(dec, "@restream.partials") {
+			return
+		}
+	}
+	gd.Decorations().Start.Append("// @restream.partials")
+	ft.inputFileDirty = true
+}
+
+func (ft *FileTracking) ensureStoreDataMember(s *dst.TypeSpec, stateRef storeStateRef) error {
+	st := s.Type.(*dst.StructType)
+	restreamQualifier := ft.ensureRestreamImportName()
+	storeDataType := expectedStoreDataTypeExpr(stateRef, restreamQualifier)
+	storeDataExpr, err := parseDSTExpr(storeDataType)
+	if err != nil {
+		return err
+	}
+
+	for idx, fd := range st.Fields.List {
+		nameIdx := slices.IndexFunc(fd.Names, func(name *dst.Ident) bool {
+			return name.Name == "storeData"
+		})
+		if nameIdx == -1 {
+			continue
+		}
+
+		if len(fd.Names) == 1 {
+			if dstExprString(fd.Type) == storeDataType {
+				return nil
+			}
+			fd.Type = storeDataExpr
+			ft.inputFileDirty = true
+			return nil
+		}
+
+		fd.Names = slices.Delete(fd.Names, nameIdx, nameIdx+1)
+		st.Fields.List = slices.Insert(st.Fields.List, idx, storeDataField(storeDataExpr))
+		ft.inputFileDirty = true
+		return nil
+	}
+
+	st.Fields.List = slices.Insert(st.Fields.List, 0, storeDataField(storeDataExpr))
+	ft.inputFileDirty = true
+	return nil
+}
+
+func storeDataField(storeDataType dst.Expr) *dst.Field {
+	return &dst.Field{
+		Names: []*dst.Ident{dst.NewIdent("storeData")},
+		Type:  storeDataType,
+	}
+}
+
+func expectedStoreDataTypeExpr(stateRef storeStateRef, restreamQualifier string) string {
+	storeDataType := "StoreData"
+	if restreamQualifier != "" {
+		storeDataType = restreamQualifier + "." + storeDataType
+	}
+	stateType := stateRef.typeExpr()
+	return fmt.Sprintf("*%s[%s, *%s, *%s]", storeDataType, stateType, stateType, stateRef.partialTypeExpr())
+}
+
+func (ft *FileTracking) ensurePackageImportName(targetFt *FileTracking) (string, error) {
+	if samePackage(ft, targetFt) {
+		return "", nil
+	}
+	if targetFt.fPackage == nil || targetFt.fPackage.PkgPath == "" {
+		return "", fmt.Errorf("unable to import package %s: package path is unknown", targetFt.f.Name.Name)
+	}
+
+	importPkgPath := targetFt.fPackage.PkgPath
+	for _, imp := range ft.f.Imports {
+		if importPath(imp) != importPkgPath {
+			continue
+		}
+		if imp.Name != nil {
+			switch imp.Name.Name {
+			case ".":
+				return "", nil
+			case "_":
+				return "", fmt.Errorf("store state package %s is imported for side effects only", importPkgPath)
+			default:
+				ft.importLookup[imp.Name.Name] = targetFt.fPackage
+				return imp.Name.Name, nil
+			}
+		}
+		qualifier := targetFt.f.Name.Name
+		ft.importLookup[qualifier] = targetFt.fPackage
+		return qualifier, nil
+	}
+
+	qualifier := targetFt.f.Name.Name
+	if qualifier == "" {
+		qualifier = path.Base(importPkgPath)
+	}
+	if existingPkg := ft.importLookup[qualifier]; existingPkg != nil && existingPkg.PkgPath != importPkgPath {
+		baseQualifier := qualifier
+		for idx := 2; ; idx++ {
+			qualifier = fmt.Sprintf("%s%d", baseQualifier, idx)
+			if ft.importLookup[qualifier] == nil {
+				break
+			}
+		}
+	}
+
+	imp := &dst.ImportSpec{
+		Path: &dst.BasicLit{
+			Kind:  token.STRING,
+			Value: strconv.Quote(importPkgPath),
+		},
+	}
+	if qualifier != targetFt.f.Name.Name {
+		imp.Name = dst.NewIdent(qualifier)
+	}
+
+	ft.f.Imports = append(ft.f.Imports, imp)
+	for _, d := range ft.f.Decls {
+		gd, ok := d.(*dst.GenDecl)
+		if !ok || gd.Tok != token.IMPORT {
+			continue
+		}
+		gd.Specs = append(gd.Specs, imp)
+		ft.importLookup[qualifier] = targetFt.fPackage
+		ft.inputFileDirty = true
+		return qualifier, nil
+	}
+
+	ft.f.Decls = slices.Insert(ft.f.Decls, 0, dst.Decl(&dst.GenDecl{
+		Tok:   token.IMPORT,
+		Specs: []dst.Spec{imp},
+	}))
+	ft.importLookup[qualifier] = targetFt.fPackage
+	ft.inputFileDirty = true
+	return qualifier, nil
+}
+
+func (ft *FileTracking) ensureRestreamImportName() string {
+	if ft.fPackage != nil && ft.fPackage.PkgPath == restreamPackagePath {
+		return ""
+	}
+
+	for _, imp := range ft.f.Imports {
+		if importPath(imp) != restreamPackagePath {
+			continue
+		}
+		if imp.Name != nil && imp.Name.Name != "." && imp.Name.Name != "_" {
+			return imp.Name.Name
+		}
+		return "restream"
+	}
+
+	imp := &dst.ImportSpec{
+		Path: &dst.BasicLit{
+			Kind:  token.STRING,
+			Value: strconv.Quote(restreamPackagePath),
+		},
+	}
+	ft.f.Imports = append(ft.f.Imports, imp)
+	for _, d := range ft.f.Decls {
+		gd, ok := d.(*dst.GenDecl)
+		if !ok || gd.Tok != token.IMPORT {
+			continue
+		}
+		gd.Specs = append(gd.Specs, imp)
+		ft.inputFileDirty = true
+		return "restream"
+	}
+
+	ft.f.Decls = slices.Insert(ft.f.Decls, 0, dst.Decl(&dst.GenDecl{
+		Tok:   token.IMPORT,
+		Specs: []dst.Spec{imp},
+	}))
+	ft.inputFileDirty = true
+	return "restream"
+}
+
+func importPath(imp *dst.ImportSpec) string {
+	p, err := strconv.Unquote(imp.Path.Value)
+	if err != nil {
+		return ""
+	}
+	return p
 }
 
 // parseFuncDecls is an inner helper to parse all of the RPC functions from the file and see what we want to codegen from it

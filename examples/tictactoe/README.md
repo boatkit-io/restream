@@ -38,8 +38,6 @@ type BoardStoreState struct {
 	Board [][]string
 	XTurn bool
 }
-
-const BoardStoreName = "BoardStore"
 ```
 
 Create `restream.yaml` at the project root. For the first codegen pass, keep this Go-only because the web app does not exist yet:
@@ -76,6 +74,7 @@ import (
 	"github.com/boatkit-io/restream/pkg/restream"
 )
 
+// @restream.store(BoardStore)
 type BoardStore struct {
 	storeData *restream.StoreData[BoardStoreState, *BoardStoreState, *BoardStoreStatePartial]
 }
@@ -96,18 +95,12 @@ func NewBoardStore(rpcd *restream.RPCDispatcher) (*BoardStore, error) {
 
 	return s, nil
 }
+```
 
-func (s *BoardStore) GetName() string {
-	return BoardStoreName
-}
+Run codegen again. The `@restream.store(BoardStore)` annotation generates `BoardStoreName`, `GetName`, `GetStoreData`, and `SubscribeToField` into `internal/game/boardstore_rs.go`. It also keeps the `storeData` member shaped as `*restream.StoreData[BoardStoreState, *BoardStoreState, *BoardStoreStatePartial]`.
 
-func (s *BoardStore) GetStoreData() restream.StoreDataBase {
-	return s.storeData
-}
-
-func (s *BoardStore) SubscribeToField(field []any, callback any) {
-	s.storeData.SubscribeToField(field, callback)
-}
+```bash
+go tool github.com/boatkit-io/restream/cmd/codegen -project .
 ```
 
 Now create `cmd/server/main.go`:

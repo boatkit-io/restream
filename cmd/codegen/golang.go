@@ -352,6 +352,31 @@ func (ft *FileTracking) buildGolangEventStruct(eventName, eventTypeName string, 
 	return nil
 }
 
+// createGoStoreMethods builds the boilerplate Store interface methods for a typed store.
+func (ft *FileTracking) createGoStoreMethods(si StructInfo, storeName string) {
+	constName := si.Name + "Name"
+
+	out := fmt.Sprintf("// %s is the restream store name for %s\n", constName, si.Name)
+	out += fmt.Sprintf("const %s = %q\n\n", constName, storeName)
+
+	out += "// GetName is an implementation of the Store.GetName call\n"
+	out += fmt.Sprintf("func (s *%s) GetName() string {\n", si.GolangNameWithParams())
+	out += fmt.Sprintf("    return %s\n", constName)
+	out += "}\n\n"
+
+	out += "// GetStoreData is an implementation of the Store.GetStoreData call\n"
+	out += fmt.Sprintf("func (s *%s) GetStoreData() restream.StoreDataBase {\n", si.GolangNameWithParams())
+	out += "    return s.storeData\n"
+	out += "}\n\n"
+
+	out += "// SubscribeToField implements the restream.Store interface\n"
+	out += fmt.Sprintf("func (s *%s) SubscribeToField(field []any, callback any) {\n", si.GolangNameWithParams())
+	out += "    s.storeData.SubscribeToField(field, callback)\n"
+	out += "}\n"
+
+	ft.goGenEntries = append(ft.goGenEntries, fdef{name: si.Name + "Store", defs: out})
+}
+
 // writeGoStructs writes out the golang generated structures
 func (ft *FileTracking) writeGoStructs() error {
 	fmt.Printf("Writing out golang gen at: %s\n", ft.outFile)
@@ -436,7 +461,7 @@ func runGoimports(outPath string) error {
 	return exec.Command(goimportsPath, "-w", outPath).Run() //nolint:gosec
 }
 
-// rewriteSourceFile re-prints-out the source golang file for when we've updated fieldIds/MAXFIELD tags/comments
+// rewriteSourceFile re-prints-out the source golang file for input-side codegen fixes.
 func (ft *FileTracking) rewriteSourceFile() error {
 	fmt.Printf("Writing out updated golang source file: %s\n", ft.inFile)
 
@@ -447,7 +472,10 @@ func (ft *FileTracking) rewriteSourceFile() error {
 	if err := decorator.Fprint(fw, ft.f); err != nil {
 		return err
 	}
-	return fw.Close()
+	if err := fw.Close(); err != nil {
+		return err
+	}
+	return runGoimports(ft.inFile)
 }
 
 // getGolangTypeName builds the golang type name for the expression info

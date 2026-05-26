@@ -244,6 +244,309 @@ func Register(rpcd *testDispatcher) {
 	}
 }
 
+func TestStoreAnnotationGeneratesStoreBoilerplate(t *testing.T) {
+	repoRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	projectDir := t.TempDir()
+	serverDir := filepath.Join(projectDir, "cmd", "server")
+	if err := os.MkdirAll(serverDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/storeannotation
+
+go 1.26.2
+
+require github.com/boatkit-io/restream v0.0.0
+
+replace github.com/boatkit-io/restream => `+repoRoot+`
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(serverDir, "boardstore.go"), []byte(`package main
+
+// @restream.store(BoardStore)
+type BoardStore struct {
+	storeData any
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	pt := NewProjTracking(projectDir, &restreamConfig{
+		InputDirs: []string{"cmd/server"},
+	})
+	if err := pt.parseProject(); err != nil {
+		t.Fatal(err)
+	}
+	for _, ft := range pt.files {
+		if err := ft.Run(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out, err := os.ReadFile(filepath.Join(serverDir, "boardstore_rs.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+
+	for _, expected := range []string{
+		`const BoardStoreName = "BoardStore"`,
+		"type BoardStoreStatePartial struct",
+		"func (s *BoardStore) GetName() string",
+		"return BoardStoreName",
+		"func (s *BoardStore) GetStoreData() restream.StoreDataBase",
+		"return s.storeData",
+		"func (s *BoardStore) SubscribeToField(field []any, callback any)",
+		"s.storeData.SubscribeToField(field, callback)",
+	} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("generated store boilerplate missing expected %q:\n%s", expected, got)
+		}
+	}
+
+	sourceOut, err := os.ReadFile(filepath.Join(serverDir, "boardstore.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewrittenSource := string(sourceOut)
+	for _, expected := range []string{
+		"// @restream.partials",
+		"type BoardStoreState struct",
+		`"github.com/boatkit-io/restream/pkg/restream"`,
+		"storeData *restream.StoreData[BoardStoreState, *BoardStoreState, *BoardStoreStatePartial]",
+	} {
+		if !strings.Contains(rewrittenSource, expected) {
+			t.Fatalf("rewritten source missing expected %q:\n%s", expected, rewrittenSource)
+		}
+	}
+
+	foundTSConst := false
+	for _, ft := range pt.files {
+		for _, entry := range ft.tsGenEntries {
+			if entry.name == "BoardStoreName" && entry.typ == fdefTypeEnum &&
+				strings.Contains(entry.defs, `export const BoardStoreName = "BoardStore";`) {
+				foundTSConst = true
+			}
+		}
+	}
+	if !foundTSConst {
+		t.Fatalf("store annotation did not generate TypeScript store name const")
+	}
+}
+
+func TestStoreAnnotationAddsMissingStoreDataMember(t *testing.T) {
+	repoRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	projectDir := t.TempDir()
+	serverDir := filepath.Join(projectDir, "cmd", "server")
+	if err := os.MkdirAll(serverDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/storeannotationmissing
+
+go 1.26.2
+
+require github.com/boatkit-io/restream v0.0.0
+
+replace github.com/boatkit-io/restream => `+repoRoot+`
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	sourcePath := filepath.Join(serverDir, "boardstore.go")
+	if err := os.WriteFile(sourcePath, []byte(`package main
+
+type BoardStoreState struct {
+	Value string
+}
+
+// @restream.store(BoardStore)
+type BoardStore struct {
+	other int
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	pt := NewProjTracking(projectDir, &restreamConfig{
+		InputDirs: []string{"cmd/server"},
+	})
+	if err := pt.parseProject(); err != nil {
+		t.Fatal(err)
+	}
+	for _, ft := range pt.files {
+		if err := ft.Run(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	for _, expected := range []string{
+		"// @restream.partials",
+		"Value string",
+		"storeData *restream.StoreData[BoardStoreState, *BoardStoreState, *BoardStoreStatePartial]",
+		"other",
+	} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("rewritten source missing expected %q:\n%s", expected, got)
+		}
+	}
+
+	generated, err := os.ReadFile(filepath.Join(serverDir, "boardstore_rs.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(generated), "type BoardStoreStatePartial struct") {
+		t.Fatalf("generated source missing BoardStoreStatePartial:\n%s", string(generated))
+	}
+}
+
+func TestStoreAnnotationFindsReferencedStateInAnotherPackage(t *testing.T) {
+	repoRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	projectDir := t.TempDir()
+	storeImplsDir := filepath.Join(projectDir, "internal", "storeimpls")
+	storeStatesDir := filepath.Join(projectDir, "internal", "storestates")
+	for _, dir := range []string{storeImplsDir, storeStatesDir} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/crossstore
+
+go 1.26.3
+
+require github.com/boatkit-io/restream v0.0.0
+
+replace github.com/boatkit-io/restream => `+repoRoot+`
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	storeSourcePath := filepath.Join(storeImplsDir, "boardstore.go")
+	if err := os.WriteFile(storeSourcePath, []byte(`package storeimpls
+
+import (
+	"example.com/crossstore/internal/storestates"
+	"github.com/boatkit-io/restream/pkg/restream"
+)
+
+// @restream.store(BoardStore)
+type BoardStore struct {
+	storeData *restream.StoreData[storestates.BoardStoreState, *storestates.BoardStoreState, *storestates.BoardStoreStatePartial]
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	stateSourcePath := filepath.Join(storeStatesDir, "boardstorestate.go")
+	if err := os.WriteFile(stateSourcePath, []byte(`package storestates
+
+type BoardStoreState struct {
+	Value string
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(storeStatesDir, "boardstorestate_rs.go"), []byte(restreamGeneratedFileBanner+`
+package storestates
+
+import (
+	"github.com/boatkit-io/restream/pkg/binarystreams"
+	"github.com/boatkit-io/restream/pkg/restream"
+)
+
+type BoardStoreStatePartial struct{}
+
+func (*BoardStoreState) Serialize(*binarystreams.Writer, *restream.VarInfoStruct) error { return nil }
+func (*BoardStoreState) Deserialize(*binarystreams.Reader, *restream.VarInfoStruct) error { return nil }
+func (*BoardStoreStatePartial) Serialize(*binarystreams.Writer, *restream.VarInfoStruct) error { return nil }
+func (*BoardStoreStatePartial) Deserialize(*binarystreams.Reader, *restream.VarInfoStruct) error { return nil }
+func (*BoardStoreStatePartial) MergeOntoPartial(any) {}
+func (*BoardStoreStatePartial) ApplyTo(any) [][]any { return nil }
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	pt := NewProjTracking(projectDir, &restreamConfig{
+		InputDirs: []string{"internal/storeimpls", "internal/storestates"},
+	})
+	if err := pt.parseProject(); err != nil {
+		t.Fatal(err)
+	}
+	for _, ft := range pt.files {
+		if err := ft.Run(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	storeOut, err := os.ReadFile(storeSourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewrittenStore := string(storeOut)
+	for _, expected := range []string{
+		`"example.com/crossstore/internal/storestates"`,
+		"storeData *restream.StoreData[storestates.BoardStoreState, *storestates.BoardStoreState, *storestates.BoardStoreStatePartial]",
+	} {
+		if !strings.Contains(rewrittenStore, expected) {
+			t.Fatalf("rewritten store source missing expected %q:\n%s", expected, rewrittenStore)
+		}
+	}
+	if strings.Contains(rewrittenStore, "type BoardStoreState struct") {
+		t.Fatalf("store implementation package should not get a duplicate state struct:\n%s", rewrittenStore)
+	}
+
+	stateOut, err := os.ReadFile(stateSourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewrittenState := string(stateOut)
+	for _, expected := range []string{
+		"// @restream.partials",
+		"Value string",
+		`restream:",fID=1"`,
+	} {
+		if !strings.Contains(rewrittenState, expected) {
+			t.Fatalf("rewritten state source missing expected %q:\n%s", expected, rewrittenState)
+		}
+	}
+
+	storeGenerated, err := os.ReadFile(filepath.Join(storeImplsDir, "boardstore_rs.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(storeGenerated), `const BoardStoreName = "BoardStore"`) {
+		t.Fatalf("generated store source missing BoardStoreName:\n%s", string(storeGenerated))
+	}
+
+	stateGenerated, err := os.ReadFile(filepath.Join(storeStatesDir, "boardstorestate_rs.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(stateGenerated), "type BoardStoreStatePartial struct") {
+		t.Fatalf("generated state source missing BoardStoreStatePartial:\n%s", string(stateGenerated))
+	}
+}
+
 func TestEventGenerationExpandsGroupedParams(t *testing.T) {
 	source := `package main
 

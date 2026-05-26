@@ -7,6 +7,7 @@ import (
 	"github.com/boatkit-io/restream/pkg/restream"
 )
 
+// @restream.store(BoardStore)
 type BoardStore struct {
 	storeData *restream.StoreData[BoardStoreState, *BoardStoreState, *BoardStoreStatePartial]
 }
@@ -50,19 +51,4 @@ func NewBoardStore(rpcd *restream.RPCDispatcher) (*BoardStore, error) {
 	}, reflect.TypeFor[PlaceTokenRequest](), reflect.TypeFor[PlaceTokenResponse]())
 
 	return s, nil
-}
-
-// GetName is an implementation of the Store.GetName call
-func (s *BoardStore) GetName() string {
-	return BoardStoreName
-}
-
-// GetStoreData is an implementation of the Store.GetStoreData call
-func (s *BoardStore) GetStoreData() restream.StoreDataBase {
-	return s.storeData
-}
-
-// SubscribeToField implements the restream.Store interface
-func (s *BoardStore) SubscribeToField(field []any, callback any) {
-	s.storeData.SubscribeToField(field, callback)
 }

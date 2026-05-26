@@ -763,6 +763,13 @@ func (ft *FileTracking) buildTSEventStruct(eventName, eventTypeName string, even
 	return nil
 }
 
+// createTSStoreNameConst adds the store name constant to the generated TypeScript package output.
+func (ft *FileTracking) createTSStoreNameConst(storeTypeName, storeName string) {
+	constName := storeTypeName + "Name"
+	decStr := fmt.Sprintf("export const %s = %q;\n", constName, storeName)
+	ft.tsGenEntries = append(ft.tsGenEntries, fdef{name: constName, defs: decStr, typ: fdefTypeEnum})
+}
+
 // addTSTypeRef adds a marker for later processing that a type was referenced by a source structure, so we know to pull
 // that into the output typescript later on after the main storestate structs.
 func (ft *FileTracking) addTSTypeRef(typeName string, isEnum bool) {
