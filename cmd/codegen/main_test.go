@@ -245,6 +245,147 @@ func Register(rpcd *testDispatcher) {
 }
 
 func TestEventGenerationExpandsGroupedParams(t *testing.T) {
+	source := `package main
+
+import (
+	"reflect"
+
+	"github.com/boatkit-io/tugboat/pkg/subscribableevent"
+)
+
+type testDispatcher struct{}
+
+func (*testDispatcher) RegisterEvent(string, any, ...reflect.Type) {}
+
+type tokenPlacedCallback func(x, y int)
+
+func Register(eventDispatcher *testDispatcher) {
+	tokenPlaced := subscribableevent.NewEvent[tokenPlacedCallback]()
+	eventDispatcher.RegisterEvent("TokenPlaced", tokenPlaced, nil, nil)
+}
+
+func RegisterAgain(eventDispatcher *testDispatcher) {
+	tokenPlaced2 := subscribableevent.NewEvent[tokenPlacedCallback]()
+	eventDispatcher.RegisterEvent("TokenPlaced2", tokenPlaced2, nil, nil)
+}
+`
+	projectDir, serverDir, sourcePath := setupEventGenerationProject(t, source)
+
+	pt := NewProjTracking(projectDir, &restreamConfig{
+		InputDirs: []string{"cmd/server"},
+	})
+	if err := pt.parseProject(); err != nil {
+		t.Fatal(err)
+	}
+	for _, ft := range pt.files {
+		if err := ft.Run(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out, err := os.ReadFile(filepath.Join(serverDir, "boardstore_rs.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+
+	for _, expected := range []string{
+		"type TokenPlacedEvent struct",
+		"type TokenPlaced2Event struct",
+		"X int",
+		"Y int",
+		`{Name: "X", FieldIdx: 0, VarInfo: &restream.VarInfoPrimitive{DataType: restream.SerializationTypeInt64, MappedType: restream.Ptr("int")}}`,
+		`{Name: "Y", FieldIdx: 1, VarInfo: &restream.VarInfoPrimitive{DataType: restream.SerializationTypeInt64, MappedType: restream.Ptr("int")}}`,
+		"restream.SerializeValue(s.Y, w, TokenPlacedEventFieldInfo[1].VarInfo)",
+		"restream.DeserializeValue(&s.Y, r, TokenPlacedEventFieldInfo[1].VarInfo)",
+	} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("generated event packet missing expected %q:\n%s", expected, got)
+		}
+	}
+	if count := strings.Count(got, "type TokenPlacedEvent struct"); count != 1 {
+		t.Fatalf("generated %d TokenPlacedEvent declarations, want 1:\n%s", count, got)
+	}
+	if count := strings.Count(got, "type TokenPlaced2Event struct"); count != 1 {
+		t.Fatalf("generated %d TokenPlaced2Event declarations, want 1:\n%s", count, got)
+	}
+
+	sourceOut, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewrittenSource := string(sourceOut)
+	for _, expected := range []string{
+		"eventDispatcher.RegisterEvent(\"TokenPlaced\", &tokenPlaced",
+		"eventDispatcher.RegisterEvent(\"TokenPlaced2\", &tokenPlaced2",
+		"reflect.TypeFor[TokenPlacedEvent]()",
+		"reflect.TypeFor[TokenPlaced2Event]()",
+		"reflect.TypeFor[func(int, int)]()",
+	} {
+		if !strings.Contains(rewrittenSource, expected) {
+			t.Fatalf("rewritten source missing expected %q:\n%s", expected, rewrittenSource)
+		}
+	}
+	if count := strings.Count(rewrittenSource, "reflect.TypeFor[TokenPlacedEvent]()"); count != 1 {
+		t.Fatalf("rewritten source has %d TokenPlacedEvent type args, want 1:\n%s", count, rewrittenSource)
+	}
+	if count := strings.Count(rewrittenSource, "reflect.TypeFor[TokenPlaced2Event]()"); count != 1 {
+		t.Fatalf("rewritten source has %d TokenPlaced2Event type args, want 1:\n%s", count, rewrittenSource)
+	}
+}
+
+func TestEventGenerationRejectsDuplicateNames(t *testing.T) {
+	source := `package main
+
+import (
+	"reflect"
+
+	"github.com/boatkit-io/tugboat/pkg/subscribableevent"
+)
+
+type testDispatcher struct{}
+
+func (*testDispatcher) RegisterEvent(string, any, ...reflect.Type) {}
+
+type tokenPlacedCallback func(x, y int)
+
+func Register(eventDispatcher *testDispatcher) {
+	tokenPlaced := subscribableevent.NewEvent[tokenPlacedCallback]()
+	eventDispatcher.RegisterEvent("TokenPlaced", tokenPlaced, nil, nil)
+}
+
+func RegisterAgain(eventDispatcher *testDispatcher) {
+	tokenPlaced := subscribableevent.NewEvent[tokenPlacedCallback]()
+	eventDispatcher.RegisterEvent("TokenPlaced", tokenPlaced, nil, nil)
+}
+`
+	projectDir, _, _ := setupEventGenerationProject(t, source)
+
+	pt := NewProjTracking(projectDir, &restreamConfig{
+		InputDirs: []string{"cmd/server"},
+	})
+	if err := pt.parseProject(); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotErr error
+	for _, ft := range pt.files {
+		if err := ft.Run(); err != nil {
+			gotErr = err
+			break
+		}
+	}
+	if gotErr == nil {
+		t.Fatal("expected duplicate event registration to fail")
+	}
+	if !strings.Contains(gotErr.Error(), `duplicate RegisterEvent name "TokenPlaced"`) {
+		t.Fatalf("duplicate event registration error = %q", gotErr)
+	}
+}
+
+func setupEventGenerationProject(t *testing.T, source string) (string, string, string) {
+	t.Helper()
+
 	repoRoot, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)
@@ -293,74 +434,11 @@ replace github.com/boatkit-io/tugboat => ./tugboat
 	}
 
 	sourcePath := filepath.Join(serverDir, "boardstore.go")
-	if err := os.WriteFile(sourcePath, []byte(`package main
-
-import (
-	"reflect"
-
-	"github.com/boatkit-io/tugboat/pkg/subscribableevent"
-)
-
-type testDispatcher struct{}
-
-func (*testDispatcher) RegisterEvent(string, any, ...reflect.Type) {}
-
-type tokenPlacedCallback func(x, y int)
-
-func Register(eventDispatcher *testDispatcher) {
-	tokenPlaced := subscribableevent.NewEvent[tokenPlacedCallback]()
-	eventDispatcher.RegisterEvent("TokenPlaced", tokenPlaced, nil, nil)
-}
-`), 0644); err != nil {
+	if err := os.WriteFile(sourcePath, []byte(source), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	pt := NewProjTracking(projectDir, &restreamConfig{
-		InputDirs: []string{"cmd/server"},
-	})
-	if err := pt.parseProject(); err != nil {
-		t.Fatal(err)
-	}
-	for _, ft := range pt.files {
-		if err := ft.Run(); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	out, err := os.ReadFile(filepath.Join(serverDir, "boardstore_rs.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := string(out)
-
-	for _, expected := range []string{
-		"type TokenPlacedEvent struct",
-		"X int",
-		"Y int",
-		`{Name: "X", FieldIdx: 0, VarInfo: &restream.VarInfoPrimitive{DataType: restream.SerializationTypeInt64, MappedType: restream.Ptr("int")}}`,
-		`{Name: "Y", FieldIdx: 1, VarInfo: &restream.VarInfoPrimitive{DataType: restream.SerializationTypeInt64, MappedType: restream.Ptr("int")}}`,
-		"restream.SerializeValue(s.Y, w, TokenPlacedEventFieldInfo[1].VarInfo)",
-		"restream.DeserializeValue(&s.Y, r, TokenPlacedEventFieldInfo[1].VarInfo)",
-	} {
-		if !strings.Contains(got, expected) {
-			t.Fatalf("generated event packet missing expected %q:\n%s", expected, got)
-		}
-	}
-
-	sourceOut, err := os.ReadFile(sourcePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	source := string(sourceOut)
-	for _, expected := range []string{
-		"eventDispatcher.RegisterEvent(\"TokenPlaced\", &tokenPlaced",
-		"reflect.TypeFor[TokenPlacedEvent]()",
-		"reflect.TypeFor[func(int, int)]()",
-	} {
-		if !strings.Contains(source, expected) {
-			t.Fatalf("rewritten source missing expected %q:\n%s", expected, source)
-		}
-	}
+	return projectDir, serverDir, sourcePath
 }
 
 func TestWriteTSFileUsesPackageRuntimeImportsByDefault(t *testing.T) {

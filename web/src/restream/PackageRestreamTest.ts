@@ -49,6 +49,34 @@ export class LatLong {
 	];
 }
 
+export class call2Event extends EventStruct {
+    public test!: number;
+
+    public static readonly eventBoundName = "call2";
+    private constructor() { super(call2Event.eventBoundName); }
+
+    public static fromValues(
+        test: number = 0,
+    ) {
+        const o = new call2Event();
+        o.test = test;
+        return o;
+    }
+
+	private static _fieldInfo: FieldInfo[] = [
+        {name: "Test", fieldIdx: 0, varInfo: new VarInfoPrimitive(SerializationType.Int64, "int")},
+	];
+    public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
+        const o = new call2Event();
+        o.test = ReStreamDecoders.deserializeValue(r, this._fieldInfo[0].varInfo);
+        return o;
+    }
+
+    public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
+        ReStreamEncoders.serializeValue(this.test, w, call2Event._fieldInfo[0].varInfo);
+    }
+}
+
 export class call2Request extends RPCStruct<call2Response,number|undefined> {
     public test!: LatLong;
     private constructor() { super("call2", call2Response); }

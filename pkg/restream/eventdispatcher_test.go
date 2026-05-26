@@ -54,24 +54,24 @@ func TestEventDispatcherFiresSerializedEvent(t *testing.T) {
 		gotBytes = eventBytes
 	})
 
-	eventd.RegisterEvent("call", &event, reflect.TypeFor[callEvent](), reflect.TypeFor[func(int)]())
+	eventd.RegisterEvent("call2", &event, reflect.TypeFor[call2Event](), reflect.TypeFor[func(int)]())
 
-	eventBytes, err := SerializeToBytes(&callEvent{Test: 7}, nil)
+	eventBytes, err := SerializeToBytes(&call2Event{Test: 7}, nil)
 	if err != nil {
 		t.Fatalf("event packet serialize failed: %v", err)
 	}
-	if err := eventd.FireSerializedEvent("call", eventBytes); err != nil {
+	if err := eventd.FireSerializedEvent("call2", eventBytes); err != nil {
 		t.Fatalf("FireSerializedEvent failed: %v", err)
 	}
 
 	if gotTyped != 7 {
 		t.Fatalf("expected typed event test=7, got %d", gotTyped)
 	}
-	if gotName != "call" {
-		t.Fatalf("expected event name call, got %q", gotName)
+	if gotName != "call2" {
+		t.Fatalf("expected event name call2, got %q", gotName)
 	}
 
-	var packet callEvent
+	var packet call2Event
 	if err := packet.Deserialize(binarystreams.NewReaderFromBytes(gotBytes), nil); err != nil {
 		t.Fatalf("event packet deserialize failed: %v", err)
 	}

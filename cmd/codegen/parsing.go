@@ -203,6 +203,8 @@ func (ft *FileTracking) parseFuncDecls() error { //nolint:gocyclo,funlen
 		receiverLookup[rtx.Name+"."+ft.Name.Name] = ft.Type
 	}
 
+	generatedEventPackets := map[string]string{}
+
 	for _, d := range ft.f.Decls {
 		fd, has := d.(*dst.FuncDecl)
 		if !has {
@@ -242,6 +244,11 @@ func (ft *FileTracking) parseFuncDecls() error { //nolint:gocyclo,funlen
 
 				eventTypeName := strings.ReplaceAll(eventName, ".", "")
 
+				eventPacketType := fmt.Sprintf("%sEvent", eventTypeName)
+				if existingEventName, generated := generatedEventPackets[eventPacketType]; generated {
+					return fmt.Errorf("event names %q and %q both generate packet type %s", existingEventName, eventName, eventPacketType)
+				}
+
 				fmt.Printf("Building Event packet for: %s\n", eventName)
 
 				if err := ft.buildGolangEventStruct(eventName, eventTypeName, eventInfo.Fields); err != nil {
@@ -252,7 +259,8 @@ func (ft *FileTracking) parseFuncDecls() error { //nolint:gocyclo,funlen
 					return err
 				}
 
-				eventPacketType := fmt.Sprintf("%sEvent", eventTypeName)
+				generatedEventPackets[eventPacketType] = eventName
+
 				fixed := false
 				if eventInfo.NeedsAddress && !isAddressOf(xt.Args[1]) {
 					fixed = true
@@ -415,6 +423,10 @@ func (ft *FileTracking) typedEventRegistrations() (map[string]eventRegistrationI
 		eventName, err := astStringLiteralValue(call.Args[0])
 		if err != nil {
 			walkErr = err
+			return false
+		}
+		if _, exists := ret[eventName]; exists {
+			walkErr = fmt.Errorf("duplicate RegisterEvent name %q in %s", eventName, ft.inFile)
 			return false
 		}
 

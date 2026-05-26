@@ -7,27 +7,27 @@ import (
 	"github.com/boatkit-io/restream/pkg/binarystreams"
 )
 
-// callEvent is an event packet object for the call event
-type callEvent struct { //nolint:revive
+// call2Event is an event packet object for the call2 event
+type call2Event struct { //nolint:revive
 	Test int
 }
 
-// callEventFieldInfo is the static field info for the callEvent struct
-var callEventFieldInfo = []FieldInfo{
+// call2EventFieldInfo is the static field info for the call2Event struct
+var call2EventFieldInfo = []FieldInfo{
 	{Name: "Test", FieldIdx: 0, VarInfo: &VarInfoPrimitive{DataType: SerializationTypeInt64, MappedType: Ptr("int")}},
 }
 
 // Serialize serializes this structure to a binary writer
-func (s *callEvent) Serialize(w *binarystreams.Writer, _ *VarInfoStruct) error {
-	if err := SerializeValue(s.Test, w, callEventFieldInfo[0].VarInfo); err != nil {
+func (s *call2Event) Serialize(w *binarystreams.Writer, _ *VarInfoStruct) error {
+	if err := SerializeValue(s.Test, w, call2EventFieldInfo[0].VarInfo); err != nil {
 		return err
 	}
 	return nil
 }
 
 // Deserialize deserializes data from a binary reader into this struct
-func (s *callEvent) Deserialize(r *binarystreams.Reader, _ *VarInfoStruct) error {
-	if err := DeserializeValue(&s.Test, r, callEventFieldInfo[0].VarInfo); err != nil {
+func (s *call2Event) Deserialize(r *binarystreams.Reader, _ *VarInfoStruct) error {
+	if err := DeserializeValue(&s.Test, r, call2EventFieldInfo[0].VarInfo); err != nil {
 		return err
 	}
 	return nil
