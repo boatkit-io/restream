@@ -668,7 +668,6 @@ func (ft *FileTracking) ensureStoreDataMember(s *dst.TypeSpec, stateRef storeSta
 	if err != nil {
 		return err
 	}
-
 	for idx, fd := range st.Fields.List {
 		nameIdx := slices.IndexFunc(fd.Names, func(name *dst.Ident) bool {
 			return name.Name == "storeData"
@@ -678,7 +677,7 @@ func (ft *FileTracking) ensureStoreDataMember(s *dst.TypeSpec, stateRef storeSta
 		}
 
 		if len(fd.Names) == 1 {
-			if dstExprString(fd.Type) == storeDataType {
+			if sameTypeExpr(fd.Type, storeDataExpr) {
 				return nil
 			}
 			fd.Type = storeDataExpr
@@ -711,6 +710,54 @@ func expectedStoreDataTypeExpr(stateRef storeStateRef, restreamQualifier string)
 	}
 	stateType := stateRef.typeExpr()
 	return fmt.Sprintf("*%s[%s, *%s, *%s]", storeDataType, stateType, stateType, stateRef.partialTypeExpr())
+}
+
+func sameTypeExpr(a, b dst.Expr) bool {
+	if aParen, ok := a.(*dst.ParenExpr); ok {
+		return sameTypeExpr(aParen.X, b)
+	}
+	if bParen, ok := b.(*dst.ParenExpr); ok {
+		return sameTypeExpr(a, bParen.X)
+	}
+
+	switch a := a.(type) {
+	case *dst.Ident:
+		b, ok := b.(*dst.Ident)
+		return ok && a.Name == b.Name
+	case *dst.SelectorExpr:
+		b, ok := b.(*dst.SelectorExpr)
+		return ok && sameTypeExpr(a.X, b.X) && sameTypeExpr(a.Sel, b.Sel)
+	case *dst.StarExpr:
+		b, ok := b.(*dst.StarExpr)
+		return ok && sameTypeExpr(a.X, b.X)
+	case *dst.IndexExpr:
+		bX, bIndices, ok := indexTypeExprParts(b)
+		return ok && len(bIndices) == 1 && sameTypeExpr(a.X, bX) && sameTypeExpr(a.Index, bIndices[0])
+	case *dst.IndexListExpr:
+		bX, bIndices, ok := indexTypeExprParts(b)
+		if !ok || len(a.Indices) != len(bIndices) || !sameTypeExpr(a.X, bX) {
+			return false
+		}
+		for idx := range a.Indices {
+			if !sameTypeExpr(a.Indices[idx], bIndices[idx]) {
+				return false
+			}
+		}
+		return true
+	default:
+		return dstExprString(a) == dstExprString(b)
+	}
+}
+
+func indexTypeExprParts(expr dst.Expr) (dst.Expr, []dst.Expr, bool) {
+	switch expr := expr.(type) {
+	case *dst.IndexExpr:
+		return expr.X, []dst.Expr{expr.Index}, true
+	case *dst.IndexListExpr:
+		return expr.X, expr.Indices, true
+	default:
+		return nil, nil, false
+	}
 }
 
 func (ft *FileTracking) ensurePackageImportName(targetFt *FileTracking) (string, error) {

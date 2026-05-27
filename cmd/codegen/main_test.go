@@ -547,6 +547,96 @@ func (*BoardStoreStatePartial) ApplyTo(any) [][]any { return nil }
 	}
 }
 
+func TestStoreAnnotationPreservesCorrectStoreDataFormatting(t *testing.T) {
+	repoRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	projectDir := t.TempDir()
+	serverDir := filepath.Join(projectDir, "cmd", "server")
+	if err := os.MkdirAll(serverDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/storeannotationformat
+
+go 1.26.3
+
+require github.com/boatkit-io/restream v0.0.0
+
+replace github.com/boatkit-io/restream => `+repoRoot+`
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	sourcePath := filepath.Join(serverDir, "boardstore.go")
+	if err := os.WriteFile(sourcePath, []byte(`package main
+
+import "github.com/boatkit-io/restream/pkg/restream"
+
+// @restream.partials
+type BoardStoreState struct {
+	Value string
+}
+
+// @restream.store(BoardStore)
+type BoardStore struct {
+	storeData *restream.StoreData[
+		BoardStoreState,
+		*BoardStoreState,
+		*BoardStoreStatePartial,
+	]
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(serverDir, "boardstorestate_rs.go"), []byte(restreamGeneratedFileBanner+`
+package main
+
+import (
+	"github.com/boatkit-io/restream/pkg/binarystreams"
+	"github.com/boatkit-io/restream/pkg/restream"
+)
+
+type BoardStoreStatePartial struct{}
+
+func (*BoardStoreState) Serialize(*binarystreams.Writer, *restream.VarInfoStruct) error { return nil }
+func (*BoardStoreState) Deserialize(*binarystreams.Reader, *restream.VarInfoStruct) error { return nil }
+func (*BoardStoreStatePartial) Serialize(*binarystreams.Writer, *restream.VarInfoStruct) error { return nil }
+func (*BoardStoreStatePartial) Deserialize(*binarystreams.Reader, *restream.VarInfoStruct) error { return nil }
+func (*BoardStoreStatePartial) MergeOntoPartial(any) {}
+func (*BoardStoreStatePartial) ApplyTo(any) [][]any { return nil }
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	pt := NewProjTracking(projectDir, &restreamConfig{
+		InputDirs: []string{"cmd/server"},
+	})
+	if err := pt.parseProject(); err != nil {
+		t.Fatal(err)
+	}
+	for _, ft := range pt.files {
+		if err := ft.Run(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	expected := "storeData *restream.StoreData[\n\t\tBoardStoreState,\n\t\t*BoardStoreState,\n\t\t*BoardStoreStatePartial,\n\t]"
+	if !strings.Contains(got, expected) {
+		t.Fatalf("rewritten source did not preserve multiline storeData formatting:\n%s", got)
+	}
+	if strings.Contains(got, "storeData *restream.StoreData[BoardStoreState, *BoardStoreState, *BoardStoreStatePartial]") {
+		t.Fatalf("rewritten source collapsed multiline storeData formatting:\n%s", got)
+	}
+}
+
 func TestEventGenerationExpandsGroupedParams(t *testing.T) {
 	source := `package main
 
