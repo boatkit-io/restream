@@ -262,6 +262,105 @@ func TestRelayStoreKeyedInitialPartialDeletesMissingMapKey(t *testing.T) {
 	assert.Equal(t, uint(0), state.BaseStruct.Number)
 }
 
+func TestRelayStoreMergedPartialMatchesSequentialPartialReplay(t *testing.T) {
+	sequentialState := relayStoreMergeBaseState()
+	sequentialStore := restream.NewRelayStore[TestState, *TestState, *TestStatePartial]("relay-test", &sequentialState)
+	applyRelayStorePartial(t, sequentialStore, relayStoreMergeFirstPartial())
+	applyRelayStorePartial(t, sequentialStore, relayStoreMergeSecondPartial())
+
+	mergedState := relayStoreMergeBaseState()
+	mergedStore := restream.NewRelayStore[TestState, *TestState, *TestStatePartial]("relay-test", &mergedState)
+	mergedPartial := relayStoreMergeFirstPartial()
+	relayStoreMergeSecondPartial().MergeOntoPartial(mergedPartial)
+	applyRelayStorePartial(t, mergedStore, mergedPartial)
+
+	assert.Equal(t, sequentialState, mergedState)
+	assert.Equal(t, "second", mergedState.BaseField)
+	assert.Equal(t, uint(55), mergedState.MapPtrTest[5].Number)
+	assert.Nil(t, mergedState.MapPtrTest[6])
+	assert.Equal(t, uint(75), mergedState.MapPtrTest[7].Number)
+	assert.Nil(t, mergedState.MapPtrTest[8])
+	assert.Equal(t, uint(90), mergedState.MapPtrTest[9].Number)
+	assert.Equal(t, uint(12), mergedState.BaseStruct.Number)
+	assert.Equal(t, uint(22), mergedState.BaseStructPtr.Number)
+}
+
+func TestRelayStoreMergedPartialFieldPathsCoverMergedChanges(t *testing.T) {
+	state := relayStoreMergeBaseState()
+	relayStore := restream.NewRelayStore[TestState, *TestState, *TestStatePartial]("relay-test", &state)
+
+	var callbackFields [][]any
+	relayStore.GetStoreData().AddCallback(func(_ string, fields [][]any, _ restream.Partial) {
+		callbackFields = fields
+	})
+
+	mergedPartial := relayStoreMergeFirstPartial()
+	relayStoreMergeSecondPartial().MergeOntoPartial(mergedPartial)
+	applyRelayStorePartial(t, relayStore, mergedPartial)
+
+	assert.ElementsMatch(t, [][]any{
+		{"MapPtrTest", uint8(5), "Number"},
+		{"MapPtrTest", uint8(6)},
+		{"MapPtrTest", uint8(7)},
+		{"MapPtrTest", uint8(8)},
+		{"MapPtrTest", uint8(9)},
+		{"BaseField"},
+		{"BaseStruct", "Number"},
+		{"BaseStructPtr"},
+	}, callbackFields)
+}
+
+func relayStoreMergeBaseState() TestState {
+	return TestState{
+		MapPtrTest: map[uint8]*TestMapData{
+			5: {Number: 1},
+			6: {Number: 2},
+			8: {Number: 8},
+		},
+		BaseField:     "start",
+		BaseStruct:    TestMapData{Number: 10},
+		BaseStructPtr: &TestMapData{Number: 20},
+	}
+}
+
+func relayStoreMergeFirstPartial() *TestStatePartial {
+	return &TestStatePartial{
+		MapPtrTest: restream.NewPartialModMap[uint8, *TestMapData, *TestMapDataPartial]().
+			ApplyPartial(5, &TestMapDataPartial{Number: restream.Ptr(uint(50))}).
+			Set(7, &TestMapData{Number: 70}).
+			Set(8, &TestMapData{Number: 80}).
+			Delete(9),
+		BaseField: restream.Ptr("first"),
+		BaseStruct: (&restream.PartialValue[TestMapData, *TestMapDataPartial]{}).
+			ApplyPartial(&TestMapDataPartial{Number: restream.Ptr(uint(11))}),
+		BaseStructPtr: (&restream.PartialValue[*TestMapData, *TestMapDataPartial]{}).
+			SetWhole(restream.Ptr(&TestMapData{Number: 21})),
+	}
+}
+
+func relayStoreMergeSecondPartial() *TestStatePartial {
+	return &TestStatePartial{
+		MapPtrTest: restream.NewPartialModMap[uint8, *TestMapData, *TestMapDataPartial]().
+			ApplyPartial(5, &TestMapDataPartial{Number: restream.Ptr(uint(55))}).
+			Delete(6).
+			ApplyPartial(7, &TestMapDataPartial{Number: restream.Ptr(uint(75))}).
+			Delete(8).
+			Set(9, &TestMapData{Number: 90}),
+		BaseField: restream.Ptr("second"),
+		BaseStruct: (&restream.PartialValue[TestMapData, *TestMapDataPartial]{}).
+			ApplyPartial(&TestMapDataPartial{Number: restream.Ptr(uint(12))}),
+		BaseStructPtr: (&restream.PartialValue[*TestMapData, *TestMapDataPartial]{}).
+			ApplyPartial(&TestMapDataPartial{Number: restream.Ptr(uint(22))}),
+	}
+}
+
+func applyRelayStorePartial(t *testing.T, relayStore *restream.RelayStore[TestState, *TestState, *TestStatePartial], partial *TestStatePartial) {
+	t.Helper()
+	partialBytes, err := restream.SerializeToBytes(partial, nil)
+	assert.NoError(t, err)
+	assert.NoError(t, relayStore.GetStoreData().DecodeAndApplyPartial(partialBytes))
+}
+
 // @restream.fields
 // @restream.partials
 type TestA struct {
