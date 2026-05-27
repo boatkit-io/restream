@@ -100,7 +100,7 @@ func (p *PartialModArray[V, PV]) ApplyTo(por any) [][]any {
 			}
 		}
 	}
-	return ret
+	return ReduceFieldPaths(ret)
 }
 
 // FilterToFields returns a new partial array containing only changes matching the requested field paths.

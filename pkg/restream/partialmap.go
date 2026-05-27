@@ -130,7 +130,7 @@ func (p *PartialModMap[K, V, PV]) ApplyTo(por any) [][]any {
 			}
 		}
 	}
-	return ret
+	return ReduceFieldPaths(ret)
 }
 
 // FilterToFields returns a new partial map containing only changes matching the requested field paths.

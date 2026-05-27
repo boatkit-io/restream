@@ -104,7 +104,7 @@ func (s *TestAPartial) ApplyTo(por any) [][]any {
 			ret = append(ret, append(append([]any{}, "B"), f...))
 		}
 	}
-	return ret
+	return restream.ReduceFieldPaths(ret)
 }
 
 // FilterToFields returns a new partial containing only changes matching the requested field paths
@@ -283,7 +283,7 @@ func (s *TestBPartial) ApplyTo(por any) [][]any {
 			ret = append(ret, append(append([]any{}, "B"), f...))
 		}
 	}
-	return ret
+	return restream.ReduceFieldPaths(ret)
 }
 
 // FilterToFields returns a new partial containing only changes matching the requested field paths
@@ -450,7 +450,7 @@ func (s *TestCPartial) ApplyTo(por any) [][]any {
 		po.B = *s.B
 		ret = append(ret, []any{"B"})
 	}
-	return ret
+	return restream.ReduceFieldPaths(ret)
 }
 
 // FilterToFields returns a new partial containing only changes matching the requested field paths
@@ -597,7 +597,7 @@ func (s *TestMapDataPartial) ApplyTo(por any) [][]any {
 		po.Number = *s.Number
 		ret = append(ret, []any{"Number"})
 	}
-	return ret
+	return restream.ReduceFieldPaths(ret)
 }
 
 // FilterToFields returns a new partial containing only changes matching the requested field paths
@@ -745,7 +745,7 @@ func (s *TestPrimitiveOptionalStatePartial) ApplyTo(por any) [][]any {
 		po.Optional = *s.Optional
 		ret = append(ret, []any{"Optional"})
 	}
-	return ret
+	return restream.ReduceFieldPaths(ret)
 }
 
 // FilterToFields returns a new partial containing only changes matching the requested field paths
@@ -952,7 +952,7 @@ func (s *TestStatePartial) ApplyTo(por any) [][]any {
 			ret = append(ret, append(append([]any{}, "BaseStructPtr"), f...))
 		}
 	}
-	return ret
+	return restream.ReduceFieldPaths(ret)
 }
 
 // FilterToFields returns a new partial containing only changes matching the requested field paths

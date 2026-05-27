@@ -110,7 +110,7 @@ export class BoardStoreStatePartial {
         const ret: (string | number)[][] = [];
         if (this.board !== undefined) { if (!Array.isArray(por.board)) { por.board = Array.from(por.board ?? []); } const fs = this.board.applyTo(por.board!); for (const f of fs) { ret.push(["board",...f]); }}
         if (this.xTurn !== undefined) { por.xTurn = this.xTurn; ret.push(["xTurn"]); }
-        return ret;
+        return reduceFieldPaths(ret);
     }
 }
 
@@ -200,4 +200,44 @@ export class ServerTimeEvent extends EventStruct {
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
         ReStreamEncoders.serializeValue(this.currentTime, w, ServerTimeEvent._fieldInfo[0].varInfo);
     }
+}
+
+function reduceFieldPaths(fields: (string | number)[][]): (string | number)[][] {
+    if (fields.length < 2) {
+        return fields;
+    }
+
+    const ret: (string | number)[][] = [];
+    for (const field of fields) {
+        let suppressed = false;
+        for (let idx = 0; idx < ret.length;) {
+            const existing = ret[idx];
+            if (fieldPathHasPrefix(field, existing)) {
+                suppressed = true;
+                idx++;
+                continue;
+            }
+            if (fieldPathHasPrefix(existing, field)) {
+                ret.splice(idx, 1);
+                continue;
+            }
+            idx++;
+        }
+        if (!suppressed) {
+            ret.push(field);
+        }
+    }
+    return ret;
+}
+
+function fieldPathHasPrefix(field: (string | number)[], prefix: (string | number)[]): boolean {
+    if (prefix.length > field.length) {
+        return false;
+    }
+    for (let idx = 0; idx < prefix.length; idx++) {
+        if (field[idx] !== prefix[idx]) {
+            return false;
+        }
+    }
+    return true;
 }

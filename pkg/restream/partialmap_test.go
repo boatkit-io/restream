@@ -3,6 +3,8 @@ package restream
 import (
 	"reflect"
 	"testing"
+
+	"github.com/boatkit-io/restream/pkg/binarystreams"
 )
 
 func TestPartialMapApplyToAllocatesNilMapForSet(t *testing.T) {
@@ -73,4 +75,68 @@ func TestPartialModMapApplyToAllocatesNilMapPointerForSet(t *testing.T) {
 	if want := [][]any{{"Water_Depth_auto"}}; !reflect.DeepEqual(fields, want) {
 		t.Fatalf("expected fields %#v, got %#v", want, fields)
 	}
+}
+
+func TestPartialModMapApplyToSuppressesNestedFieldWhenKeyWasSet(t *testing.T) {
+	target := map[string]partialMapTestValue{}
+
+	fields := NewPartialModMap[string, partialMapTestValue, *partialMapTestPartial]().
+		Set("engine", partialMapTestValue{Number: 1}).
+		ApplyPartial("engine", &partialMapTestPartial{Number: Ptr(2)}).
+		ApplyTo(&target)
+
+	if got := target["engine"].Number; got != 2 {
+		t.Fatalf("expected nested partial to apply number 2, got %d", got)
+	}
+	if want := [][]any{{"engine"}}; !reflect.DeepEqual(fields, want) {
+		t.Fatalf("expected fields %#v, got %#v", want, fields)
+	}
+}
+
+func TestPartialModArrayApplyToSuppressesNestedFieldWhenIndexWasSet(t *testing.T) {
+	target := []partialMapTestValue{{Number: 0}}
+
+	fields := NewPartialModArray[partialMapTestValue, *partialMapTestPartial]().
+		Set(0, partialMapTestValue{Number: 1}).
+		ApplyPartial(0, &partialMapTestPartial{Number: Ptr(2)}).
+		ApplyTo(&target)
+
+	if got := target[0].Number; got != 2 {
+		t.Fatalf("expected nested partial to apply number 2, got %d", got)
+	}
+	if want := [][]any{{0}}; !reflect.DeepEqual(fields, want) {
+		t.Fatalf("expected fields %#v, got %#v", want, fields)
+	}
+}
+
+type partialMapTestValue struct {
+	Number int
+}
+
+type partialMapTestPartial struct {
+	Number *int
+}
+
+func (*partialMapTestPartial) Serialize(*binarystreams.Writer, *VarInfoStruct) error {
+	return nil
+}
+
+func (*partialMapTestPartial) Deserialize(*binarystreams.Reader, *VarInfoStruct) error {
+	return nil
+}
+
+func (p *partialMapTestPartial) MergeOntoPartial(por any) {
+	po := por.(*partialMapTestPartial)
+	if p.Number != nil {
+		po.Number = p.Number
+	}
+}
+
+func (p *partialMapTestPartial) ApplyTo(por any) [][]any {
+	po := por.(*partialMapTestValue)
+	if p.Number == nil {
+		return nil
+	}
+	po.Number = *p.Number
+	return [][]any{{"Number"}}
 }

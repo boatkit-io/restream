@@ -44,6 +44,9 @@ func (ft *FileTracking) createTSStructSerializers(si StructInfo, fields []*restr
 	// Calculate main structs and/or deserialization functions for typescript
 	classDef := ft.genTSClass(si, fields, false)
 	ft.tsGenEntries = append(ft.tsGenEntries, fdef{name: si.Name, defs: classDef, typ: fdefTypeOther, deps: lo.Keys(deps)})
+	if tsClassUsesFieldPathReducer(si, false) {
+		ft.tsGenEntries = append(ft.tsGenEntries, fdef{name: "reduceFieldPaths", defs: genTSReduceFieldPaths(), typ: fdefTypeOther})
+	}
 
 	if ft.shouldBuildPartial(si.Name) {
 		sip := si
@@ -51,9 +54,22 @@ func (ft *FileTracking) createTSStructSerializers(si StructInfo, fields []*restr
 
 		partialClassDef := ft.genTSClass(sip, partialFields, true)
 		ft.tsGenEntries = append(ft.tsGenEntries, fdef{name: sip.Name, defs: partialClassDef, typ: fdefTypeOther, deps: lo.Keys(deps)})
+		ft.tsGenEntries = append(ft.tsGenEntries, fdef{name: "reduceFieldPaths", defs: genTSReduceFieldPaths(), typ: fdefTypeOther})
 	}
 
 	return nil
+}
+
+func tsClassUsesFieldPathReducer(si StructInfo, partial bool) bool {
+	if partial {
+		return true
+	}
+	switch si.Name {
+	case "PartialArray", "PartialMap", "PartialModArray", "PartialModMap", "PartialValue":
+		return true
+	default:
+		return false
+	}
 }
 
 // documentTSSamePackageTypeDeps is a helper for collecting all the typescript types that a given type depends on, for helping
@@ -205,7 +221,7 @@ func (ft *FileTracking) genTSClass(si StructInfo, fields []*restream.FieldInfo, 
 				}
 			}
 		}
-		out += "        return ret;\n"
+		out += "        return reduceFieldPaths(ret);\n"
 		out += "    }" + "\n"
 	}
 
@@ -1183,6 +1199,49 @@ func genTSGenericClassSignature(si StructInfo) string {
 	return out
 }
 
+func genTSReduceFieldPaths() string {
+	return `function reduceFieldPaths(fields: (string | number)[][]): (string | number)[][] {
+    if (fields.length < 2) {
+        return fields;
+    }
+
+    const ret: (string | number)[][] = [];
+    for (const field of fields) {
+        let suppressed = false;
+        for (let idx = 0; idx < ret.length;) {
+            const existing = ret[idx];
+            if (fieldPathHasPrefix(field, existing)) {
+                suppressed = true;
+                idx++;
+                continue;
+            }
+            if (fieldPathHasPrefix(existing, field)) {
+                ret.splice(idx, 1);
+                continue;
+            }
+            idx++;
+        }
+        if (!suppressed) {
+            ret.push(field);
+        }
+    }
+    return ret;
+}
+
+function fieldPathHasPrefix(field: (string | number)[], prefix: (string | number)[]): boolean {
+    if (prefix.length > field.length) {
+        return false;
+    }
+    for (let idx = 0; idx < prefix.length; idx++) {
+        if (field[idx] !== prefix[idx]) {
+            return false;
+        }
+    }
+    return true;
+}
+`
+}
+
 // genTSPartialAugmentations is a reusable helper to glue in any hardcoded augmentations for a given struct
 func genTSPartialAugmentations(si StructInfo) string {
 	var out string
@@ -1208,6 +1267,7 @@ func genTSPartialAugmentations(si StructInfo) string {
                 ret[1] = fs;
             }
         }
+        ret[1] = reduceFieldPaths(ret[1]);
         return ret;
     }
 `
@@ -1250,7 +1310,7 @@ func genTSPartialAugmentations(si StructInfo) string {
 				}
 			}
 		}
-		return ret;
+		return reduceFieldPaths(ret);
 	}
 `
 	case "PartialMap":
@@ -1276,7 +1336,7 @@ func genTSPartialAugmentations(si StructInfo) string {
 				ret.push([k as string|number]);
 			}
 		}
-		return ret;
+		return reduceFieldPaths(ret);
 	}
 `
 	case "PartialModArray":
@@ -1310,7 +1370,7 @@ func genTSPartialAugmentations(si StructInfo) string {
                 }
             }
         }
-        return ret;
+        return reduceFieldPaths(ret);
     }
 `
 	case "PartialArray":
@@ -1327,7 +1387,7 @@ func genTSPartialAugmentations(si StructInfo) string {
                 ret.push([k as string|number]);
             }
         }
-        return ret;
+        return reduceFieldPaths(ret);
     }
 `
 	}

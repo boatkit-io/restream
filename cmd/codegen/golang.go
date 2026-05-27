@@ -102,7 +102,7 @@ func (ft *FileTracking) createGoStructSerializers(si StructInfo, fields []*restr
 			}
 			outPartial += "    }\n"
 		}
-		outPartial += "    return ret\n"
+		outPartial += "    return restream.ReduceFieldPaths(ret)\n"
 		outPartial += "}\n"
 
 		outPartial += "\n"

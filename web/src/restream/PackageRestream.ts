@@ -79,7 +79,7 @@ export class PartialArray<V> {
                 ret.push([k as string|number]);
             }
         }
-        return ret;
+        return reduceFieldPaths(ret);
     }
 }
 
@@ -151,7 +151,7 @@ export class PartialMap<K extends string|number, V> {
 				ret.push([k as string|number]);
 			}
 		}
-		return ret;
+		return reduceFieldPaths(ret);
 	}
 }
 
@@ -231,7 +231,7 @@ export class PartialModArray<V, P extends AppliablePartial<V>|AppliableOnTopPart
                 }
             }
         }
-        return ret;
+        return reduceFieldPaths(ret);
     }
 }
 
@@ -327,7 +327,7 @@ export class PartialModMap<K extends string|number, V, P extends AppliablePartia
 				}
 			}
 		}
-		return ret;
+		return reduceFieldPaths(ret);
 	}
 }
 
@@ -391,6 +391,47 @@ export class PartialValue<V, P extends AppliablePartial<V>|AppliableOnTopPartial
                 ret[1] = fs;
             }
         }
+        ret[1] = reduceFieldPaths(ret[1]);
         return ret;
     }
+}
+
+function reduceFieldPaths(fields: (string | number)[][]): (string | number)[][] {
+    if (fields.length < 2) {
+        return fields;
+    }
+
+    const ret: (string | number)[][] = [];
+    for (const field of fields) {
+        let suppressed = false;
+        for (let idx = 0; idx < ret.length;) {
+            const existing = ret[idx];
+            if (fieldPathHasPrefix(field, existing)) {
+                suppressed = true;
+                idx++;
+                continue;
+            }
+            if (fieldPathHasPrefix(existing, field)) {
+                ret.splice(idx, 1);
+                continue;
+            }
+            idx++;
+        }
+        if (!suppressed) {
+            ret.push(field);
+        }
+    }
+    return ret;
+}
+
+function fieldPathHasPrefix(field: (string | number)[], prefix: (string | number)[]): boolean {
+    if (prefix.length > field.length) {
+        return false;
+    }
+    for (let idx = 0; idx < prefix.length; idx++) {
+        if (field[idx] !== prefix[idx]) {
+            return false;
+        }
+    }
+    return true;
 }

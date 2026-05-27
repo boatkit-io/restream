@@ -52,6 +52,49 @@ func ChildFieldsForField(fields [][]any, fieldName string) [][]any {
 	return ret
 }
 
+// ReduceFieldPaths removes redundant child paths when an ancestor path is already present.
+func ReduceFieldPaths(fields [][]any) [][]any {
+	if len(fields) < 2 {
+		return fields
+	}
+
+	ret := make([][]any, 0, len(fields))
+	for _, field := range fields {
+		suppressed := false
+		writeIdx := 0
+		for _, existing := range ret {
+			switch {
+			case fieldPathHasPrefix(field, existing):
+				suppressed = true
+				ret[writeIdx] = existing
+				writeIdx++
+			case fieldPathHasPrefix(existing, field):
+				continue
+			default:
+				ret[writeIdx] = existing
+				writeIdx++
+			}
+		}
+		ret = ret[:writeIdx]
+		if !suppressed {
+			ret = append(ret, field)
+		}
+	}
+	return ret
+}
+
+func fieldPathHasPrefix(field []any, prefix []any) bool {
+	if len(prefix) > len(field) {
+		return false
+	}
+	for idx := range prefix {
+		if !reflect.DeepEqual(field[idx], prefix[idx]) {
+			return false
+		}
+	}
+	return true
+}
+
 // SubscriptionKeyFromFieldPath converts a server-side Go partial field path into the matching client ReSub key.
 func SubscriptionKeyFromFieldPath(field []any) string {
 	parts := make([]string, 0, len(field))

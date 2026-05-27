@@ -98,7 +98,7 @@ func (s *BoardStoreStatePartial) ApplyTo(por any) [][]any {
 		po.XTurn = *s.XTurn
 		ret = append(ret, []any{"XTurn"})
 	}
-	return ret
+	return restream.ReduceFieldPaths(ret)
 }
 
 // FilterToFields returns a new partial containing only changes matching the requested field paths

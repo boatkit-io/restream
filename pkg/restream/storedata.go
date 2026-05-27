@@ -161,6 +161,7 @@ func (d *StoreData[S, SP, PS]) ApplyPartial(partial PS) {
 		defer d.stateMutex.Unlock()
 		fields = partial.ApplyTo(d.state)
 	}()
+	fields = ReduceFieldPaths(fields)
 
 	d.partialCallbacks.Fire(d.name, fields, partial)
 

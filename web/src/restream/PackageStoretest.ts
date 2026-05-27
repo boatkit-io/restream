@@ -110,7 +110,7 @@ export class TestCPartial {
         const ret: (string | number)[][] = [];
         if (this.a !== undefined) { por.a = this.a; ret.push(["a"]); }
         if (this.b !== undefined) { por.b = this.b; ret.push(["b"]); }
-        return ret;
+        return reduceFieldPaths(ret);
     }
 }
 
@@ -198,7 +198,7 @@ export class TestMapDataPartial {
     applyTo(por: TestMapData): (string | number)[][] {
         const ret: (string | number)[][] = [];
         if (this.number !== undefined) { por.number = this.number; ret.push(["number"]); }
-        return ret;
+        return reduceFieldPaths(ret);
     }
 }
 
@@ -301,8 +301,48 @@ export class TestPrimitiveOptionalStatePartial {
         const ret: (string | number)[][] = [];
         if (this.primitive !== undefined) { por.primitive = this.primitive; ret.push(["primitive"]); }
         if (this.optional !== undefined) { por.optional = this.optional === null ? undefined : this.optional; ret.push(["optional"]); }
-        return ret;
+        return reduceFieldPaths(ret);
     }
+}
+
+function reduceFieldPaths(fields: (string | number)[][]): (string | number)[][] {
+    if (fields.length < 2) {
+        return fields;
+    }
+
+    const ret: (string | number)[][] = [];
+    for (const field of fields) {
+        let suppressed = false;
+        for (let idx = 0; idx < ret.length;) {
+            const existing = ret[idx];
+            if (fieldPathHasPrefix(field, existing)) {
+                suppressed = true;
+                idx++;
+                continue;
+            }
+            if (fieldPathHasPrefix(existing, field)) {
+                ret.splice(idx, 1);
+                continue;
+            }
+            idx++;
+        }
+        if (!suppressed) {
+            ret.push(field);
+        }
+    }
+    return ret;
+}
+
+function fieldPathHasPrefix(field: (string | number)[], prefix: (string | number)[]): boolean {
+    if (prefix.length > field.length) {
+        return false;
+    }
+    for (let idx = 0; idx < prefix.length; idx++) {
+        if (field[idx] !== prefix[idx]) {
+            return false;
+        }
+    }
+    return true;
 }
 
 export class TestState {
@@ -434,7 +474,7 @@ export class TestStatePartial {
         if (this.baseField !== undefined) { por.baseField = this.baseField; ret.push(["baseField"]); }
         if (this.baseStruct !== undefined) { let fs; [por.baseStruct,fs] = this.baseStruct.applyOnTop(por.baseStruct); for (const f of fs) { ret.push(["baseStruct",...f]); }}
         if (this.baseStructPtr !== undefined) { let fs; [por.baseStructPtr,fs] = this.baseStructPtr.applyOnTop(por.baseStructPtr); for (const f of fs) { ret.push(["baseStructPtr",...f]); }}
-        return ret;
+        return reduceFieldPaths(ret);
     }
 }
 
@@ -537,7 +577,7 @@ export class TestBPartial {
         const ret: (string | number)[][] = [];
         if (this.a !== undefined) { let fs; [por.a,fs] = this.a.applyOnTop(por.a); for (const f of fs) { ret.push(["a",...f]); }}
         if (this.b !== undefined) { let fs; [por.b,fs] = this.b.applyOnTop(por.b); for (const f of fs) { ret.push(["b",...f]); }}
-        return ret;
+        return reduceFieldPaths(ret);
     }
 }
 
@@ -640,6 +680,6 @@ export class TestAPartial {
         const ret: (string | number)[][] = [];
         if (this.a !== undefined) { let fs; [por.a,fs] = this.a.applyOnTop(por.a); for (const f of fs) { ret.push(["a",...f]); }}
         if (this.b !== undefined) { let fs; [por.b,fs] = this.b.applyOnTop(por.b); for (const f of fs) { ret.push(["b",...f]); }}
-        return ret;
+        return reduceFieldPaths(ret);
     }
 }
