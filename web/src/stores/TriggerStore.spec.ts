@@ -39,6 +39,15 @@ describe('TriggerStore keyed subscriptions', () => {
         (globalThis as { __DEV__?: boolean }).__DEV__ = true;
     });
 
+    test('enumerates registered stores and exposes their names', () => {
+        const first = new TriggerStoreSpecStore(uniqueStoreName());
+        const second = new TriggerStoreSpecStore(uniqueStoreName());
+
+        expect(TriggerStore.getAllStores()).toEqual(expect.arrayContaining([first, second]));
+        expect(first.getName()).toBe(first.testStoreName);
+        expect(second.getName()).toBe(second.testStoreName);
+    });
+
     test('refcounts duplicate subscriptions for the same key', () => {
         const store = new TriggerStoreSpecStore(uniqueStoreName());
         const tokenOne = store.subscribe(vi.fn(), 'values%&a');

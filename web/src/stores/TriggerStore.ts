@@ -39,6 +39,10 @@ export default abstract class TriggerStore<S extends object> extends StoreBase {
         return ret;
     }
 
+    static getAllStores(): TriggerStore<object>[] {
+        return Object.values(this._storeMap);
+    }
+
     constructor(private _storeName: string, private _stateType: { fromValues: () => S, deserialized: (r: BinaryReader) => S },
         private _partialType: { deserialized: (r: BinaryReader) => PartialFor<S> }) {
         super();
@@ -55,6 +59,10 @@ export default abstract class TriggerStore<S extends object> extends StoreBase {
 
     register(): void {
         // NOOP
+    }
+
+    getName(): string {
+        return this._storeName;
     }
 
     // Track when the app first starts caring and last stops caring about this store, for the streaming service
