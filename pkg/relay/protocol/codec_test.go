@@ -86,6 +86,15 @@ func TestPacketRoundTrips(t *testing.T) {
 			kind: KindRPCResponse,
 		},
 		{
+			name: "store subscription",
+			in: &StoreSubscriptionPacket{
+				StoreName: "TimeSeriesHistory",
+				Key:       "samples%&Water_Depth_Auto",
+				Action:    StoreSubscribe,
+			},
+			kind: KindStoreSubscription,
+		},
+		{
 			name: "named custom",
 			in:   &CustomPacket{Name: "com.example.metrics", Payload: []byte{14, 15, 16}},
 			kind: KindCustom,
@@ -167,6 +176,29 @@ func TestCustomPacketRequiresName(t *testing.T) {
 	encodedUnnamedCustom := []byte{byte(KindCustom), 0, 0, 0, 0, 0, 0}
 	if _, err := DecodePacket(encodedUnnamedCustom); err == nil {
 		t.Fatal("DecodePacket accepted an unnamed custom packet")
+	}
+}
+
+func TestStoreSubscriptionRejectsInvalidAction(t *testing.T) {
+	if _, err := EncodePacket(&StoreSubscriptionPacket{
+		StoreName: "TestStore",
+		Key:       "values%&a",
+		Action:    StoreSubscriptionAction(99),
+	}); err == nil {
+		t.Fatal("EncodePacket accepted an invalid store subscription action")
+	}
+
+	encoded, err := EncodePacket(&StoreSubscriptionPacket{
+		StoreName: "TestStore",
+		Key:       "values%&a",
+		Action:    StoreSubscribe,
+	})
+	if err != nil {
+		t.Fatalf("EncodePacket valid store subscription failed: %v", err)
+	}
+	encoded[len(encoded)-1] = 99
+	if _, err := DecodePacket(encoded); err == nil {
+		t.Fatal("DecodePacket accepted an invalid store subscription action")
 	}
 }
 

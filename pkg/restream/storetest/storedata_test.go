@@ -262,6 +262,43 @@ func TestRelayStoreKeyedInitialPartialDeletesMissingMapKey(t *testing.T) {
 	assert.Equal(t, uint(0), state.BaseStruct.Number)
 }
 
+func TestRelayStoreForwardsKeyedSubscriptionLifecycle(t *testing.T) {
+	relayStore := restream.NewRelayStore[TestState, *TestState, *TestStatePartial]("relay-test", &TestState{})
+
+	var calls []string
+	relayStore.SetKeySubscriptionForwarder(func(storeName string, key string, subscribe bool) {
+		action := "unsubscribe"
+		if subscribe {
+			action = "subscribe"
+		}
+		calls = append(calls, action+":"+storeName+":"+key)
+	})
+
+	relayStore.SubscriptionStartedForKey("values%&a")
+	relayStore.SubscriptionStartedForKey("values%&a")
+	relayStore.SubscriptionStartedForKey("values%&b")
+	assert.Equal(t, []string{"values%&a", "values%&b"}, relayStore.ActiveSubscriptionKeys())
+	assert.Equal(t, []string{
+		"subscribe:relay-test:values%&a",
+		"subscribe:relay-test:values%&b",
+	}, calls)
+
+	relayStore.SubscriptionEndedForKey("values%&a")
+	assert.Equal(t, []string{"values%&a", "values%&b"}, relayStore.ActiveSubscriptionKeys())
+	assert.Equal(t, 2, len(calls))
+
+	relayStore.SubscriptionEndedForKey("values%&a")
+	relayStore.SubscriptionEndedForKey("values%&missing")
+	relayStore.SubscriptionEndedForKey("values%&b")
+	assert.Empty(t, relayStore.ActiveSubscriptionKeys())
+	assert.Equal(t, []string{
+		"subscribe:relay-test:values%&a",
+		"subscribe:relay-test:values%&b",
+		"unsubscribe:relay-test:values%&a",
+		"unsubscribe:relay-test:values%&b",
+	}, calls)
+}
+
 func TestRelayStoreMergedPartialMatchesSequentialPartialReplay(t *testing.T) {
 	sequentialState := relayStoreMergeBaseState()
 	sequentialStore := restream.NewRelayStore[TestState, *TestState, *TestStatePartial]("relay-test", &sequentialState)

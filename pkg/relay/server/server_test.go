@@ -177,6 +177,199 @@ func TestConnectionSendRPCWritesCallPacket(t *testing.T) {
 	}
 }
 
+func TestConnectionSendStoreSubscriptionWritesPacket(t *testing.T) {
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	conn := NewConnection(serverConn)
+	if err := conn.SendStoreSubscription("TestStore", "values%&a", true); err != nil {
+		t.Fatalf("SendStoreSubscription failed: %v", err)
+	}
+
+	messageType, message, err := clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read store subscription failed: %v", err)
+	}
+	if messageType != gws.BinaryMessage {
+		t.Fatalf("message type = %d, want BinaryMessage", messageType)
+	}
+	packetRaw, err := protocol.DecodePacket(message)
+	if err != nil {
+		t.Fatalf("Decode store subscription failed: %v", err)
+	}
+	packet, ok := packetRaw.(*protocol.StoreSubscriptionPacket)
+	if !ok {
+		t.Fatalf("store subscription packet type = %T, want *StoreSubscriptionPacket", packetRaw)
+	}
+	if packet.StoreName != "TestStore" || packet.Key != "values%&a" || packet.Action != protocol.StoreSubscribe {
+		t.Fatalf("store subscription packet = %+v, want TestStore values%%&a subscribe", packet)
+	}
+}
+
+func TestServerAcceptConnReplaysActiveStoreSubscriptions(t *testing.T) {
+	manager := NewDeviceManager(DeviceManagerConfig{
+		Stores: func(string) ([]restream.Store, error) {
+			return []restream.Store{
+				restream.NewRelayStore[testState, *testState, *testPartial]("TestStore", &testState{}),
+			}, nil
+		},
+	})
+	device, err := manager.GetDevice("device-1")
+	if err != nil {
+		t.Fatalf("GetDevice failed: %v", err)
+	}
+	if err := device.StoreRegistry.ListeningToStoreKey("TestStore", "values%&a"); err != nil {
+		t.Fatalf("ListeningToStoreKey failed: %v", err)
+	}
+
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	relayServer := New(Config{
+		DeviceManager: manager,
+		AuthenticateDevice: func(context.Context, *protocol.DeviceHello, *Connection) (restream.AccessLevel, error) {
+			return restream.AccessLevel(1), nil
+		},
+	})
+
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- relayServer.AcceptConn(context.Background(), serverConn)
+	}()
+
+	helloBytes, err := protocol.EncodeDeviceHello(&protocol.DeviceHello{
+		ProtocolVersion: protocol.CurrentVersion,
+		DeviceID:        "device-1",
+	})
+	if err != nil {
+		t.Fatalf("EncodeDeviceHello failed: %v", err)
+	}
+	if err := clientConn.WriteMessage(gws.BinaryMessage, helloBytes); err != nil {
+		t.Fatalf("Write hello failed: %v", err)
+	}
+
+	_, connectedBytes, err := clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read connected failed: %v", err)
+	}
+	if _, ok := mustDecodePacket(t, connectedBytes).(*protocol.ConnectedPacket); !ok {
+		t.Fatalf("first packet type = %T, want *ConnectedPacket", mustDecodePacket(t, connectedBytes))
+	}
+
+	_, subscriptionBytes, err := clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read replayed subscription failed: %v", err)
+	}
+	subscriptionPacket, ok := mustDecodePacket(t, subscriptionBytes).(*protocol.StoreSubscriptionPacket)
+	if !ok {
+		t.Fatalf("replayed packet type = %T, want *StoreSubscriptionPacket", mustDecodePacket(t, subscriptionBytes))
+	}
+	if subscriptionPacket.StoreName != "TestStore" ||
+		subscriptionPacket.Key != "values%&a" ||
+		subscriptionPacket.Action != protocol.StoreSubscribe {
+		t.Fatalf("replayed subscription = %+v, want TestStore values%%&a subscribe", subscriptionPacket)
+	}
+
+	clientConn.Close() //nolint:errcheck // Why: End server read loop.
+	select {
+	case err := <-serverDone:
+		if err == nil {
+			t.Fatal("AcceptConn returned nil, want read close error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AcceptConn did not return after client close")
+	}
+}
+
+func TestCloudStoreSubscriptionForwardsToConnectedDevice(t *testing.T) {
+	manager := NewDeviceManager(DeviceManagerConfig{
+		Stores: func(string) ([]restream.Store, error) {
+			return []restream.Store{
+				restream.NewRelayStore[testState, *testState, *testPartial]("TestStore", &testState{}),
+			}, nil
+		},
+	})
+	device, err := manager.GetDevice("device-1")
+	if err != nil {
+		t.Fatalf("GetDevice failed: %v", err)
+	}
+
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	device.DeviceConnected(NewConnection(serverConn))
+	if err := device.StoreRegistry.ListeningToStoreKey("TestStore", "values%&a"); err != nil {
+		t.Fatalf("ListeningToStoreKey failed: %v", err)
+	}
+
+	_, subscriptionBytes, err := clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read forwarded subscription failed: %v", err)
+	}
+	subscriptionPacket, ok := mustDecodePacket(t, subscriptionBytes).(*protocol.StoreSubscriptionPacket)
+	if !ok {
+		t.Fatalf("forwarded packet type = %T, want *StoreSubscriptionPacket", mustDecodePacket(t, subscriptionBytes))
+	}
+	if subscriptionPacket.StoreName != "TestStore" ||
+		subscriptionPacket.Key != "values%&a" ||
+		subscriptionPacket.Action != protocol.StoreSubscribe {
+		t.Fatalf("forwarded subscription = %+v, want TestStore values%%&a subscribe", subscriptionPacket)
+	}
+
+	if err := device.StoreRegistry.StopListeningToStoreKey("TestStore", "values%&a"); err != nil {
+		t.Fatalf("StopListeningToStoreKey failed: %v", err)
+	}
+	_, subscriptionBytes, err = clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read forwarded unsubscribe failed: %v", err)
+	}
+	subscriptionPacket, ok = mustDecodePacket(t, subscriptionBytes).(*protocol.StoreSubscriptionPacket)
+	if !ok {
+		t.Fatalf("forwarded packet type = %T, want *StoreSubscriptionPacket", mustDecodePacket(t, subscriptionBytes))
+	}
+	if subscriptionPacket.StoreName != "TestStore" ||
+		subscriptionPacket.Key != "values%&a" ||
+		subscriptionPacket.Action != protocol.StoreUnsubscribe {
+		t.Fatalf("forwarded subscription = %+v, want TestStore values%%&a unsubscribe", subscriptionPacket)
+	}
+}
+
+func TestCloudWholeStoreSubscriptionForwardsToConnectedDevice(t *testing.T) {
+	manager := NewDeviceManager(DeviceManagerConfig{
+		Stores: func(string) ([]restream.Store, error) {
+			return []restream.Store{
+				restream.NewRelayStore[testState, *testState, *testPartial]("TestStore", &testState{}),
+			}, nil
+		},
+	})
+	device, err := manager.GetDevice("device-1")
+	if err != nil {
+		t.Fatalf("GetDevice failed: %v", err)
+	}
+
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	device.DeviceConnected(NewConnection(serverConn))
+	if err := device.StoreRegistry.ListeningToStore("TestStore"); err != nil {
+		t.Fatalf("ListeningToStore failed: %v", err)
+	}
+
+	_, subscriptionBytes, err := clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read forwarded subscription failed: %v", err)
+	}
+	subscriptionPacket, ok := mustDecodePacket(t, subscriptionBytes).(*protocol.StoreSubscriptionPacket)
+	if !ok {
+		t.Fatalf("forwarded packet type = %T, want *StoreSubscriptionPacket", mustDecodePacket(t, subscriptionBytes))
+	}
+	if subscriptionPacket.StoreName != "TestStore" ||
+		subscriptionPacket.Key != "" ||
+		subscriptionPacket.Action != protocol.StoreSubscribe {
+		t.Fatalf("forwarded subscription = %+v, want TestStore empty-key subscribe", subscriptionPacket)
+	}
+}
+
 type testDeviceTracker struct {
 	connected    bool
 	disconnected bool
@@ -185,6 +378,16 @@ type testDeviceTracker struct {
 	fullData     []byte
 	eventName    string
 	eventData    []byte
+}
+
+func mustDecodePacket(t *testing.T, b []byte) protocol.Packet {
+	t.Helper()
+
+	packet, err := protocol.DecodePacket(b)
+	if err != nil {
+		t.Fatalf("DecodePacket failed: %v", err)
+	}
+	return packet
 }
 
 func newTestWebsocketPair(t *testing.T) (*gws.Conn, *gws.Conn, func()) {

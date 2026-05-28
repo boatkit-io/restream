@@ -6,7 +6,7 @@
 package protocol
 
 // CurrentVersion is the current relay protocol version.
-const CurrentVersion uint32 = 5
+const CurrentVersion uint32 = 6
 
 // PacketKind identifies the type of a relay packet.
 type PacketKind byte
@@ -24,6 +24,8 @@ const (
 	KindRPCCall
 	// KindRPCResponse carries an RPC response from the device server back to the relay server.
 	KindRPCResponse
+	// KindStoreSubscription carries a store keyed-subscription lifecycle change from the relay server to the device server.
+	KindStoreSubscription
 )
 
 const (
@@ -117,6 +119,28 @@ func (*RPCResponsePacket) Kind() PacketKind {
 	return KindRPCResponse
 }
 
+// StoreSubscriptionAction identifies the lifecycle action for a relayed store subscription.
+type StoreSubscriptionAction byte
+
+const (
+	// StoreSubscribe starts a keyed subscription on the device side.
+	StoreSubscribe StoreSubscriptionAction = iota
+	// StoreUnsubscribe stops a keyed subscription on the device side.
+	StoreUnsubscribe
+)
+
+// StoreSubscriptionPacket carries a keyed store subscription lifecycle change from the relay server to the device.
+type StoreSubscriptionPacket struct {
+	StoreName string
+	Key       string
+	Action    StoreSubscriptionAction
+}
+
+// Kind implements Packet.
+func (*StoreSubscriptionPacket) Kind() PacketKind {
+	return KindStoreSubscription
+}
+
 // CustomPacket is the preferred extension point for application-defined packets.
 //
 // Name should be namespaced by convention, for example "com.example.metrics".
@@ -144,7 +168,7 @@ func (p *RawPacket) Kind() PacketKind {
 
 // IsStandardKind reports whether kind is reserved by this protocol package.
 func IsStandardKind(kind PacketKind) bool {
-	return kind >= KindConnected && kind <= KindRPCResponse
+	return kind >= KindConnected && kind <= KindStoreSubscription
 }
 
 // IsApplicationKind reports whether kind is in the fixed application extension range.

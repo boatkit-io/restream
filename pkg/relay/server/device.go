@@ -16,6 +16,8 @@ type Device struct {
 
 	config DeviceManagerConfig
 
+	relaySubscriptionStores []relaySubscriptionStore
+
 	connMutex sync.RWMutex
 	conn      *Connection
 
@@ -27,6 +29,12 @@ type Device struct {
 type pendingRPC struct {
 	conn   *Connection
 	respCh chan []byte
+}
+
+type relaySubscriptionStore interface {
+	restream.Store
+	SetKeySubscriptionForwarder(restream.RelayStoreKeySubscriptionForwarder)
+	ActiveSubscriptionKeys() []string
 }
 
 // NewDevice creates a Device around an existing store registry.
@@ -77,6 +85,41 @@ func (d *Device) DeviceDisconnected(conn *Connection) {
 	}
 
 	d.closePendingRPCsForConn(conn)
+}
+
+func (d *Device) configureRelaySubscriptionForwarding(stores []restream.Store) {
+	for _, store := range stores {
+		relayStore, ok := store.(relaySubscriptionStore)
+		if !ok {
+			continue
+		}
+		relayStore.SetKeySubscriptionForwarder(d.forwardStoreSubscription)
+		d.relaySubscriptionStores = append(d.relaySubscriptionStores, relayStore)
+	}
+}
+
+func (d *Device) forwardStoreSubscription(storeName string, key string, subscribe bool) {
+	d.connMutex.RLock()
+	conn := d.conn
+	d.connMutex.RUnlock()
+	if conn == nil {
+		return
+	}
+
+	if err := conn.SendStoreSubscription(storeName, key, subscribe); err != nil {
+		conn.Close() //nolint:errcheck // Why: Closing forces reconnect and subscription replay.
+	}
+}
+
+func (d *Device) sendActiveStoreSubscriptions(conn *Connection) error {
+	for _, store := range d.relaySubscriptionStores {
+		for _, key := range store.ActiveSubscriptionKeys() {
+			if err := conn.SendStoreSubscription(store.GetName(), key, true); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // HandleFullState handles a full store state packet from the connected device.

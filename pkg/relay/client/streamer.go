@@ -44,6 +44,14 @@ type Streamer struct {
 
 	partialSubID subscribableevent.SubscriptionId
 	eventSubID   subscribableevent.SubscriptionId
+
+	relaySubscriptionMutex sync.Mutex
+	relaySubscriptions     map[relaySubscriptionKey]struct{}
+}
+
+type relaySubscriptionKey struct {
+	storeName string
+	key       string
 }
 
 // NewStreamer creates a device-side relay streamer.
@@ -62,8 +70,9 @@ func NewStreamer(
 
 		opts: opts,
 
-		gatheredPartials: map[string]restream.Partial{},
-		gatherStart:      map[string]time.Time{},
+		gatheredPartials:   map[string]restream.Partial{},
+		gatherStart:        map[string]time.Time{},
+		relaySubscriptions: map[relaySubscriptionKey]struct{}{},
 	}
 
 	if sr != nil {
@@ -158,6 +167,8 @@ func (s *Streamer) SendEvent(eventName string, eventBytes []byte) error {
 }
 
 func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials Credentials) error {
+	defer s.clearRelaySubscriptions()
+
 	closeOnContextDone := make(chan struct{})
 	defer close(closeOnContextDone)
 	go func() {
@@ -208,6 +219,10 @@ func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials C
 			}
 		case *protocol.RPCCallPacket:
 			if err := s.handleRPCCall(packet); err != nil {
+				return err
+			}
+		case *protocol.StoreSubscriptionPacket:
+			if err := s.handleStoreSubscription(packet); err != nil {
 				return err
 			}
 		case *protocol.CustomPacket:
@@ -390,6 +405,58 @@ func (s *Streamer) handleRPCCall(packet *protocol.RPCCallPacket) error {
 	return s.sendRPCResponse(packet.RPCID, resp)
 }
 
+func (s *Streamer) handleStoreSubscription(packet *protocol.StoreSubscriptionPacket) error {
+	if s.sr == nil || !s.opts.StorePolicy.Allows(packet.StoreName) {
+		return nil
+	}
+
+	switch packet.Action {
+	case protocol.StoreSubscribe:
+		return s.startRelayedStoreSubscription(packet.StoreName, packet.Key)
+	case protocol.StoreUnsubscribe:
+		return s.stopRelayedStoreSubscription(packet.StoreName, packet.Key)
+	default:
+		return fmt.Errorf("invalid store subscription action %d", packet.Action)
+	}
+}
+
+func (s *Streamer) startRelayedStoreSubscription(storeName string, key string) error {
+	subKey := relaySubscriptionKey{storeName: storeName, key: key}
+
+	s.relaySubscriptionMutex.Lock()
+	if s.relaySubscriptions == nil {
+		s.relaySubscriptions = map[relaySubscriptionKey]struct{}{}
+	}
+	if _, exists := s.relaySubscriptions[subKey]; exists {
+		s.relaySubscriptionMutex.Unlock()
+		return nil
+	}
+	s.relaySubscriptions[subKey] = struct{}{}
+	s.relaySubscriptionMutex.Unlock()
+
+	if err := s.sr.ListeningToStoreKey(storeName, key); err != nil {
+		s.relaySubscriptionMutex.Lock()
+		delete(s.relaySubscriptions, subKey)
+		s.relaySubscriptionMutex.Unlock()
+		return err
+	}
+	return nil
+}
+
+func (s *Streamer) stopRelayedStoreSubscription(storeName string, key string) error {
+	subKey := relaySubscriptionKey{storeName: storeName, key: key}
+
+	s.relaySubscriptionMutex.Lock()
+	if _, exists := s.relaySubscriptions[subKey]; !exists {
+		s.relaySubscriptionMutex.Unlock()
+		return nil
+	}
+	delete(s.relaySubscriptions, subKey)
+	s.relaySubscriptionMutex.Unlock()
+
+	return s.sr.StopListeningToStoreKey(storeName, key)
+}
+
 func (s *Streamer) isConnected() bool {
 	s.connMutex.RLock()
 	defer s.connMutex.RUnlock()
@@ -460,6 +527,24 @@ func (s *Streamer) clearGatheredPartials() {
 	s.gatherStart = map[string]time.Time{}
 	s.gatheredPartials = map[string]restream.Partial{}
 	s.gatherMutex.Unlock()
+}
+
+func (s *Streamer) clearRelaySubscriptions() {
+	if s.sr == nil {
+		return
+	}
+
+	s.relaySubscriptionMutex.Lock()
+	keys := make([]relaySubscriptionKey, 0, len(s.relaySubscriptions))
+	for key := range s.relaySubscriptions {
+		keys = append(keys, key)
+	}
+	s.relaySubscriptions = map[relaySubscriptionKey]struct{}{}
+	s.relaySubscriptionMutex.Unlock()
+
+	for _, key := range keys {
+		s.sr.StopListeningToStoreKey(key.storeName, key.key) //nolint:errcheck // Why: Cleanup is best effort on relay disconnect.
+	}
 }
 
 func (s *Streamer) closeCurrentConnOnSendError(err error) {

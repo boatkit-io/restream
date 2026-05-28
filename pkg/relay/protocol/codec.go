@@ -110,6 +110,10 @@ func EncodePacket(packet Packet) ([]byte, error) {
 		if err := encodeRPCResponsePacket(w, p); err != nil {
 			return nil, err
 		}
+	case *StoreSubscriptionPacket:
+		if err := encodeStoreSubscriptionPacket(w, p); err != nil {
+			return nil, err
+		}
 	case *CustomPacket:
 		if err := encodeCustomPacket(w, p); err != nil {
 			return nil, err
@@ -172,6 +176,12 @@ func DecodePacket(data []byte) (Packet, error) {
 			return nil, err
 		}
 		return packet, ensureEOF(r, "rpc response packet")
+	case KindStoreSubscription:
+		packet, err := decodeStoreSubscriptionPacket(r)
+		if err != nil {
+			return nil, err
+		}
+		return packet, ensureEOF(r, "store subscription packet")
 	case KindCustom:
 		packet, err := decodeCustomPacket(r)
 		if err != nil {
@@ -274,6 +284,47 @@ func decodeRPCResponsePacket(r *binarystreams.Reader) (*RPCResponsePacket, error
 		return nil, err
 	}
 	return &RPCResponsePacket{RPCID: rpcID, Response: response}, nil
+}
+
+func encodeStoreSubscriptionPacket(w *binarystreams.Writer, packet *StoreSubscriptionPacket) error {
+	if err := writeString(w, packet.StoreName); err != nil {
+		return err
+	}
+	if err := writeString(w, packet.Key); err != nil {
+		return err
+	}
+	switch packet.Action {
+	case StoreSubscribe, StoreUnsubscribe:
+	default:
+		return fmt.Errorf("invalid store subscription action %d", packet.Action)
+	}
+	return w.WriteByte(byte(packet.Action))
+}
+
+func decodeStoreSubscriptionPacket(r *binarystreams.Reader) (*StoreSubscriptionPacket, error) {
+	storeName, err := readString(r)
+	if err != nil {
+		return nil, err
+	}
+	key, err := readString(r)
+	if err != nil {
+		return nil, err
+	}
+	actionByte, err := r.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+	action := StoreSubscriptionAction(actionByte)
+	switch action {
+	case StoreSubscribe, StoreUnsubscribe:
+	default:
+		return nil, fmt.Errorf("invalid store subscription action %d", action)
+	}
+	return &StoreSubscriptionPacket{
+		StoreName: storeName,
+		Key:       key,
+		Action:    action,
+	}, nil
 }
 
 func encodeCustomPacket(w *binarystreams.Writer, packet *CustomPacket) error {

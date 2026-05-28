@@ -71,9 +71,15 @@ func (s *Server) AcceptConn(ctx context.Context, conn *gws.Conn) error {
 	if err != nil {
 		return err
 	}
-	defer device.DeviceDisconnected(c)
 
 	if err := s.sendConnected(c); err != nil {
+		return err
+	}
+
+	device.DeviceConnected(c)
+	defer device.DeviceDisconnected(c)
+
+	if err := device.sendActiveStoreSubscriptions(c); err != nil {
 		return err
 	}
 
@@ -112,7 +118,6 @@ func (s *Server) acceptHello(ctx context.Context, c *Connection) (*Device, error
 		return nil, fmt.Errorf("relay server DeviceManager returned nil device")
 	}
 
-	device.DeviceConnected(c)
 	return device, nil
 }
 
@@ -230,6 +235,28 @@ func (c *Connection) SendRPC(rpcID uint32, name string, accessLevel restream.Acc
 		return err
 	}
 
+	return c.sendPacket(packetBytes)
+}
+
+// SendStoreSubscription sends a keyed store subscription lifecycle change to the connected device.
+func (c *Connection) SendStoreSubscription(storeName string, key string, subscribe bool) error {
+	action := protocol.StoreUnsubscribe
+	if subscribe {
+		action = protocol.StoreSubscribe
+	}
+	packetBytes, err := protocol.EncodePacket(&protocol.StoreSubscriptionPacket{
+		StoreName: storeName,
+		Key:       key,
+		Action:    action,
+	})
+	if err != nil {
+		return err
+	}
+
+	return c.sendPacket(packetBytes)
+}
+
+func (c *Connection) sendPacket(packetBytes []byte) error {
 	c.rpcWriteMutex.Lock()
 	defer c.rpcWriteMutex.Unlock()
 

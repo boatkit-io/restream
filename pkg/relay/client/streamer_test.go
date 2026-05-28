@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/boatkit-io/restream/pkg/binarystreams"
 	"github.com/boatkit-io/restream/pkg/relay/protocol"
+	"github.com/boatkit-io/restream/pkg/restream"
 	gws "github.com/gorilla/websocket"
 )
 
@@ -133,4 +135,125 @@ func TestSendEventWritesGenericEventPacket(t *testing.T) {
 	if string(eventPacket.Data) != string([]byte{1, 2, 3}) {
 		t.Fatalf("event bytes = %v, want [1 2 3]", eventPacket.Data)
 	}
+}
+
+func TestRelayedStoreSubscriptionsAreIdempotentAndCleanup(t *testing.T) {
+	store := restream.NewRelayStore[streamerTestState, *streamerTestState, *streamerTestPartial](
+		"TestStore",
+		&streamerTestState{},
+	)
+	registry, err := restream.NewStoreRegistry([]restream.Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	s := NewStreamer(registry, nil, nil, Config{})
+
+	packet := &protocol.StoreSubscriptionPacket{
+		StoreName: "TestStore",
+		Key:       "values%&a",
+		Action:    protocol.StoreSubscribe,
+	}
+	if err := s.handleStoreSubscription(packet); err != nil {
+		t.Fatalf("handle subscribe failed: %v", err)
+	}
+	if err := s.handleStoreSubscription(packet); err != nil {
+		t.Fatalf("handle duplicate subscribe failed: %v", err)
+	}
+	assertActiveRelayKeys(t, store, []string{"values%&a"})
+
+	packet.Action = protocol.StoreUnsubscribe
+	if err := s.handleStoreSubscription(packet); err != nil {
+		t.Fatalf("handle final unsubscribe failed: %v", err)
+	}
+	assertActiveRelayKeys(t, store, nil)
+	if err := s.handleStoreSubscription(packet); err != nil {
+		t.Fatalf("handle duplicate unsubscribe failed: %v", err)
+	}
+	assertActiveRelayKeys(t, store, nil)
+
+	packet.Action = protocol.StoreSubscribe
+	if err := s.handleStoreSubscription(packet); err != nil {
+		t.Fatalf("handle resubscribe failed: %v", err)
+	}
+	s.clearRelaySubscriptions()
+	assertActiveRelayKeys(t, store, nil)
+}
+
+func TestRelayedWholeStoreSubscriptionUsesEmptyKey(t *testing.T) {
+	store := restream.NewRelayStore[streamerTestState, *streamerTestState, *streamerTestPartial](
+		"TestStore",
+		&streamerTestState{},
+	)
+	registry, err := restream.NewStoreRegistry([]restream.Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	s := NewStreamer(registry, nil, nil, Config{})
+
+	if err := s.handleStoreSubscription(&protocol.StoreSubscriptionPacket{
+		StoreName: "TestStore",
+		Key:       "",
+		Action:    protocol.StoreSubscribe,
+	}); err != nil {
+		t.Fatalf("handle whole-store subscribe failed: %v", err)
+	}
+	assertActiveRelayKeys(t, store, []string{""})
+
+	if err := s.handleStoreSubscription(&protocol.StoreSubscriptionPacket{
+		StoreName: "TestStore",
+		Key:       "",
+		Action:    protocol.StoreUnsubscribe,
+	}); err != nil {
+		t.Fatalf("handle whole-store unsubscribe failed: %v", err)
+	}
+	assertActiveRelayKeys(t, store, nil)
+}
+
+func assertActiveRelayKeys(
+	t *testing.T,
+	store *restream.RelayStore[streamerTestState, *streamerTestState, *streamerTestPartial],
+	expected []string,
+) {
+	t.Helper()
+
+	actual := store.ActiveSubscriptionKeys()
+	if len(actual) != len(expected) {
+		t.Fatalf("active keys = %#v, want %#v", actual, expected)
+	}
+	for idx := range expected {
+		if actual[idx] != expected[idx] {
+			t.Fatalf("active keys = %#v, want %#v", actual, expected)
+		}
+	}
+}
+
+type streamerTestState struct {
+	Value string
+}
+
+func (*streamerTestState) Serialize(*binarystreams.Writer, *restream.VarInfoStruct) error {
+	return nil
+}
+
+func (*streamerTestState) Deserialize(*binarystreams.Reader, *restream.VarInfoStruct) error {
+	return nil
+}
+
+type streamerTestPartial struct {
+	Value *string
+}
+
+func (*streamerTestPartial) Serialize(*binarystreams.Writer, *restream.VarInfoStruct) error {
+	return nil
+}
+
+func (*streamerTestPartial) Deserialize(*binarystreams.Reader, *restream.VarInfoStruct) error {
+	return nil
+}
+
+func (*streamerTestPartial) MergeOntoPartial(any) {
+}
+
+func (*streamerTestPartial) ApplyTo(any) [][]any {
+	return nil
 }
