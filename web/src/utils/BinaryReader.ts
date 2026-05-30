@@ -28,13 +28,40 @@ export default class BinaryReader {
         return new Uint8Array(ret);
     }
 
+    readByteView(length: number): Uint8Array {
+        if (this._offset + length > this._length) {
+            throw new Error('Overflowing BinaryReader buffer');
+        }
+        const ret = this._uint8Buffer.subarray(this._offset, this._offset + length);
+        this._offset += length;
+        return ret;
+    }
+
     readString(numChars: number): string {
         if (this._offset + numChars > this._length) {
             throw new Error('Overflowing BinaryReader buffer');
         }
 
-        const ret = decoderUTF8.decode(this._buffer.slice(this._offset, this._offset + numChars));
+        const ret = decoderUTF8.decode(this._uint8Buffer.subarray(this._offset, this._offset + numChars));
         this._offset += numChars;
+        return ret;
+    }
+
+    readASCIIString(numChars: number): string {
+        if (this._offset + numChars > this._length) {
+            throw new Error('Overflowing BinaryReader buffer');
+        }
+
+        let ret: string;
+        if (numChars < 16) {
+            ret = '';
+            for (let i = 0; i < numChars; i++) {
+                ret += String.fromCharCode(this._uint8Buffer[this._offset++]!);
+            }
+        } else {
+            ret = decoderUTF8.decode(this._uint8Buffer.subarray(this._offset, this._offset + numChars));
+            this._offset += numChars;
+        }
         return ret;
     }
 
@@ -42,7 +69,7 @@ export default class BinaryReader {
         for (let i = this._offset; i < this._length; i += 2) {
             const char = this._uint8Buffer[i]! | (this._uint8Buffer[i + 1]! << 8);
             if (char === terminator) {
-                const ret = decoderUTF16.decode(this._buffer.slice(this._offset, i));
+                const ret = decoderUTF16.decode(this._uint8Buffer.subarray(this._offset, i));
                 // account for (skipping) the terminator as well as the slice we just pulled directly off above
                 const byteCount = (i + 2) - this._offset;
                 this._offset += byteCount;
@@ -55,7 +82,7 @@ export default class BinaryReader {
     readStringToTerminator(terminator: number): [string, number] {
         for (let i = this._offset; i < this._length; i++) {
             if (this._uint8Buffer[i] === terminator) {
-                const ret = decoderUTF8.decode(this._buffer.slice(this._offset, i));
+                const ret = decoderUTF8.decode(this._uint8Buffer.subarray(this._offset, i));
                 // account for (skipping) the terminator as well as the slice we just pulled directly off above
                 const byteCount = (i + 1) - this._offset;
                 this._offset += byteCount;
