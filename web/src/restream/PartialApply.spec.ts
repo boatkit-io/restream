@@ -17,6 +17,45 @@ class PartialApplySpecPartial implements AppliablePartial<PartialApplySpecValue>
 }
 
 describe('partial apply field paths', () => {
+    test('mod map deletes remove the key and report the changed path', () => {
+        const target = new Map<string, PartialApplySpecValue>([
+            ['engine', { number: 1 }],
+            ['house', { number: 2 }],
+        ]);
+        const partial = PartialModMap.fromValues<string, PartialApplySpecValue, PartialApplySpecPartial>(
+            new Map(),
+            new Set(['engine']),
+            new Map(),
+            undefined,
+        );
+
+        const fields = partial.applyTo(target);
+
+        expect(target.has('engine')).toBe(false);
+        expect(target.get('house')?.number).toBe(2);
+        expect(fields).toEqual([['engine']]);
+    });
+
+    test('mod map deletes apply when delete keys arrive in map form', () => {
+        const target = new Map<string, PartialApplySpecValue>([
+            ['engine', { number: 1 }],
+            ['house', { number: 2 }],
+        ]);
+        const partial = PartialModMap.fromValues<string, PartialApplySpecValue, PartialApplySpecPartial>(
+            new Map(),
+            new Set(),
+            new Map(),
+            undefined,
+        );
+        (partial as unknown as { dataDeletes: Map<string, unknown> }).dataDeletes = new Map([['engine', undefined]]);
+
+        const fields = partial.applyTo(target);
+
+        expect(target.has('engine')).toBe(false);
+        expect(target.get('house')?.number).toBe(2);
+        expect(fields).toEqual([['engine']]);
+    });
+
     test('mod map suppresses nested fields when the key was set', () => {
         const target = new Map<string, PartialApplySpecValue>();
         const partial = PartialModMap.fromValues<string, PartialApplySpecValue, PartialApplySpecPartial>(

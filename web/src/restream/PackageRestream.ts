@@ -149,7 +149,8 @@ export class PartialMap<K extends string|number, V> {
 				ret.push([k as string|number]);
 			}
 		}
-		for (const k of this.dataDeletes) {
+		const dataDeletes = this.dataDeletes as Set<K> | Map<K, unknown>;
+		for (const k of dataDeletes instanceof Map ? dataDeletes.keys() : dataDeletes) {
 			por.delete(k);
 			if (!this.whole) {
 				ret.push([k as string|number]);
@@ -309,7 +310,8 @@ export class PartialModMap<K extends string|number, V, P extends AppliablePartia
 				ret.push([k as string|number]);
 			}
 		}
-		for (const k of this.dataDeletes) {
+		const dataDeletes = this.dataDeletes as Set<K> | Map<K, unknown>;
+		for (const k of dataDeletes instanceof Map ? dataDeletes.keys() : dataDeletes) {
 			por.delete(k);
 			if (!this.whole) {
 				ret.push([k as string|number]);

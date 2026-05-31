@@ -1288,7 +1288,8 @@ func genTSPartialAugmentations(si StructInfo) string {
 				ret.push([k as string|number]);
 			}
 		}
-		for (const k of this.dataDeletes) {
+		const dataDeletes = this.dataDeletes as Set<K> | Map<K, unknown>;
+		for (const k of dataDeletes instanceof Map ? dataDeletes.keys() : dataDeletes) {
 			por.delete(k);
 			if (!this.whole) {
 				ret.push([k as string|number]);
@@ -1330,7 +1331,8 @@ func genTSPartialAugmentations(si StructInfo) string {
 				ret.push([k as string|number]);
 			}
 		}
-		for (const k of this.dataDeletes) {
+		const dataDeletes = this.dataDeletes as Set<K> | Map<K, unknown>;
+		for (const k of dataDeletes instanceof Map ? dataDeletes.keys() : dataDeletes) {
 			por.delete(k);
 			if (!this.whole) {
 				ret.push([k as string|number]);
