@@ -357,7 +357,11 @@ func (s *Streamer) recalcGatherTimeout(_ time.Duration) {
 }
 
 func (s *Streamer) sendFullState(storeName string) error {
-	sBytes, err := s.sr.GetSerializedFullState(storeName)
+	accessLevel, err := s.sr.GetStoreMinimumAccessLevel(storeName)
+	if err != nil {
+		return err
+	}
+	sBytes, err := s.sr.GetSerializedFullState(storeName, accessLevel)
 	if err != nil {
 		return err
 	}
@@ -434,7 +438,15 @@ func (s *Streamer) startRelayedStoreSubscription(storeName string, key string) e
 	s.relaySubscriptions[subKey] = struct{}{}
 	s.relaySubscriptionMutex.Unlock()
 
-	if err := s.sr.ListeningToStoreKey(storeName, key); err != nil {
+	accessLevel, err := s.sr.GetStoreMinimumAccessLevel(storeName)
+	if err != nil {
+		s.relaySubscriptionMutex.Lock()
+		delete(s.relaySubscriptions, subKey)
+		s.relaySubscriptionMutex.Unlock()
+		return err
+	}
+
+	if err := s.sr.ListeningToStoreKey(storeName, key, accessLevel); err != nil {
 		s.relaySubscriptionMutex.Lock()
 		delete(s.relaySubscriptions, subKey)
 		s.relaySubscriptionMutex.Unlock()

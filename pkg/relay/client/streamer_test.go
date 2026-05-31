@@ -137,10 +137,49 @@ func TestSendEventWritesGenericEventPacket(t *testing.T) {
 	}
 }
 
+func TestSendFullStateUsesStoreMinimumAccess(t *testing.T) {
+	store := restream.NewRelayStore[streamerTestState, *streamerTestState, *streamerTestPartial](
+		"TestStore",
+		&streamerTestState{},
+		restream.AccessLevel(2),
+	)
+	registry, err := restream.NewStoreRegistry([]restream.Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+
+	done := make(chan struct{})
+	sendQueue := make(chan []byte, 1)
+	s := &Streamer{
+		sr:        registry,
+		conn:      &gws.Conn{},
+		sendQueue: sendQueue,
+		sendDone:  done,
+	}
+
+	if err := s.sendFullState("TestStore"); err != nil {
+		t.Fatalf("sendFullState failed: %v", err)
+	}
+
+	packetBytes := <-sendQueue
+	packet, err := protocol.DecodePacket(packetBytes)
+	if err != nil {
+		t.Fatalf("DecodePacket failed: %v", err)
+	}
+	storePacket, ok := packet.(*protocol.StoreStatePacket)
+	if !ok {
+		t.Fatalf("packet type = %T, want *protocol.StoreStatePacket", packet)
+	}
+	if storePacket.StoreName != "TestStore" || storePacket.Kind() != protocol.KindFullState {
+		t.Fatalf("store packet = %+v, want full state for TestStore", storePacket)
+	}
+}
+
 func TestRelayedStoreSubscriptionsAreIdempotentAndCleanup(t *testing.T) {
 	store := restream.NewRelayStore[streamerTestState, *streamerTestState, *streamerTestPartial](
 		"TestStore",
 		&streamerTestState{},
+		restream.AccessLevelPublic,
 	)
 	registry, err := restream.NewStoreRegistry([]restream.Store{store})
 	if err != nil {
@@ -183,6 +222,7 @@ func TestRelayedWholeStoreSubscriptionUsesEmptyKey(t *testing.T) {
 	store := restream.NewRelayStore[streamerTestState, *streamerTestState, *streamerTestPartial](
 		"TestStore",
 		&streamerTestState{},
+		restream.AccessLevelPublic,
 	)
 	registry, err := restream.NewStoreRegistry([]restream.Store{store})
 	if err != nil {

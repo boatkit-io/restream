@@ -22,7 +22,7 @@ func TestDeviceUnknownStorePolicy(t *testing.T) {
 func mustStoreRegistry(t *testing.T) *restream.StoreRegistry {
 	t.Helper()
 	sr, err := restream.NewStoreRegistry([]restream.Store{
-		restream.NewRelayStore[testState, *testState, *testPartial]("TestStore", &testState{}),
+		restream.NewRelayStore[testState, *testState, *testPartial]("TestStore", &testState{}, restream.AccessLevelPublic),
 	})
 	if err != nil {
 		t.Fatalf("NewStoreRegistry failed: %v", err)

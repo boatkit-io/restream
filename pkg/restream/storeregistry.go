@@ -1,6 +1,7 @@
 package restream
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
@@ -23,10 +24,34 @@ type StoreInfo struct {
 	Name              string
 	StoreData         StoreDataBase
 	Store             Store
+	MinAccessLevel    AccessLevel
 	SubAwareCallbacks SubscriptionAwareStore
 	KeySubCallbacks   KeySubscriptionAwareStore
 	ActiveSubCount    int
 	ActiveKeySubCount map[string]int
+}
+
+// ErrInsufficientStoreAccess is returned when a caller's access level is below a store's minimum.
+var ErrInsufficientStoreAccess = errors.New("insufficient store access")
+
+// InsufficientStoreAccessError describes a rejected store read or subscription.
+type InsufficientStoreAccessError struct {
+	StoreName          string
+	AccessLevel        AccessLevel
+	MinimumAccessLevel AccessLevel
+}
+
+func (e *InsufficientStoreAccessError) Error() string {
+	return fmt.Sprintf(
+		"store %s requires access level %d, caller has %d",
+		e.StoreName,
+		e.MinimumAccessLevel,
+		e.AccessLevel,
+	)
+}
+
+func (e *InsufficientStoreAccessError) Unwrap() error {
+	return ErrInsufficientStoreAccess
 }
 
 type subscriptionKeyStoreData interface {
@@ -44,9 +69,10 @@ func NewStoreRegistry(storeList []Store) (*StoreRegistry, error) {
 
 	for _, s := range storeList {
 		si := StoreInfo{
-			Name:      s.GetName(),
-			Store:     s,
-			StoreData: s.GetStoreData(),
+			Name:           s.GetName(),
+			Store:          s,
+			StoreData:      s.GetStoreData(),
+			MinAccessLevel: StoreMinimumAccessLevel(s),
 		}
 
 		if sasV, implements := s.(SubscriptionAwareStore); implements {
@@ -62,6 +88,17 @@ func NewStoreRegistry(storeList []Store) (*StoreRegistry, error) {
 	}
 
 	return sdr, nil
+}
+
+// StoreMinimumAccessLevel returns the minimum access level for a store, defaulting to public access.
+func StoreMinimumAccessLevel(store Store) AccessLevel {
+	if store == nil {
+		return AccessLevelPublic
+	}
+	if accessStore, ok := store.(MinimumAccessLevelStore); ok {
+		return accessStore.GetMinimumAccessLevel()
+	}
+	return AccessLevelPublic
 }
 
 // SubscribeToPartialApplies adds a subscription to any ApplyPartial calls, which SDR will then distribute callbacks to
@@ -87,20 +124,26 @@ func (s *StoreRegistry) IsStoreValid(storeName string) bool {
 }
 
 // GetSerializedFullState returns a pre-serialized full state object for a store.
-func (s *StoreRegistry) GetSerializedFullState(storeName string) ([]byte, error) {
+func (s *StoreRegistry) GetSerializedFullState(storeName string, accessLevel AccessLevel) ([]byte, error) {
 	si, has := s.storeMap[storeName]
 	if !has {
 		return nil, fmt.Errorf("no store found (%s) in GetSerializedFullState", storeName)
+	}
+	if err := requireStoreAccess(si, accessLevel); err != nil {
+		return nil, err
 	}
 
 	return si.StoreData.GetSerializedFullState()
 }
 
 // GetSerializedPartialForSubscriptionKey returns an initial keyed partial for a store, when the store supports it.
-func (s *StoreRegistry) GetSerializedPartialForSubscriptionKey(storeName string, key string) ([]byte, bool, error) {
+func (s *StoreRegistry) GetSerializedPartialForSubscriptionKey(storeName string, key string, accessLevel AccessLevel) ([]byte, bool, error) {
 	si, has := s.storeMap[storeName]
 	if !has {
 		return nil, false, fmt.Errorf("no store found (%s) in GetSerializedPartialForSubscriptionKey", storeName)
+	}
+	if err := requireStoreAccess(si, accessLevel); err != nil {
+		return nil, false, err
 	}
 	if provider, ok := si.StoreData.(subscriptionKeyStoreData); ok {
 		return provider.GetSerializedPartialForSubscriptionKey(key)
@@ -109,18 +152,21 @@ func (s *StoreRegistry) GetSerializedPartialForSubscriptionKey(storeName string,
 }
 
 // ListeningToStore is a callback to indicate that someone has subscribed to the store
-func (s *StoreRegistry) ListeningToStore(storeName string) error {
-	return s.ListeningToStoreKey(storeName, "")
+func (s *StoreRegistry) ListeningToStore(storeName string, accessLevel AccessLevel) error {
+	return s.ListeningToStoreKey(storeName, "", accessLevel)
 }
 
 // ListeningToStoreKey is a callback to indicate that someone has subscribed to a store key.
-func (s *StoreRegistry) ListeningToStoreKey(storeName string, key string) error {
+func (s *StoreRegistry) ListeningToStoreKey(storeName string, key string, accessLevel AccessLevel) error {
 	s.subscriptionMutex.Lock()
 	defer s.subscriptionMutex.Unlock()
 
 	si, has := s.storeMap[storeName]
 	if !has {
 		return fmt.Errorf("no store found (%s) in ListeningToStoreKey", storeName)
+	}
+	if err := requireStoreAccess(si, accessLevel); err != nil {
+		return err
 	}
 
 	si.ActiveSubCount++
@@ -170,6 +216,35 @@ func (s *StoreRegistry) StopListeningToStoreKey(storeName string, key string) er
 		si.SubAwareCallbacks.SubscriptionEnded()
 	}
 	return nil
+}
+
+// CheckStoreAccess verifies that accessLevel is enough to read or subscribe to storeName.
+func (s *StoreRegistry) CheckStoreAccess(storeName string, accessLevel AccessLevel) error {
+	si, has := s.storeMap[storeName]
+	if !has {
+		return fmt.Errorf("no store found (%s) in CheckStoreAccess", storeName)
+	}
+	return requireStoreAccess(si, accessLevel)
+}
+
+// GetStoreMinimumAccessLevel returns the access level required to read or subscribe to storeName.
+func (s *StoreRegistry) GetStoreMinimumAccessLevel(storeName string) (AccessLevel, error) {
+	si, has := s.storeMap[storeName]
+	if !has {
+		return AccessLevelPublic, fmt.Errorf("no store found (%s) in GetStoreMinimumAccessLevel", storeName)
+	}
+	return si.MinAccessLevel, nil
+}
+
+func requireStoreAccess(si *StoreInfo, accessLevel AccessLevel) error {
+	if accessLevel >= si.MinAccessLevel {
+		return nil
+	}
+	return &InsufficientStoreAccessError{
+		StoreName:          si.Name,
+		AccessLevel:        accessLevel,
+		MinimumAccessLevel: si.MinAccessLevel,
+	}
 }
 
 // SetFullStateToStore finds a store for a storename and sets its full state to the new bytes

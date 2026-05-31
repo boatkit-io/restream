@@ -27,12 +27,7 @@ func main() {
 
 	manager := relayserver.NewDeviceManager(relayserver.DeviceManagerConfig{
 		Stores: func(_ string) ([]restream.Store, error) {
-			return []restream.Store{
-				restream.NewRelayStore[game.BoardStoreState, *game.BoardStoreState, *game.BoardStoreStatePartial](
-					game.BoardStoreName,
-					&game.BoardStoreState{},
-				),
-			}, nil
+			return game.NewRelayStores(), nil
 		},
 		ConfigureDevice: func(device *relayserver.Device) error {
 			game.RegisterServerTimeEvent(device.EventDispatcher)

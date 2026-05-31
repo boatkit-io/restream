@@ -49,10 +49,61 @@ getCAN0RxCount() {
 
 Struct field names in nested paths are normalized the same way, but map keys are exact. In the example above, `CAN0` is a map key and will not match `can0`. Full-store subscriptions still update for any store change, while field-keyed subscriptions update only when the generated partial reports that exact field path or one of its parent/child paths.
 
+## Access Levels
+
+ReStream access checks use `restream.AccessLevel`, which is an integer level assigned by the application. `restream.AccessLevelPublic` is `0` and is the default, lowest access level. Higher numbers represent more access. ReStream does not define roles; applications map their own roles, sessions, device credentials, or users to numeric levels.
+
+Websocket servers provide the connected client's current level through `AddSocketHandlers`:
+
+```go
+restream.AddSocketHandlers(conn, log, sdr, rpcd.FireRPC, eventd, func() (restream.AccessLevel, error) {
+    return currentUserAccessLevel, nil
+})
+```
+
+RPC handlers already use this level. The second argument to `RegisterRPCHandler` is the minimum access level required to call that RPC:
+
+```go
+rpcd.RegisterRPCHandler("AdminStore.DeleteItem", AccessLevelAdmin, func(id string) error {
+    // ...
+}, reflect.TypeFor[DeleteItemRequest](), reflect.TypeFor[DeleteItemResponse]())
+```
+
+### Store Minimum Access
+
+Stores may also require a minimum access level for any client-visible store data. Implement `GetMinimumAccessLevel` on the store to opt in:
+
+```go
+func (s *AdminStore) GetMinimumAccessLevel() restream.AccessLevel {
+    return restream.AccessLevel(AccessLevelAdmin)
+}
+```
+
+Stores that do not implement this optional method are treated as `restream.AccessLevelPublic`. The `StoreRegistry` enforces the minimum level when a client fetches full store state, fetches keyed subscription catchup state, or starts a whole-store or keyed subscription. Websocket partial updates are only sent to subscribed clients and re-check the store minimum before emitting.
+
+If you use `StoreRegistry` directly, pass the connected caller's level to access-sensitive methods:
+
+```go
+stateBytes, err := sdr.GetSerializedFullState(storeName, userAccessLevel)
+err = sdr.ListeningToStoreKey(storeName, key, userAccessLevel)
+```
+
+Denied reads or subscriptions return an error that matches `restream.ErrInsufficientStoreAccess`.
+
+For generated stores, put `GetMinimumAccessLevel` in the handwritten store file next to `New<StoreName>`. The `@restream.store` annotation still generates the standard `Store` boilerplate separately.
+
+Cloud relay stores need the same access level because they do not have the original device-side store instance. For generated stores, use the package-level `NewRelayStores` helper. Codegen evaluates each store's optional `GetMinimumAccessLevel` method and hardcodes that minimum into the generated relay store factory:
+
+```go
+stores := game.NewRelayStores()
+```
+
+The method must have the exact signature `GetMinimumAccessLevel() restream.AccessLevel`. For relay codegen, its body must be a single `return` of a compile-time integer constant, or a conversion of one, such as `return AccessLevelAdmin` when the constant is untyped or already a `restream.AccessLevel`, or `return restream.AccessLevel(auth.AccessLevelAdmin)` when the application constant uses a different named integer type. Codegen resolves the constant value through Go type information and emits `restream.AccessLevel(<value>)`, so generated relay code does not import the package that defined the constant. If there is no method, codegen uses `restream.AccessLevelPublic`. Custom relay stores can still call `restream.NewRelayStore` directly.
+
 ## Annotations
 
 For structs that should generate client-side types, serializers/deserializers, or store boilerplate, place one of these annotations in a comment immediately preceding the `struct` definition on the golang side:
-* `@restream.store(StoreName)` generates the common Go store boilerplate for the annotated store struct into the adjacent `_rs.go` file: the `<StructName>Name` constant, `GetName`, `GetStoreData`, and `SubscribeToField`. Codegen also ensures `<StructName>State` exists with `@restream.partials`, and ensures the store struct has a `storeData` field with the conventional `*restream.StoreData[<StructName>State, *<StructName>State, *<StructName>StatePartial]` type. If `storeData` references a state type in another parsed package, such as `storestates.BoardStoreState`, codegen preserves that package qualifier and annotates the state struct in that package; include both packages in `inputDirs`.
+* `@restream.store(StoreName)` generates the common Go store boilerplate for the annotated store struct into the adjacent `_rs.go` file: the `<StructName>Name` constant, `GetName`, `GetStoreData`, and `SubscribeToField`. Codegen also generates a package-level `NewRelayStores()` helper for cloud relay store factories. It ensures `<StructName>State` exists with `@restream.partials`, and ensures the store struct has a `storeData` field with the conventional `*restream.StoreData[<StructName>State, *<StructName>State, *<StructName>StatePartial]` type. If `storeData` references a state type in another parsed package, such as `storestates.BoardStoreState`, codegen preserves that package qualifier and annotates the state struct in that package; include both packages in `inputDirs`.
 * `@restream.serializers` only generates serialization/deserialization functions for the full structure and is not extensible -- no field ID numbers are generated, so structures can not evolve and must exactly match on the client and serverside for serialization to work
 * `@restream.fields` is for structures that may evolve over time, and generates stable IDs for every field that is used in serialization/deserialization so that structures are forwards-and-backwards compatible across disparate wire versions of your application
 * `@restream.partials` is for structures that will want to send compact partial deltas across a wire protocol.  These partials will support changes to individual fields, and have optimizations for maps and arrays to allow for specific operations like setting individual elements as an optimized operation.

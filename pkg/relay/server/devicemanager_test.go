@@ -14,7 +14,7 @@ func TestDeviceManagerCreatesConfiguredStores(t *testing.T) {
 				t.Fatalf("deviceID = %q, want device-1", deviceID)
 			}
 			return []restream.Store{
-				restream.NewRelayStore[testState, *testState, *testPartial]("TestStore", &testState{}),
+				restream.NewRelayStore[testState, *testState, *testPartial]("TestStore", &testState{}, restream.AccessLevelPublic),
 			}, nil
 		},
 		ConfigureDevice: func(device *Device) error {

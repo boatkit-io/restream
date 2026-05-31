@@ -12,6 +12,11 @@ import (
 
 type AccessLevel int
 
+const (
+	// AccessLevelPublic is the default minimum access level for stores and RPCs.
+	AccessLevelPublic AccessLevel = 0
+)
+
 // rpcInfo is a dump of information about a single RPC that was registered by a store
 type rpcInfo struct {
 	MinAccessLevel            AccessLevel

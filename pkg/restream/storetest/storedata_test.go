@@ -230,7 +230,7 @@ func TestRelayStoreProvidesKeyedInitialPartial(t *testing.T) {
 			6: mapValueSix,
 		},
 		BaseField: "unused",
-	})
+	}, restream.AccessLevelPublic)
 
 	partial := getRelayStorePartialForKey(t, relayStore, "mapPtrTest%&5")
 
@@ -247,7 +247,7 @@ func TestRelayStoreKeyedInitialPartialDeletesMissingMapKey(t *testing.T) {
 		MapPtrTest: map[uint8]*TestMapData{
 			5: {Number: 5},
 		},
-	})
+	}, restream.AccessLevelPublic)
 
 	partial := getRelayStorePartialForKey(t, relayStore, "mapPtrTest%&7")
 
@@ -267,7 +267,7 @@ func TestRelayStoreKeyedInitialPartialSupportsNestedMapValue(t *testing.T) {
 			6: {Number: 6},
 		},
 		BaseField: "unused",
-	})
+	}, restream.AccessLevelPublic)
 
 	partial := getRelayStorePartialForKey(t, relayStore, "mapPtrTest%&5%&number")
 
@@ -350,7 +350,11 @@ func TestGeneratedStatePartialForFieldsSupportsArrayIndexes(t *testing.T) {
 }
 
 func TestRelayStoreForwardsKeyedSubscriptionLifecycle(t *testing.T) {
-	relayStore := restream.NewRelayStore[TestState, *TestState, *TestStatePartial]("relay-test", &TestState{})
+	relayStore := restream.NewRelayStore[TestState, *TestState, *TestStatePartial](
+		"relay-test",
+		&TestState{},
+		restream.AccessLevelPublic,
+	)
 
 	var calls []string
 	relayStore.SetKeySubscriptionForwarder(func(storeName string, key string, subscribe bool) {
@@ -388,12 +392,20 @@ func TestRelayStoreForwardsKeyedSubscriptionLifecycle(t *testing.T) {
 
 func TestRelayStoreMergedPartialMatchesSequentialPartialReplay(t *testing.T) {
 	sequentialState := relayStoreMergeBaseState()
-	sequentialStore := restream.NewRelayStore[TestState, *TestState, *TestStatePartial]("relay-test", &sequentialState)
+	sequentialStore := restream.NewRelayStore[TestState, *TestState, *TestStatePartial](
+		"relay-test",
+		&sequentialState,
+		restream.AccessLevelPublic,
+	)
 	applyRelayStorePartial(t, sequentialStore, relayStoreMergeFirstPartial())
 	applyRelayStorePartial(t, sequentialStore, relayStoreMergeSecondPartial())
 
 	mergedState := relayStoreMergeBaseState()
-	mergedStore := restream.NewRelayStore[TestState, *TestState, *TestStatePartial]("relay-test", &mergedState)
+	mergedStore := restream.NewRelayStore[TestState, *TestState, *TestStatePartial](
+		"relay-test",
+		&mergedState,
+		restream.AccessLevelPublic,
+	)
 	mergedPartial := relayStoreMergeFirstPartial()
 	relayStoreMergeSecondPartial().MergeOntoPartial(mergedPartial)
 	applyRelayStorePartial(t, mergedStore, mergedPartial)
@@ -411,7 +423,11 @@ func TestRelayStoreMergedPartialMatchesSequentialPartialReplay(t *testing.T) {
 
 func TestRelayStoreMergedPartialFieldPathsCoverMergedChanges(t *testing.T) {
 	state := relayStoreMergeBaseState()
-	relayStore := restream.NewRelayStore[TestState, *TestState, *TestStatePartial]("relay-test", &state)
+	relayStore := restream.NewRelayStore[TestState, *TestState, *TestStatePartial](
+		"relay-test",
+		&state,
+		restream.AccessLevelPublic,
+	)
 
 	var callbackFields [][]any
 	relayStore.GetStoreData().AddCallback(func(_ string, fields [][]any, _ restream.Partial) {

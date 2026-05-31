@@ -624,6 +624,91 @@ func (ft *FileTracking) createGoStoreMethods(si StructInfo, storeName string) {
 	ft.goGenEntries = append(ft.goGenEntries, fdef{name: si.Name + "Store", defs: out})
 }
 
+type relayStorePackage struct {
+	packageName string
+	packageDir  string
+	stores      []relayStoreFactory
+}
+
+type relayStoreFactory struct {
+	storeTypeName      string
+	storeName          string
+	stateRef           storeStateRef
+	minimumAccessLevel string
+}
+
+func (pt *ProjTracking) addRelayStoreFactory(
+	ft *FileTracking,
+	si StructInfo,
+	storeName string,
+	stateRef storeStateRef,
+	minimumAccessLevel string,
+) {
+	key := ft.fPackage.PkgPath
+	if key == "" {
+		key = path.Dir(ft.inFile)
+	}
+
+	pkg := pt.relayStores[key]
+	if pkg == nil {
+		pkg = &relayStorePackage{
+			packageName: ft.f.Name.Name,
+			packageDir:  path.Dir(ft.inFile),
+		}
+		pt.relayStores[key] = pkg
+	}
+
+	store := relayStoreFactory{
+		storeTypeName:      si.Name,
+		storeName:          storeName,
+		stateRef:           stateRef,
+		minimumAccessLevel: minimumAccessLevel,
+	}
+	if lo.SomeBy(pkg.stores, func(existing relayStoreFactory) bool {
+		return existing.storeTypeName == store.storeTypeName
+	}) {
+		return
+	}
+	pkg.stores = append(pkg.stores, store)
+}
+
+func (pt *ProjTracking) writeRelayStoreFactories() error {
+	for _, pkg := range pt.relayStores {
+		if len(pkg.stores) == 0 {
+			continue
+		}
+
+		outPath := path.Join(pkg.packageDir, "relaystores_rs.go")
+		if err := pt.writeGoFile(outPath, pkg.packageName, []fdef{pkg.relayStoreFactoryDef()}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *relayStorePackage) relayStoreFactoryDef() fdef {
+	slices.SortFunc(p.stores, func(a, b relayStoreFactory) int {
+		return strings.Compare(a.storeTypeName, b.storeTypeName)
+	})
+
+	out := "// NewRelayStores creates relay stores for all generated ReStream stores in this package.\n"
+	out += "func NewRelayStores() []restream.Store {\n"
+	out += "    return []restream.Store{\n"
+	for _, store := range p.stores {
+		stateType := store.stateRef.typeExpr()
+		partialType := store.stateRef.partialTypeExpr()
+		out += fmt.Sprintf("        restream.NewRelayStore[%s, *%s, *%s](\n", stateType, stateType, partialType)
+		out += fmt.Sprintf("            %sName,\n", store.storeTypeName)
+		out += fmt.Sprintf("            &%s{},\n", stateType)
+		out += fmt.Sprintf("            %s,\n", store.minimumAccessLevel)
+		out += "        ),\n"
+	}
+	out += "    }\n"
+	out += "}\n"
+
+	return fdef{name: "NewRelayStores", defs: out}
+}
+
 // writeGoStructs writes out the golang generated structures
 func (ft *FileTracking) writeGoStructs() error {
 	fmt.Printf("Writing out golang gen at: %s\n", ft.outFile)

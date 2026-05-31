@@ -41,22 +41,22 @@ export class TestC {
 
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
         const wi = new BinaryWriter();
-        ReStreamEncoders.serializeField(this.a, TestC._fieldInfo[0], wi);
-        ReStreamEncoders.serializeField(this.b, TestC._fieldInfo[1], wi);
+        ReStreamEncoders.serializeField(this.a, TestC.fieldInfo[0], wi);
+        ReStreamEncoders.serializeField(this.b, TestC.fieldInfo[1], wi);
         const b = wi.getBytes();
         ReStreamEncoders.serializePackedInt(b.length, w);
         w.writeBytes(b);
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "A", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPrimitive(SerializationType.Int64, "int")},
         {name: "B", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPrimitive(SerializationType.Int64, "int")},
-	];
+    ];
 
-	private static _fieldMap = new Map<number,FieldInfo>([
-        [1, this._fieldInfo[0]],
-        [2, this._fieldInfo[1]],
-	]);
+    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+        [1, this.fieldInfo[0]],
+        [2, this.fieldInfo[1]],
+    ]);
 }
 
 export class TestCPartial {
@@ -89,22 +89,22 @@ export class TestCPartial {
 
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
         const wi = new BinaryWriter();
-        ReStreamEncoders.serializeField(this.a, TestCPartial._fieldInfo[0], wi);
-        ReStreamEncoders.serializeField(this.b, TestCPartial._fieldInfo[1], wi);
+        ReStreamEncoders.serializeField(this.a, TestCPartial.fieldInfo[0], wi);
+        ReStreamEncoders.serializeField(this.b, TestCPartial.fieldInfo[1], wi);
         const b = wi.getBytes();
         ReStreamEncoders.serializePackedInt(b.length, w);
         w.writeBytes(b);
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "A", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Int64, "int"))},
         {name: "B", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Int64, "int"))},
-	];
+    ];
 
-	private static _fieldMap = new Map<number,FieldInfo>([
-        [1, this._fieldInfo[0]],
-        [2, this._fieldInfo[1]],
-	]);
+    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+        [1, this.fieldInfo[0]],
+        [2, this.fieldInfo[1]],
+    ]);
 
     applyTo(por: TestC): (string | number)[][] {
         const ret: (string | number)[][] = [];
@@ -144,22 +144,22 @@ export class TestMapData {
 
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
         const wi = new BinaryWriter();
-        ReStreamEncoders.serializeField(this.number, TestMapData._fieldInfo[0], wi);
-        ReStreamEncoders.serializeField(this.data, TestMapData._fieldInfo[1], wi);
+        ReStreamEncoders.serializeField(this.number, TestMapData.fieldInfo[0], wi);
+        ReStreamEncoders.serializeField(this.data, TestMapData.fieldInfo[1], wi);
         const b = wi.getBytes();
         ReStreamEncoders.serializePackedInt(b.length, w);
         w.writeBytes(b);
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "Number", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPrimitive(SerializationType.Uint64, "uint")},
         {name: "Data", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoArray(false, new VarInfoPrimitive(SerializationType.Uint8, "byte"))},
-	];
+    ];
 
-	private static _fieldMap = new Map<number,FieldInfo>([
-        [1, this._fieldInfo[0]],
-        [2, this._fieldInfo[1]],
-	]);
+    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+        [1, this.fieldInfo[0]],
+        [2, this.fieldInfo[1]],
+    ]);
 }
 
 export class TestMapDataPartial {
@@ -192,22 +192,22 @@ export class TestMapDataPartial {
 
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
         const wi = new BinaryWriter();
-        ReStreamEncoders.serializeField(this.number, TestMapDataPartial._fieldInfo[0], wi);
-        ReStreamEncoders.serializeField(this.data, TestMapDataPartial._fieldInfo[1], wi);
+        ReStreamEncoders.serializeField(this.number, TestMapDataPartial.fieldInfo[0], wi);
+        ReStreamEncoders.serializeField(this.data, TestMapDataPartial.fieldInfo[1], wi);
         const b = wi.getBytes();
         ReStreamEncoders.serializePackedInt(b.length, w);
         w.writeBytes(b);
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "Number", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Uint64, "uint"))},
         {name: "Data", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialArray", "restream", PartialArray, undefined, [new VarInfoPrimitive(SerializationType.Uint8, "byte")]))},
-	];
+    ];
 
-	private static _fieldMap = new Map<number,FieldInfo>([
-        [1, this._fieldInfo[0]],
-        [2, this._fieldInfo[1]],
-	]);
+    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+        [1, this.fieldInfo[0]],
+        [2, this.fieldInfo[1]],
+    ]);
 
     applyTo(por: TestMapData): (string | number)[][] {
         const ret: (string | number)[][] = [];
@@ -247,22 +247,22 @@ export class TestPrimitiveOptionalState {
 
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
         const wi = new BinaryWriter();
-        ReStreamEncoders.serializeField(this.primitive, TestPrimitiveOptionalState._fieldInfo[0], wi);
-        ReStreamEncoders.serializeField(this.optional, TestPrimitiveOptionalState._fieldInfo[1], wi);
+        ReStreamEncoders.serializeField(this.primitive, TestPrimitiveOptionalState.fieldInfo[0], wi);
+        ReStreamEncoders.serializeField(this.optional, TestPrimitiveOptionalState.fieldInfo[1], wi);
         const b = wi.getBytes();
         ReStreamEncoders.serializePackedInt(b.length, w);
         w.writeBytes(b);
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "Primitive", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPrimitive(SerializationType.Uint32)},
         {name: "Optional", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Uint32))},
-	];
+    ];
 
-	private static _fieldMap = new Map<number,FieldInfo>([
-        [1, this._fieldInfo[0]],
-        [2, this._fieldInfo[1]],
-	]);
+    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+        [1, this.fieldInfo[0]],
+        [2, this.fieldInfo[1]],
+    ]);
 }
 
 export class TestPrimitiveOptionalStatePartial {
@@ -295,22 +295,22 @@ export class TestPrimitiveOptionalStatePartial {
 
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
         const wi = new BinaryWriter();
-        ReStreamEncoders.serializeField(this.primitive, TestPrimitiveOptionalStatePartial._fieldInfo[0], wi);
-        ReStreamEncoders.serializeField(this.optional, TestPrimitiveOptionalStatePartial._fieldInfo[1], wi);
+        ReStreamEncoders.serializeField(this.primitive, TestPrimitiveOptionalStatePartial.fieldInfo[0], wi);
+        ReStreamEncoders.serializeField(this.optional, TestPrimitiveOptionalStatePartial.fieldInfo[1], wi);
         const b = wi.getBytes();
         ReStreamEncoders.serializePackedInt(b.length, w);
         w.writeBytes(b);
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "Primitive", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Uint32))},
         {name: "Optional", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Uint32)))},
-	];
+    ];
 
-	private static _fieldMap = new Map<number,FieldInfo>([
-        [1, this._fieldInfo[0]],
-        [2, this._fieldInfo[1]],
-	]);
+    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+        [1, this.fieldInfo[0]],
+        [2, this.fieldInfo[1]],
+    ]);
 
     applyTo(por: TestPrimitiveOptionalState): (string | number)[][] {
         const ret: (string | number)[][] = [];
@@ -398,28 +398,28 @@ export class TestState {
 
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
         const wi = new BinaryWriter();
-        ReStreamEncoders.serializeField(this.mapPtrTest, TestState._fieldInfo[0], wi);
-        ReStreamEncoders.serializeField(this.baseField, TestState._fieldInfo[1], wi);
-        ReStreamEncoders.serializeField(this.baseStruct, TestState._fieldInfo[2], wi);
-        ReStreamEncoders.serializeField(this.baseStructPtr, TestState._fieldInfo[3], wi);
+        ReStreamEncoders.serializeField(this.mapPtrTest, TestState.fieldInfo[0], wi);
+        ReStreamEncoders.serializeField(this.baseField, TestState.fieldInfo[1], wi);
+        ReStreamEncoders.serializeField(this.baseStruct, TestState.fieldInfo[2], wi);
+        ReStreamEncoders.serializeField(this.baseStructPtr, TestState.fieldInfo[3], wi);
         const b = wi.getBytes();
         ReStreamEncoders.serializePackedInt(b.length, w);
         w.writeBytes(b);
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "MapPtrTest", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoMap(false, new VarInfoPrimitive(SerializationType.Uint8), new VarInfoPointer(false, new VarInfoStruct("TestMapData", "storetest", TestMapData)))},
         {name: "BaseField", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPrimitive(SerializationType.String)},
         {name: "BaseStruct", fieldIdx: 2, fieldID: 3, varInfo: new VarInfoStruct("TestMapData", "storetest", TestMapData)},
         {name: "BaseStructPtr", fieldIdx: 3, fieldID: 4, varInfo: new VarInfoPointer(false, new VarInfoStruct("TestMapData", "storetest", TestMapData))},
-	];
+    ];
 
-	private static _fieldMap = new Map<number,FieldInfo>([
-        [1, this._fieldInfo[0]],
-        [2, this._fieldInfo[1]],
-        [3, this._fieldInfo[2]],
-        [4, this._fieldInfo[3]],
-	]);
+    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+        [1, this.fieldInfo[0]],
+        [2, this.fieldInfo[1]],
+        [3, this.fieldInfo[2]],
+        [4, this.fieldInfo[3]],
+    ]);
 }
 
 export class TestStatePartial {
@@ -460,28 +460,28 @@ export class TestStatePartial {
 
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
         const wi = new BinaryWriter();
-        ReStreamEncoders.serializeField(this.mapPtrTest, TestStatePartial._fieldInfo[0], wi);
-        ReStreamEncoders.serializeField(this.baseField, TestStatePartial._fieldInfo[1], wi);
-        ReStreamEncoders.serializeField(this.baseStruct, TestStatePartial._fieldInfo[2], wi);
-        ReStreamEncoders.serializeField(this.baseStructPtr, TestStatePartial._fieldInfo[3], wi);
+        ReStreamEncoders.serializeField(this.mapPtrTest, TestStatePartial.fieldInfo[0], wi);
+        ReStreamEncoders.serializeField(this.baseField, TestStatePartial.fieldInfo[1], wi);
+        ReStreamEncoders.serializeField(this.baseStruct, TestStatePartial.fieldInfo[2], wi);
+        ReStreamEncoders.serializeField(this.baseStructPtr, TestStatePartial.fieldInfo[3], wi);
         const b = wi.getBytes();
         ReStreamEncoders.serializePackedInt(b.length, w);
         w.writeBytes(b);
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "MapPtrTest", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialModMap", "restream", PartialModMap, undefined, [new VarInfoPrimitive(SerializationType.Uint8), new VarInfoPointer(false, new VarInfoStruct("TestMapData", "storetest", TestMapData)), new VarInfoPointer(false, new VarInfoStruct("TestMapDataPartial", "storetest", TestMapDataPartial))]))},
         {name: "BaseField", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.String))},
         {name: "BaseStruct", fieldIdx: 2, fieldID: 3, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialValue", "restream", PartialValue, undefined, [new VarInfoStruct("TestMapData", "storetest", TestMapData), new VarInfoPointer(false, new VarInfoStruct("TestMapDataPartial", "storetest", TestMapDataPartial))]))},
         {name: "BaseStructPtr", fieldIdx: 3, fieldID: 4, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialValue", "restream", PartialValue, undefined, [new VarInfoPointer(false, new VarInfoStruct("TestMapData", "storetest", TestMapData)), new VarInfoPointer(false, new VarInfoStruct("TestMapDataPartial", "storetest", TestMapDataPartial))]))},
-	];
+    ];
 
-	private static _fieldMap = new Map<number,FieldInfo>([
-        [1, this._fieldInfo[0]],
-        [2, this._fieldInfo[1]],
-        [3, this._fieldInfo[2]],
-        [4, this._fieldInfo[3]],
-	]);
+    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+        [1, this.fieldInfo[0]],
+        [2, this.fieldInfo[1]],
+        [3, this.fieldInfo[2]],
+        [4, this.fieldInfo[3]],
+    ]);
 
     applyTo(por: TestState): (string | number)[][] {
         const ret: (string | number)[][] = [];
@@ -527,25 +527,25 @@ export class TestArrayState {
 
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
         const wi = new BinaryWriter();
-        ReStreamEncoders.serializeField(this.numbers, TestArrayState._fieldInfo[0], wi);
-        ReStreamEncoders.serializeField(this.items, TestArrayState._fieldInfo[1], wi);
-        ReStreamEncoders.serializeField(this.ptrItems, TestArrayState._fieldInfo[2], wi);
+        ReStreamEncoders.serializeField(this.numbers, TestArrayState.fieldInfo[0], wi);
+        ReStreamEncoders.serializeField(this.items, TestArrayState.fieldInfo[1], wi);
+        ReStreamEncoders.serializeField(this.ptrItems, TestArrayState.fieldInfo[2], wi);
         const b = wi.getBytes();
         ReStreamEncoders.serializePackedInt(b.length, w);
         w.writeBytes(b);
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "Numbers", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoArray(false, new VarInfoPrimitive(SerializationType.Uint64, "uint"))},
         {name: "Items", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoArray(false, new VarInfoStruct("TestMapData", "storetest", TestMapData))},
         {name: "PtrItems", fieldIdx: 2, fieldID: 3, varInfo: new VarInfoArray(false, new VarInfoPointer(false, new VarInfoStruct("TestMapData", "storetest", TestMapData)))},
-	];
+    ];
 
-	private static _fieldMap = new Map<number,FieldInfo>([
-        [1, this._fieldInfo[0]],
-        [2, this._fieldInfo[1]],
-        [3, this._fieldInfo[2]],
-	]);
+    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+        [1, this.fieldInfo[0]],
+        [2, this.fieldInfo[1]],
+        [3, this.fieldInfo[2]],
+    ]);
 }
 
 export class TestArrayStatePartial {
@@ -582,25 +582,25 @@ export class TestArrayStatePartial {
 
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
         const wi = new BinaryWriter();
-        ReStreamEncoders.serializeField(this.numbers, TestArrayStatePartial._fieldInfo[0], wi);
-        ReStreamEncoders.serializeField(this.items, TestArrayStatePartial._fieldInfo[1], wi);
-        ReStreamEncoders.serializeField(this.ptrItems, TestArrayStatePartial._fieldInfo[2], wi);
+        ReStreamEncoders.serializeField(this.numbers, TestArrayStatePartial.fieldInfo[0], wi);
+        ReStreamEncoders.serializeField(this.items, TestArrayStatePartial.fieldInfo[1], wi);
+        ReStreamEncoders.serializeField(this.ptrItems, TestArrayStatePartial.fieldInfo[2], wi);
         const b = wi.getBytes();
         ReStreamEncoders.serializePackedInt(b.length, w);
         w.writeBytes(b);
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "Numbers", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialArray", "restream", PartialArray, undefined, [new VarInfoPrimitive(SerializationType.Uint64, "uint")]))},
         {name: "Items", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialModArray", "restream", PartialModArray, undefined, [new VarInfoStruct("TestMapData", "storetest", TestMapData), new VarInfoPointer(false, new VarInfoStruct("TestMapDataPartial", "storetest", TestMapDataPartial))]))},
         {name: "PtrItems", fieldIdx: 2, fieldID: 3, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialModArray", "restream", PartialModArray, undefined, [new VarInfoPointer(false, new VarInfoStruct("TestMapData", "storetest", TestMapData)), new VarInfoPointer(false, new VarInfoStruct("TestMapDataPartial", "storetest", TestMapDataPartial))]))},
-	];
+    ];
 
-	private static _fieldMap = new Map<number,FieldInfo>([
-        [1, this._fieldInfo[0]],
-        [2, this._fieldInfo[1]],
-        [3, this._fieldInfo[2]],
-	]);
+    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+        [1, this.fieldInfo[0]],
+        [2, this.fieldInfo[1]],
+        [3, this.fieldInfo[2]],
+    ]);
 
     applyTo(por: TestArrayState): (string | number)[][] {
         const ret: (string | number)[][] = [];
@@ -641,22 +641,22 @@ export class TestB {
 
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
         const wi = new BinaryWriter();
-        ReStreamEncoders.serializeField(this.a, TestB._fieldInfo[0], wi);
-        ReStreamEncoders.serializeField(this.b, TestB._fieldInfo[1], wi);
+        ReStreamEncoders.serializeField(this.a, TestB.fieldInfo[0], wi);
+        ReStreamEncoders.serializeField(this.b, TestB.fieldInfo[1], wi);
         const b = wi.getBytes();
         ReStreamEncoders.serializePackedInt(b.length, w);
         w.writeBytes(b);
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "A", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoStruct("TestC", "storetest", TestC)},
         {name: "B", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoStruct("TestC", "storetest", TestC)},
-	];
+    ];
 
-	private static _fieldMap = new Map<number,FieldInfo>([
-        [1, this._fieldInfo[0]],
-        [2, this._fieldInfo[1]],
-	]);
+    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+        [1, this.fieldInfo[0]],
+        [2, this.fieldInfo[1]],
+    ]);
 }
 
 export class TestBPartial {
@@ -689,22 +689,22 @@ export class TestBPartial {
 
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
         const wi = new BinaryWriter();
-        ReStreamEncoders.serializeField(this.a, TestBPartial._fieldInfo[0], wi);
-        ReStreamEncoders.serializeField(this.b, TestBPartial._fieldInfo[1], wi);
+        ReStreamEncoders.serializeField(this.a, TestBPartial.fieldInfo[0], wi);
+        ReStreamEncoders.serializeField(this.b, TestBPartial.fieldInfo[1], wi);
         const b = wi.getBytes();
         ReStreamEncoders.serializePackedInt(b.length, w);
         w.writeBytes(b);
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "A", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialValue", "restream", PartialValue, undefined, [new VarInfoStruct("TestC", "storetest", TestC), new VarInfoPointer(false, new VarInfoStruct("TestCPartial", "storetest", TestCPartial))]))},
         {name: "B", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialValue", "restream", PartialValue, undefined, [new VarInfoStruct("TestC", "storetest", TestC), new VarInfoPointer(false, new VarInfoStruct("TestCPartial", "storetest", TestCPartial))]))},
-	];
+    ];
 
-	private static _fieldMap = new Map<number,FieldInfo>([
-        [1, this._fieldInfo[0]],
-        [2, this._fieldInfo[1]],
-	]);
+    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+        [1, this.fieldInfo[0]],
+        [2, this.fieldInfo[1]],
+    ]);
 
     applyTo(por: TestB): (string | number)[][] {
         const ret: (string | number)[][] = [];
@@ -744,22 +744,22 @@ export class TestA {
 
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
         const wi = new BinaryWriter();
-        ReStreamEncoders.serializeField(this.a, TestA._fieldInfo[0], wi);
-        ReStreamEncoders.serializeField(this.b, TestA._fieldInfo[1], wi);
+        ReStreamEncoders.serializeField(this.a, TestA.fieldInfo[0], wi);
+        ReStreamEncoders.serializeField(this.b, TestA.fieldInfo[1], wi);
         const b = wi.getBytes();
         ReStreamEncoders.serializePackedInt(b.length, w);
         w.writeBytes(b);
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "A", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoStruct("TestB", "storetest", TestB)},
         {name: "B", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoStruct("TestB", "storetest", TestB)},
-	];
+    ];
 
-	private static _fieldMap = new Map<number,FieldInfo>([
-        [1, this._fieldInfo[0]],
-        [2, this._fieldInfo[1]],
-	]);
+    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+        [1, this.fieldInfo[0]],
+        [2, this.fieldInfo[1]],
+    ]);
 }
 
 export class TestAPartial {
@@ -792,22 +792,22 @@ export class TestAPartial {
 
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
         const wi = new BinaryWriter();
-        ReStreamEncoders.serializeField(this.a, TestAPartial._fieldInfo[0], wi);
-        ReStreamEncoders.serializeField(this.b, TestAPartial._fieldInfo[1], wi);
+        ReStreamEncoders.serializeField(this.a, TestAPartial.fieldInfo[0], wi);
+        ReStreamEncoders.serializeField(this.b, TestAPartial.fieldInfo[1], wi);
         const b = wi.getBytes();
         ReStreamEncoders.serializePackedInt(b.length, w);
         w.writeBytes(b);
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "A", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialValue", "restream", PartialValue, undefined, [new VarInfoStruct("TestB", "storetest", TestB), new VarInfoPointer(false, new VarInfoStruct("TestBPartial", "storetest", TestBPartial))]))},
         {name: "B", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialValue", "restream", PartialValue, undefined, [new VarInfoStruct("TestB", "storetest", TestB), new VarInfoPointer(false, new VarInfoStruct("TestBPartial", "storetest", TestBPartial))]))},
-	];
+    ];
 
-	private static _fieldMap = new Map<number,FieldInfo>([
-        [1, this._fieldInfo[0]],
-        [2, this._fieldInfo[1]],
-	]);
+    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+        [1, this.fieldInfo[0]],
+        [2, this.fieldInfo[1]],
+    ]);
 
     applyTo(por: TestA): (string | number)[][] {
         const ret: (string | number)[][] = [];

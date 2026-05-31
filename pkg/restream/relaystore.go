@@ -10,7 +10,8 @@ type RelayStoreKeySubscriptionForwarder func(storeName string, key string, subsc
 
 // RelayStore is a simplified store that's just a relay storedata holder from a device's store
 type RelayStore[S any, SP StoreDataPtrType[S], P Partial] struct {
-	name string
+	name               string
+	minimumAccessLevel AccessLevel
 
 	storeData *StoreData[S, SP, P]
 
@@ -20,9 +21,14 @@ type RelayStore[S any, SP StoreDataPtrType[S], P Partial] struct {
 }
 
 // NewRelayStore returns a new RelayStore
-func NewRelayStore[S any, SP StoreDataPtrType[S], P Partial](name string, baseState *S) *RelayStore[S, SP, P] {
+func NewRelayStore[S any, SP StoreDataPtrType[S], P Partial](
+	name string,
+	baseState *S,
+	minimumAccessLevel AccessLevel,
+) *RelayStore[S, SP, P] {
 	s := &RelayStore[S, SP, P]{
-		name: name,
+		name:               name,
+		minimumAccessLevel: minimumAccessLevel,
 	}
 
 	s.storeData = NewStoreData[S, SP, P](s, baseState)
@@ -33,6 +39,11 @@ func NewRelayStore[S any, SP StoreDataPtrType[S], P Partial](name string, baseSt
 // GetName implements Store.
 func (s *RelayStore[S, SP, P]) GetName() string {
 	return s.name
+}
+
+// GetMinimumAccessLevel implements MinimumAccessLevelStore.
+func (s *RelayStore[S, SP, P]) GetMinimumAccessLevel() AccessLevel {
+	return s.minimumAccessLevel
 }
 
 // GetStoreData implements Store.

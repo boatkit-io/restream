@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"go/ast"
+	"go/constant"
 	"go/token"
 	"go/types"
 	"path"
@@ -84,6 +85,11 @@ func (ft *FileTracking) parseStructDecls() error { //nolint:gocyclo,funlen
 			if err := ft.ensureStoreDataMember(s, stateRef); err != nil {
 				return err
 			}
+			minimumAccessLevelExpr, err := ft.minimumAccessLevelExprForStore(si.Name)
+			if err != nil {
+				return err
+			}
+			ft.pt.addRelayStoreFactory(ft, si, storeName, stateRef, minimumAccessLevelExpr)
 			ft.createGoStoreMethods(si, storeName)
 			ft.createTSStoreNameConst(si.Name, storeName)
 		}
@@ -1083,6 +1089,109 @@ func (ft *FileTracking) parseFuncDecls() error { //nolint:gocyclo,funlen
 	}
 
 	return nil
+}
+
+func (ft *FileTracking) minimumAccessLevelExprForStore(storeTypeName string) (string, error) {
+	if ft.fPackage == nil || ft.fPackage.TypesInfo == nil {
+		return "restream.AccessLevelPublic", nil
+	}
+
+	for _, f := range ft.fPackage.Syntax {
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Recv == nil || fd.Name.Name != "GetMinimumAccessLevel" {
+				continue
+			}
+			if len(fd.Recv.List) != 1 || receiverTypeName(fd.Recv.List[0].Type) != storeTypeName {
+				continue
+			}
+
+			if err := ft.validateMinimumAccessLevelMethod(fd, storeTypeName); err != nil {
+				return "", err
+			}
+			ret, err := singleReturnExpr(fd)
+			if err != nil {
+				return "", fmt.Errorf("%s.GetMinimumAccessLevel must return a single compile-time integer constant: %w", storeTypeName, err)
+			}
+			tv, ok := ft.fPackage.TypesInfo.Types[ret]
+			if !ok || tv.Value == nil {
+				return "", fmt.Errorf("%s.GetMinimumAccessLevel must return a compile-time integer constant", storeTypeName)
+			}
+			if tv.Value.Kind() != constant.Int {
+				return "", fmt.Errorf("%s.GetMinimumAccessLevel must return an integer constant, got %s", storeTypeName, tv.Value.Kind())
+			}
+			return "restream.AccessLevel(" + tv.Value.ExactString() + ")", nil
+		}
+	}
+
+	return "restream.AccessLevelPublic", nil
+}
+
+func (ft *FileTracking) validateMinimumAccessLevelMethod(fd *ast.FuncDecl, storeTypeName string) error {
+	obj, ok := ft.fPackage.TypesInfo.Defs[fd.Name]
+	if !ok {
+		return fmt.Errorf("%s.GetMinimumAccessLevel must have signature func() restream.AccessLevel", storeTypeName)
+	}
+	fn, ok := obj.(*types.Func)
+	if !ok {
+		return fmt.Errorf("%s.GetMinimumAccessLevel must be a method", storeTypeName)
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok || sig.Params().Len() != 0 || sig.Results().Len() != 1 {
+		return fmt.Errorf("%s.GetMinimumAccessLevel must have signature func() restream.AccessLevel", storeTypeName)
+	}
+
+	accessLevelType, err := ft.pt.restreamAccessLevelType(strings.HasSuffix(ft.inFile, "_test.go"))
+	if err != nil {
+		return err
+	}
+	if !types.Identical(sig.Results().At(0).Type(), accessLevelType) {
+		return fmt.Errorf(
+			"%s.GetMinimumAccessLevel must return restream.AccessLevel, got %s",
+			storeTypeName,
+			types.TypeString(sig.Results().At(0).Type(), func(pkg *types.Package) string { return pkg.Name() }),
+		)
+	}
+
+	return nil
+}
+
+func (pt *ProjTracking) restreamAccessLevelType(isTest bool) (types.Type, error) {
+	pkg, err := pt.getRestreamPackage(isTest)
+	if err != nil {
+		return nil, err
+	}
+	obj := pkg.Types.Scope().Lookup("AccessLevel")
+	if obj == nil {
+		return nil, fmt.Errorf("restream.AccessLevel type not found")
+	}
+	return obj.Type(), nil
+}
+
+func receiverTypeName(expr ast.Expr) string {
+	switch expr := expr.(type) {
+	case *ast.StarExpr:
+		return receiverTypeName(expr.X)
+	case *ast.Ident:
+		return expr.Name
+	case *ast.IndexExpr:
+		return receiverTypeName(expr.X)
+	case *ast.IndexListExpr:
+		return receiverTypeName(expr.X)
+	default:
+		return ""
+	}
+}
+
+func singleReturnExpr(fd *ast.FuncDecl) (ast.Expr, error) {
+	if fd.Body == nil || len(fd.Body.List) != 1 {
+		return nil, fmt.Errorf("method body must contain exactly one return statement")
+	}
+	ret, ok := fd.Body.List[0].(*ast.ReturnStmt)
+	if !ok || len(ret.Results) != 1 {
+		return nil, fmt.Errorf("method body must contain exactly one returned expression")
+	}
+	return ret.Results[0], nil
 }
 
 type eventRegistrationInfo struct {

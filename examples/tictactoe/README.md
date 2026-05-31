@@ -159,6 +159,8 @@ func main() {
 }
 ```
 
+The final argument to `AddSocketHandlers` returns the current websocket client's `restream.AccessLevel`. ReStream uses that level for RPC minimum access checks and store subscription/fetch checks.
+
 Run it:
 
 ```bash
@@ -327,7 +329,7 @@ rpcd.RegisterRPCHandler("PlaceToken", 1, func(x, y int) error {
 }, nil, nil)
 ```
 
-Add the `errors` and `reflect` imports. The trailing `nil, nil` values are placeholders that codegen replaces with the generated request/response types, using `reflect.TypeFor`.
+Add the `errors` and `reflect` imports. The second `RegisterRPCHandler` argument is the minimum access level required to call the RPC. The trailing `nil, nil` values are placeholders that codegen replaces with the generated request/response types, using `reflect.TypeFor`.
 
 Run codegen again:
 

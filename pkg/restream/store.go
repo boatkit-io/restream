@@ -7,6 +7,11 @@ type Store interface {
 	SubscribeToField(field []any, callback any)
 }
 
+// MinimumAccessLevelStore is optionally implemented by stores that require more than public access to read or subscribe.
+type MinimumAccessLevelStore interface {
+	GetMinimumAccessLevel() AccessLevel
+}
+
 // SubscriptionAwareStore is a deeper interface for a store that cares about being subscription-aware
 type SubscriptionAwareStore interface {
 	SubscriptionStarted()

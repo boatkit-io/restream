@@ -237,7 +237,7 @@ func (st *socketTracker) handleEmitQueue() {
 			err := st.conn.Emit(msg.Name, msg.Message)
 			if err != nil {
 				st.log.Warnf("Error emitting message: %+v", err)
-				st.conn.Disconnect(true)
+				st.disconnect()
 				return
 			}
 		}
@@ -255,24 +255,68 @@ func (st *socketTracker) emitMessage(name string, arg any) {
 	st.emitQueueMutex.RUnlock()
 }
 
+func (st *socketTracker) disconnect() {
+	if st.conn != nil {
+		st.conn.Disconnect(true)
+	}
+}
+
+func (st *socketTracker) lookupAccessLevel() (AccessLevel, error) {
+	if st.accessLookup == nil {
+		return AccessLevelPublic, nil
+	}
+	return st.accessLookup()
+}
+
+func (st *socketTracker) removeTrackedStoreSubscription(storeName string, key string) {
+	st.subscriptionMutex.Lock()
+	defer st.subscriptionMutex.Unlock()
+
+	keySubs, exists := st.storeSubscriptions[storeName]
+	if !exists || keySubs[key] == 0 {
+		return
+	}
+	keySubs[key]--
+	if keySubs[key] > 0 {
+		return
+	}
+	delete(keySubs, key)
+	if len(keySubs) == 0 {
+		delete(st.storeSubscriptions, storeName)
+	}
+}
+
 // onStoreSubscription is a helper that is called when a store subscription message is received
 func (st *socketTracker) onStoreSubscription(params ...any) {
 	var subMsg StoreSubscriptionMessage
 	if err := mapstructure.Decode(params[0], &subMsg); err != nil {
 		st.log.Errorf("Error parsing store subscription message: %+v", err)
-		st.conn.Disconnect(true)
+		st.disconnect()
 		return
 	}
 
 	if !st.sr.IsStoreValid(subMsg.StoreName) {
 		st.log.Errorf("Client referenced a subscription to an invalid store %s", subMsg.StoreName)
-		st.conn.Disconnect(true)
+		st.disconnect()
 		return
 	}
 
 	switch subMsg.Action {
 	case Subscribe:
 		key := subMsg.Key
+
+		userAccessLevel, err := st.lookupAccessLevel()
+		if err != nil {
+			st.log.Errorf("Error looking up user access level: %+v", err)
+			st.disconnect()
+			return
+		}
+		if err := st.sr.CheckStoreAccess(subMsg.StoreName, userAccessLevel); err != nil {
+			st.log.Errorf("Store subscription denied for %s/%s: %+v", subMsg.StoreName, key, err)
+			st.disconnect()
+			return
+		}
+
 		st.subscriptionMutex.Lock()
 		keySubs := st.storeSubscriptions[subMsg.StoreName]
 		if keySubs == nil {
@@ -287,14 +331,21 @@ func (st *socketTracker) onStoreSubscription(params ...any) {
 			return
 		}
 
-		if err := st.emitSubscriptionCatchup(subMsg.StoreName, key); err != nil {
-			st.log.Errorf("Error sending subscription catchup for %s/%s: %+v", subMsg.StoreName, key, err)
-			st.conn.Disconnect(true)
+		if err := st.sr.ListeningToStoreKey(subMsg.StoreName, key, userAccessLevel); err != nil {
+			st.removeTrackedStoreSubscription(subMsg.StoreName, key)
+			st.log.Errorf("Error ListeningToStoreKey to %s/%s from packet -- possible double subscribe? Reason: %+v", subMsg.StoreName, key, err)
+			st.disconnect()
 			return
 		}
 
-		if err := st.sr.ListeningToStoreKey(subMsg.StoreName, key); err != nil {
-			st.log.Errorf("Error ListeningToStoreKey to %s/%s from packet -- possible double subscribe? Reason: %+v", subMsg.StoreName, key, err)
+		if err := st.emitSubscriptionCatchup(subMsg.StoreName, key, userAccessLevel); err != nil {
+			st.removeTrackedStoreSubscription(subMsg.StoreName, key)
+			if errStop := st.sr.StopListeningToStoreKey(subMsg.StoreName, key); errStop != nil {
+				st.log.Errorf("Error rolling back ListeningToStoreKey for %s/%s: %+v", subMsg.StoreName, key, errStop)
+			}
+			st.log.Errorf("Error sending subscription catchup for %s/%s: %+v", subMsg.StoreName, key, err)
+			st.disconnect()
+			return
 		}
 	case Unsubscribe:
 		key := subMsg.Key
@@ -332,9 +383,9 @@ func (st *socketTracker) onStoreSubscription(params ...any) {
 	}
 }
 
-func (st *socketTracker) emitSubscriptionCatchup(storeName string, key string) error {
+func (st *socketTracker) emitSubscriptionCatchup(storeName string, key string, accessLevel AccessLevel) error {
 	if key != "" {
-		pBytes, exists, err := st.sr.GetSerializedPartialForSubscriptionKey(storeName, key)
+		pBytes, exists, err := st.sr.GetSerializedPartialForSubscriptionKey(storeName, key, accessLevel)
 		if err != nil {
 			return err
 		}
@@ -344,7 +395,7 @@ func (st *socketTracker) emitSubscriptionCatchup(storeName string, key string) e
 		}
 	}
 
-	sBytes, err := st.sr.GetSerializedFullState(storeName)
+	sBytes, err := st.sr.GetSerializedFullState(storeName, accessLevel)
 	if err != nil {
 		return err
 	}
@@ -389,23 +440,23 @@ func (st *socketTracker) EventCallback(eventName string, eventBytes []byte) {
 func (st *socketTracker) onRPCCall(params ...any) {
 	if st.rpch == nil {
 		st.log.Errorf("RPCCall received but no RPCHandlerFunc was provided")
-		st.conn.Disconnect(true)
+		st.disconnect()
 		return
 	}
 
 	var rpcMsg RPCCallMessage
 	if err := mapstructure.Decode(params[0], &rpcMsg); err != nil {
 		st.log.Errorf("Error parsing rpccall message: %+v", err)
-		st.conn.Disconnect(true)
+		st.disconnect()
 		return
 	}
 
 	// Spawn to a goroutine since it might take a while to get a response and we don't want to block the main thread
 	go func() {
-		userAccessLevel, err := st.accessLookup()
+		userAccessLevel, err := st.lookupAccessLevel()
 		if err != nil {
 			st.log.Errorf("Error looking up user access level: %+v", err)
-			st.conn.Disconnect(true)
+			st.disconnect()
 			return
 		}
 
@@ -420,7 +471,7 @@ func (st *socketTracker) onRPCCall(params ...any) {
 			}
 		} else if !handled {
 			st.log.Errorf("Unhandled RPC call: %s", rpcMsg.MethodName)
-			st.conn.Disconnect(true)
+			st.disconnect()
 			return
 		}
 
@@ -442,10 +493,24 @@ func (st *socketTracker) PartialCallback(storeName string, fields [][]any, parti
 		return
 	}
 
+	if st.sr != nil {
+		userAccessLevel, err := st.lookupAccessLevel()
+		if err != nil {
+			st.log.Errorf("Error looking up user access level: %+v", err)
+			st.disconnect()
+			return
+		}
+		if err := st.sr.CheckStoreAccess(storeName, userAccessLevel); err != nil {
+			st.log.Errorf("Store partial update denied for %s: %+v", storeName, err)
+			st.disconnect()
+			return
+		}
+	}
+
 	b, err := SerializeToBytes(filteredPartial, nil)
 	if err != nil {
 		st.log.Warnf("Error serializing store state: %+v", err)
-		st.conn.Disconnect(true)
+		st.disconnect()
 		return
 	}
 

@@ -49,8 +49,8 @@ export class PartialArray<V> {
             ["V", vi!.genericTypes![0]],
         ]);
         const o = new PartialArray<V>();
-        o.dataSets = ReStreamDecoders.deserializeValue(r, this._fieldInfo[0].varInfo.fillGenerics(gm));
-        o.whole = ReStreamDecoders.deserializeValue(r, this._fieldInfo[1].varInfo.fillGenerics(gm));
+        o.dataSets = ReStreamDecoders.deserializeValue(r, this.fieldInfo[0].varInfo.fillGenerics(gm));
+        o.whole = ReStreamDecoders.deserializeValue(r, this.fieldInfo[1].varInfo.fillGenerics(gm));
         return o;
     }
 
@@ -58,14 +58,14 @@ export class PartialArray<V> {
     	const gm = new Map<string,VarInfo>([
             ["V", vi!.genericTypes![0]],
     ]);
-        ReStreamEncoders.serializeValue(this.dataSets, w, PartialArray._fieldInfo[0].varInfo.fillGenerics(gm));
-        ReStreamEncoders.serializeValue(this.whole, w, PartialArray._fieldInfo[1].varInfo.fillGenerics(gm));
+        ReStreamEncoders.serializeValue(this.dataSets, w, PartialArray.fieldInfo[0].varInfo.fillGenerics(gm));
+        ReStreamEncoders.serializeValue(this.whole, w, PartialArray.fieldInfo[1].varInfo.fillGenerics(gm));
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "dataSets", fieldIdx: 0, varInfo: new VarInfoMap(true, new VarInfoPrimitive(SerializationType.Int64, "int"), new VarInfoGenericParam("V"))},
         {name: "whole", fieldIdx: 1, varInfo: new VarInfoArray(false, new VarInfoGenericParam("V"))},
-	];
+    ];
 
     applyTo(por: V[]): (string | number)[][] {
         const ret: (string | number)[][] = [];
@@ -108,9 +108,9 @@ export class PartialMap<K extends string|number, V> {
             ["V", vi!.genericTypes![1]],
         ]);
         const o = new PartialMap<K,V>();
-        o.dataSets = ReStreamDecoders.deserializeValue(r, this._fieldInfo[0].varInfo.fillGenerics(gm));
-        o.dataDeletes = ReStreamDecoders.deserializeValue(r, this._fieldInfo[1].varInfo.fillGenerics(gm));
-        o.whole = ReStreamDecoders.deserializeValue(r, this._fieldInfo[2].varInfo.fillGenerics(gm));
+        o.dataSets = ReStreamDecoders.deserializeValue(r, this.fieldInfo[0].varInfo.fillGenerics(gm));
+        o.dataDeletes = ReStreamDecoders.deserializeValue(r, this.fieldInfo[1].varInfo.fillGenerics(gm));
+        o.whole = ReStreamDecoders.deserializeValue(r, this.fieldInfo[2].varInfo.fillGenerics(gm));
         return o;
     }
 
@@ -119,16 +119,16 @@ export class PartialMap<K extends string|number, V> {
             ["K", vi!.genericTypes![0]],
             ["V", vi!.genericTypes![1]],
     ]);
-        ReStreamEncoders.serializeValue(this.dataSets, w, PartialMap._fieldInfo[0].varInfo.fillGenerics(gm));
-        ReStreamEncoders.serializeValue(this.dataDeletes, w, PartialMap._fieldInfo[1].varInfo.fillGenerics(gm));
-        ReStreamEncoders.serializeValue(this.whole, w, PartialMap._fieldInfo[2].varInfo.fillGenerics(gm));
+        ReStreamEncoders.serializeValue(this.dataSets, w, PartialMap.fieldInfo[0].varInfo.fillGenerics(gm));
+        ReStreamEncoders.serializeValue(this.dataDeletes, w, PartialMap.fieldInfo[1].varInfo.fillGenerics(gm));
+        ReStreamEncoders.serializeValue(this.whole, w, PartialMap.fieldInfo[2].varInfo.fillGenerics(gm));
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "dataSets", fieldIdx: 0, varInfo: new VarInfoMap(true, new VarInfoGenericParam("K"), new VarInfoGenericParam("V"))},
         {name: "dataDeletes", fieldIdx: 1, varInfo: new VarInfoMap(true, new VarInfoGenericParam("K"), undefined)},
         {name: "whole", fieldIdx: 2, varInfo: new VarInfoMap(false, new VarInfoGenericParam("K"), new VarInfoGenericParam("V"))},
-	];
+    ];
 
 	applyTo(por: Map<K, V>): (string | number)[][] {
 		const ret: (string | number)[][] = [];
@@ -180,9 +180,9 @@ export class PartialModArray<V, P extends AppliablePartial<V>|AppliableOnTopPart
             ["P", vi!.genericTypes![1]],
         ]);
         const o = new PartialModArray<V,P>();
-        o.dataSets = ReStreamDecoders.deserializeValue(r, this._fieldInfo[0].varInfo.fillGenerics(gm));
-        o.dataMods = ReStreamDecoders.deserializeValue(r, this._fieldInfo[1].varInfo.fillGenerics(gm));
-        o.whole = ReStreamDecoders.deserializeValue(r, this._fieldInfo[2].varInfo.fillGenerics(gm));
+        o.dataSets = ReStreamDecoders.deserializeValue(r, this.fieldInfo[0].varInfo.fillGenerics(gm));
+        o.dataMods = ReStreamDecoders.deserializeValue(r, this.fieldInfo[1].varInfo.fillGenerics(gm));
+        o.whole = ReStreamDecoders.deserializeValue(r, this.fieldInfo[2].varInfo.fillGenerics(gm));
         return o;
     }
 
@@ -191,16 +191,16 @@ export class PartialModArray<V, P extends AppliablePartial<V>|AppliableOnTopPart
             ["V", vi!.genericTypes![0]],
             ["P", vi!.genericTypes![1]],
     ]);
-        ReStreamEncoders.serializeValue(this.dataSets, w, PartialModArray._fieldInfo[0].varInfo.fillGenerics(gm));
-        ReStreamEncoders.serializeValue(this.dataMods, w, PartialModArray._fieldInfo[1].varInfo.fillGenerics(gm));
-        ReStreamEncoders.serializeValue(this.whole, w, PartialModArray._fieldInfo[2].varInfo.fillGenerics(gm));
+        ReStreamEncoders.serializeValue(this.dataSets, w, PartialModArray.fieldInfo[0].varInfo.fillGenerics(gm));
+        ReStreamEncoders.serializeValue(this.dataMods, w, PartialModArray.fieldInfo[1].varInfo.fillGenerics(gm));
+        ReStreamEncoders.serializeValue(this.whole, w, PartialModArray.fieldInfo[2].varInfo.fillGenerics(gm));
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "dataSets", fieldIdx: 0, varInfo: new VarInfoMap(true, new VarInfoPrimitive(SerializationType.Int64, "int"), new VarInfoGenericParam("V"))},
         {name: "dataMods", fieldIdx: 1, varInfo: new VarInfoMap(true, new VarInfoPrimitive(SerializationType.Int64, "int"), new VarInfoGenericParam("P"))},
         {name: "whole", fieldIdx: 2, varInfo: new VarInfoArray(false, new VarInfoGenericParam("V"))},
-	];
+    ];
 
     applyTo(por: V[]): (string | number)[][] {
         const ret: (string | number)[][] = [];
@@ -264,10 +264,10 @@ export class PartialModMap<K extends string|number, V, P extends AppliablePartia
             ["P", vi!.genericTypes![2]],
         ]);
         const o = new PartialModMap<K,V,P>();
-        o.dataSets = ReStreamDecoders.deserializeValue(r, this._fieldInfo[0].varInfo.fillGenerics(gm));
-        o.dataDeletes = ReStreamDecoders.deserializeValue(r, this._fieldInfo[1].varInfo.fillGenerics(gm));
-        o.dataMods = ReStreamDecoders.deserializeValue(r, this._fieldInfo[2].varInfo.fillGenerics(gm));
-        o.whole = ReStreamDecoders.deserializeValue(r, this._fieldInfo[3].varInfo.fillGenerics(gm));
+        o.dataSets = ReStreamDecoders.deserializeValue(r, this.fieldInfo[0].varInfo.fillGenerics(gm));
+        o.dataDeletes = ReStreamDecoders.deserializeValue(r, this.fieldInfo[1].varInfo.fillGenerics(gm));
+        o.dataMods = ReStreamDecoders.deserializeValue(r, this.fieldInfo[2].varInfo.fillGenerics(gm));
+        o.whole = ReStreamDecoders.deserializeValue(r, this.fieldInfo[3].varInfo.fillGenerics(gm));
         return o;
     }
 
@@ -277,18 +277,18 @@ export class PartialModMap<K extends string|number, V, P extends AppliablePartia
             ["V", vi!.genericTypes![1]],
             ["P", vi!.genericTypes![2]],
     ]);
-        ReStreamEncoders.serializeValue(this.dataSets, w, PartialModMap._fieldInfo[0].varInfo.fillGenerics(gm));
-        ReStreamEncoders.serializeValue(this.dataDeletes, w, PartialModMap._fieldInfo[1].varInfo.fillGenerics(gm));
-        ReStreamEncoders.serializeValue(this.dataMods, w, PartialModMap._fieldInfo[2].varInfo.fillGenerics(gm));
-        ReStreamEncoders.serializeValue(this.whole, w, PartialModMap._fieldInfo[3].varInfo.fillGenerics(gm));
+        ReStreamEncoders.serializeValue(this.dataSets, w, PartialModMap.fieldInfo[0].varInfo.fillGenerics(gm));
+        ReStreamEncoders.serializeValue(this.dataDeletes, w, PartialModMap.fieldInfo[1].varInfo.fillGenerics(gm));
+        ReStreamEncoders.serializeValue(this.dataMods, w, PartialModMap.fieldInfo[2].varInfo.fillGenerics(gm));
+        ReStreamEncoders.serializeValue(this.whole, w, PartialModMap.fieldInfo[3].varInfo.fillGenerics(gm));
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "dataSets", fieldIdx: 0, varInfo: new VarInfoMap(true, new VarInfoGenericParam("K"), new VarInfoGenericParam("V"))},
         {name: "dataDeletes", fieldIdx: 1, varInfo: new VarInfoMap(true, new VarInfoGenericParam("K"), undefined)},
         {name: "dataMods", fieldIdx: 2, varInfo: new VarInfoMap(true, new VarInfoGenericParam("K"), new VarInfoGenericParam("P"))},
         {name: "whole", fieldIdx: 3, varInfo: new VarInfoMap(false, new VarInfoGenericParam("K"), new VarInfoGenericParam("V"))},
-	];
+    ];
 
 	applyTo(por: Map<K, V>): (string | number)[][] {
 		const ret: (string | number)[][] = [];
@@ -353,8 +353,8 @@ export class PartialValue<V, P extends AppliablePartial<V>|AppliableOnTopPartial
             ["P", vi!.genericTypes![1]],
         ]);
         const o = new PartialValue<V,P>();
-        o.whole = ReStreamDecoders.deserializeValue(r, this._fieldInfo[0].varInfo.fillGenerics(gm));
-        o.partial = ReStreamDecoders.deserializeValue(r, this._fieldInfo[1].varInfo.fillGenerics(gm));
+        o.whole = ReStreamDecoders.deserializeValue(r, this.fieldInfo[0].varInfo.fillGenerics(gm));
+        o.partial = ReStreamDecoders.deserializeValue(r, this.fieldInfo[1].varInfo.fillGenerics(gm));
         return o;
     }
 
@@ -363,14 +363,14 @@ export class PartialValue<V, P extends AppliablePartial<V>|AppliableOnTopPartial
             ["V", vi!.genericTypes![0]],
             ["P", vi!.genericTypes![1]],
     ]);
-        ReStreamEncoders.serializeValue(this.whole, w, PartialValue._fieldInfo[0].varInfo.fillGenerics(gm));
-        ReStreamEncoders.serializeValue(this.partial, w, PartialValue._fieldInfo[1].varInfo.fillGenerics(gm));
+        ReStreamEncoders.serializeValue(this.whole, w, PartialValue.fieldInfo[0].varInfo.fillGenerics(gm));
+        ReStreamEncoders.serializeValue(this.partial, w, PartialValue.fieldInfo[1].varInfo.fillGenerics(gm));
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "whole", fieldIdx: 0, varInfo: new VarInfoPointer(false, new VarInfoGenericParam("V"))},
         {name: "partial", fieldIdx: 1, varInfo: new VarInfoPointer(false, new VarInfoGenericParam("P"))},
-	];
+    ];
 
     applyOnTop(por: V): [V, (string | number)[][]] {
         const ret: [V, (string | number)[][]] = [por, []];

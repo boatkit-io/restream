@@ -41,22 +41,22 @@ export class BoardStoreState {
 
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
         const wi = new BinaryWriter();
-        ReStreamEncoders.serializeField(this.board, BoardStoreState._fieldInfo[0], wi);
-        ReStreamEncoders.serializeField(this.xTurn, BoardStoreState._fieldInfo[1], wi);
+        ReStreamEncoders.serializeField(this.board, BoardStoreState.fieldInfo[0], wi);
+        ReStreamEncoders.serializeField(this.xTurn, BoardStoreState.fieldInfo[1], wi);
         const b = wi.getBytes();
         ReStreamEncoders.serializePackedInt(b.length, w);
         w.writeBytes(b);
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "Board", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoArray(false, new VarInfoArray(false, new VarInfoPrimitive(SerializationType.String)))},
         {name: "XTurn", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPrimitive(SerializationType.Bool)},
-	];
+    ];
 
-	private static _fieldMap = new Map<number,FieldInfo>([
-        [1, this._fieldInfo[0]],
-        [2, this._fieldInfo[1]],
-	]);
+    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+        [1, this.fieldInfo[0]],
+        [2, this.fieldInfo[1]],
+    ]);
 }
 
 export class BoardStoreStatePartial {
@@ -89,22 +89,22 @@ export class BoardStoreStatePartial {
 
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
         const wi = new BinaryWriter();
-        ReStreamEncoders.serializeField(this.board, BoardStoreStatePartial._fieldInfo[0], wi);
-        ReStreamEncoders.serializeField(this.xTurn, BoardStoreStatePartial._fieldInfo[1], wi);
+        ReStreamEncoders.serializeField(this.board, BoardStoreStatePartial.fieldInfo[0], wi);
+        ReStreamEncoders.serializeField(this.xTurn, BoardStoreStatePartial.fieldInfo[1], wi);
         const b = wi.getBytes();
         ReStreamEncoders.serializePackedInt(b.length, w);
         w.writeBytes(b);
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "Board", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialArray", "restream", PartialArray, undefined, [new VarInfoArray(false, new VarInfoPrimitive(SerializationType.String))]))},
         {name: "XTurn", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Bool))},
-	];
+    ];
 
-	private static _fieldMap = new Map<number,FieldInfo>([
-        [1, this._fieldInfo[0]],
-        [2, this._fieldInfo[1]],
-	]);
+    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+        [1, this.fieldInfo[0]],
+        [2, this.fieldInfo[1]],
+    ]);
 
     applyTo(por: BoardStoreState): (string | number)[][] {
         const ret: (string | number)[][] = [];
@@ -129,20 +129,20 @@ export class PlaceTokenRequest extends RPCStruct<PlaceTokenResponse,void> {
         return o;
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "X", fieldIdx: 0, varInfo: new VarInfoPrimitive(SerializationType.Int64, "int")},
         {name: "Y", fieldIdx: 1, varInfo: new VarInfoPrimitive(SerializationType.Int64, "int")},
-	];
+    ];
     public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
         const o = new PlaceTokenRequest();
-        o.x = ReStreamDecoders.deserializeValue(r, this._fieldInfo[0].varInfo);
-        o.y = ReStreamDecoders.deserializeValue(r, this._fieldInfo[1].varInfo);
+        o.x = ReStreamDecoders.deserializeValue(r, this.fieldInfo[0].varInfo);
+        o.y = ReStreamDecoders.deserializeValue(r, this.fieldInfo[1].varInfo);
         return o;
     }
 
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
-        ReStreamEncoders.serializeValue(this.x, w, PlaceTokenRequest._fieldInfo[0].varInfo);
-        ReStreamEncoders.serializeValue(this.y, w, PlaceTokenRequest._fieldInfo[1].varInfo);
+        ReStreamEncoders.serializeValue(this.x, w, PlaceTokenRequest.fieldInfo[0].varInfo);
+        ReStreamEncoders.serializeValue(this.y, w, PlaceTokenRequest.fieldInfo[1].varInfo);
     }
 }
 
@@ -161,17 +161,17 @@ export class PlaceTokenResponse {
 
     public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
         const o = new PlaceTokenResponse();
-        o.error = ReStreamDecoders.deserializeValue(r, this._fieldInfo[0].varInfo);
+        o.error = ReStreamDecoders.deserializeValue(r, this.fieldInfo[0].varInfo);
         return o;
     }
 
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
-        ReStreamEncoders.serializeValue(this.error, w, PlaceTokenResponse._fieldInfo[0].varInfo);
+        ReStreamEncoders.serializeValue(this.error, w, PlaceTokenResponse.fieldInfo[0].varInfo);
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "Error", fieldIdx: 0, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.String))},
-	];
+    ];
 }
 
 export class ServerTimeEvent extends EventStruct {
@@ -188,17 +188,17 @@ export class ServerTimeEvent extends EventStruct {
         return o;
     }
 
-	private static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {name: "CurrentTime", fieldIdx: 0, varInfo: new VarInfoPrimitive(SerializationType.Time)},
-	];
+    ];
     public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
         const o = new ServerTimeEvent();
-        o.currentTime = ReStreamDecoders.deserializeValue(r, this._fieldInfo[0].varInfo);
+        o.currentTime = ReStreamDecoders.deserializeValue(r, this.fieldInfo[0].varInfo);
         return o;
     }
 
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
-        ReStreamEncoders.serializeValue(this.currentTime, w, ServerTimeEvent._fieldInfo[0].varInfo);
+        ReStreamEncoders.serializeValue(this.currentTime, w, ServerTimeEvent.fieldInfo[0].varInfo);
     }
 }
 

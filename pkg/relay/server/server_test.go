@@ -24,7 +24,7 @@ func TestServerAcceptConnAuthenticatesAndDispatchesPackets(t *testing.T) {
 				t.Fatalf("store factory deviceID = %q, want device-1", deviceID)
 			}
 			return []restream.Store{
-				restream.NewRelayStore[testState, *testState, *testPartial]("TestStore", &testState{}),
+				restream.NewRelayStore[testState, *testState, *testPartial]("TestStore", &testState{}, restream.AccessLevelPublic),
 			}, nil
 		},
 		OnDeviceConnected: func(_ *Device, conn *Connection) {
@@ -210,7 +210,7 @@ func TestServerAcceptConnReplaysActiveStoreSubscriptions(t *testing.T) {
 	manager := NewDeviceManager(DeviceManagerConfig{
 		Stores: func(string) ([]restream.Store, error) {
 			return []restream.Store{
-				restream.NewRelayStore[testState, *testState, *testPartial]("TestStore", &testState{}),
+				restream.NewRelayStore[testState, *testState, *testPartial]("TestStore", &testState{}, restream.AccessLevelPublic),
 			}, nil
 		},
 	})
@@ -218,7 +218,7 @@ func TestServerAcceptConnReplaysActiveStoreSubscriptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetDevice failed: %v", err)
 	}
-	if err := device.StoreRegistry.ListeningToStoreKey("TestStore", "values%&a"); err != nil {
+	if err := device.StoreRegistry.ListeningToStoreKey("TestStore", "values%&a", restream.AccessLevelPublic); err != nil {
 		t.Fatalf("ListeningToStoreKey failed: %v", err)
 	}
 
@@ -285,7 +285,7 @@ func TestCloudStoreSubscriptionForwardsToConnectedDevice(t *testing.T) {
 	manager := NewDeviceManager(DeviceManagerConfig{
 		Stores: func(string) ([]restream.Store, error) {
 			return []restream.Store{
-				restream.NewRelayStore[testState, *testState, *testPartial]("TestStore", &testState{}),
+				restream.NewRelayStore[testState, *testState, *testPartial]("TestStore", &testState{}, restream.AccessLevelPublic),
 			}, nil
 		},
 	})
@@ -298,7 +298,7 @@ func TestCloudStoreSubscriptionForwardsToConnectedDevice(t *testing.T) {
 	defer cleanup()
 
 	device.DeviceConnected(NewConnection(serverConn))
-	if err := device.StoreRegistry.ListeningToStoreKey("TestStore", "values%&a"); err != nil {
+	if err := device.StoreRegistry.ListeningToStoreKey("TestStore", "values%&a", restream.AccessLevelPublic); err != nil {
 		t.Fatalf("ListeningToStoreKey failed: %v", err)
 	}
 
@@ -338,7 +338,7 @@ func TestCloudWholeStoreSubscriptionForwardsToConnectedDevice(t *testing.T) {
 	manager := NewDeviceManager(DeviceManagerConfig{
 		Stores: func(string) ([]restream.Store, error) {
 			return []restream.Store{
-				restream.NewRelayStore[testState, *testState, *testPartial]("TestStore", &testState{}),
+				restream.NewRelayStore[testState, *testState, *testPartial]("TestStore", &testState{}, restream.AccessLevelPublic),
 			}, nil
 		},
 	})
@@ -351,7 +351,7 @@ func TestCloudWholeStoreSubscriptionForwardsToConnectedDevice(t *testing.T) {
 	defer cleanup()
 
 	device.DeviceConnected(NewConnection(serverConn))
-	if err := device.StoreRegistry.ListeningToStore("TestStore"); err != nil {
+	if err := device.StoreRegistry.ListeningToStore("TestStore", restream.AccessLevelPublic); err != nil {
 		t.Fatalf("ListeningToStore failed: %v", err)
 	}
 

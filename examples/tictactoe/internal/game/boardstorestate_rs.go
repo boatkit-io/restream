@@ -130,6 +130,55 @@ func (s *BoardStoreStatePartial) FilterToFields(fields [][]any) (restream.Partia
 	return ret, included
 }
 
+// PartialForFields returns a snapshot partial containing the requested field paths
+func (s *BoardStoreState) PartialForFields(fields [][]any) (restream.Partial, bool) {
+	fields = restream.ReduceFieldPaths(fields)
+	ret := &BoardStoreStatePartial{}
+	included := false
+	if partial, ok := s.partialForFieldsBoard(restream.ChildFieldsForField(fields, "Board")); ok {
+		ret.Board = partial
+		included = true
+	}
+	if partial, ok := s.partialForFieldsXTurn(restream.ChildFieldsForField(fields, "XTurn")); ok {
+		ret.XTurn = partial
+		included = true
+	}
+	return ret, included
+}
+
+func (s *BoardStoreState) partialForFieldsBoard(fields [][]any) (*restream.PartialArray[[]string], bool) {
+	if len(fields) == 0 {
+		return nil, false
+	}
+	ret := restream.NewPartialArray[[]string]()
+	included := false
+	for _, field := range fields {
+		if len(field) == 0 {
+			return ret.SetWhole(s.Board), true
+		}
+		index, ok := restream.FieldPathPartToIndex(field[0])
+		if !ok || index < 0 || index >= len(s.Board) {
+			continue
+		}
+		value := s.Board[index]
+		ret.Set(index, value)
+		included = true
+	}
+	return ret, included
+}
+
+func (s *BoardStoreState) partialForFieldsXTurn(fields [][]any) (*bool, bool) {
+	if len(fields) == 0 {
+		return nil, false
+	}
+	for _, field := range fields {
+		if len(field) == 0 {
+			return restream.Ptr(s.XTurn), true
+		}
+	}
+	return nil, false
+}
+
 // BoardStoreStatePartialFieldInfo is the static field info for the BoardStoreStatePartial struct
 var BoardStoreStatePartialFieldInfo = []restream.FieldInfo{
 	{Name: "Board", FieldIdx: 0, FieldID: 1, VarInfo: &restream.VarInfoPointer{NotNil: false, SubType: &restream.VarInfoStruct{Name: "PartialArray", Package: "restream", GenericTypes: []restream.VarInfo{&restream.VarInfoArray{NotNil: false, ElemType: &restream.VarInfoPrimitive{DataType: restream.SerializationTypeString}}}}}},

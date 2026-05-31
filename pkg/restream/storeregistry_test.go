@@ -10,7 +10,8 @@ import (
 )
 
 type registryTestStore struct {
-	data *registryTestStoreData
+	data               *registryTestStoreData
+	minimumAccessLevel AccessLevel
 
 	storeStarted int
 	storeEnded   int
@@ -30,6 +31,10 @@ func (s *registryTestStore) GetName() string {
 
 func (s *registryTestStore) GetStoreData() StoreDataBase {
 	return s.data
+}
+
+func (s *registryTestStore) GetMinimumAccessLevel() AccessLevel {
+	return s.minimumAccessLevel
 }
 
 func (s *registryTestStore) SubscribeToField([]any, any) {
@@ -76,6 +81,10 @@ func (d *registryTestStoreData) GetSerializedFullState() ([]byte, error) {
 	return []byte{1, 2, 3}, nil
 }
 
+func (d *registryTestStoreData) GetSerializedPartialForSubscriptionKey(string) ([]byte, bool, error) {
+	return []byte{4, 5, 6}, true, nil
+}
+
 func TestStoreRegistryRefCountsDuplicateKeySubscriptions(t *testing.T) {
 	store := newRegistryTestStore()
 	registry, err := NewStoreRegistry([]Store{store})
@@ -83,9 +92,9 @@ func TestStoreRegistryRefCountsDuplicateKeySubscriptions(t *testing.T) {
 		t.Fatalf("NewStoreRegistry failed: %v", err)
 	}
 
-	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "values%&a"))
-	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "values%&a"))
-	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "values%&b"))
+	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "values%&a", AccessLevelPublic))
+	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "values%&a", AccessLevelPublic))
+	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "values%&b", AccessLevelPublic))
 
 	info := registry.storeMap[store.GetName()]
 	assertEqual(t, 3, info.ActiveSubCount)
@@ -127,8 +136,8 @@ func TestStoreRegistryRefCountsWholeStoreSubscriptions(t *testing.T) {
 		t.Fatalf("NewStoreRegistry failed: %v", err)
 	}
 
-	mustNoError(t, registry.ListeningToStore(store.GetName()))
-	mustNoError(t, registry.ListeningToStore(store.GetName()))
+	mustNoError(t, registry.ListeningToStore(store.GetName(), AccessLevelPublic))
+	mustNoError(t, registry.ListeningToStore(store.GetName(), AccessLevelPublic))
 
 	info := registry.storeMap[store.GetName()]
 	assertEqual(t, 2, info.ActiveSubCount)
@@ -170,7 +179,7 @@ func TestStoreRegistryConcurrentKeySubscriptionUpdates(t *testing.T) {
 			<-start
 			for idx := range iterations {
 				key := fmt.Sprintf("values%%&%d", (worker+idx)%13)
-				if err := registry.ListeningToStoreKey(store.GetName(), key); err != nil {
+				if err := registry.ListeningToStoreKey(store.GetName(), key, AccessLevelPublic); err != nil {
 					errCh <- err
 					return
 				}
@@ -194,6 +203,75 @@ func TestStoreRegistryConcurrentKeySubscriptionUpdates(t *testing.T) {
 	assertEqual(t, 0, len(info.ActiveKeySubCount))
 	assertEqual(t, store.storeStarted, store.storeEnded)
 	assertEqual(t, len(store.keyStarted), len(store.keyEnded))
+}
+
+func TestStoreRegistryRejectsInsufficientAccessForFullState(t *testing.T) {
+	store := newRegistryTestStore()
+	store.minimumAccessLevel = AccessLevel(2)
+	registry, err := NewStoreRegistry([]Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+
+	_, err = registry.GetSerializedFullState(store.GetName(), AccessLevel(1))
+	if !errors.Is(err, ErrInsufficientStoreAccess) {
+		t.Fatalf("GetSerializedFullState error = %v, want ErrInsufficientStoreAccess", err)
+	}
+
+	stateBytes, err := registry.GetSerializedFullState(store.GetName(), AccessLevel(2))
+	if err != nil {
+		t.Fatalf("GetSerializedFullState with enough access failed: %v", err)
+	}
+	assertEqualSlices(t, []byte{1, 2, 3}, stateBytes)
+}
+
+func TestStoreRegistryRejectsInsufficientAccessForSubscription(t *testing.T) {
+	store := newRegistryTestStore()
+	store.minimumAccessLevel = AccessLevel(2)
+	registry, err := NewStoreRegistry([]Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+
+	err = registry.ListeningToStoreKey(store.GetName(), "values%&a", AccessLevel(1))
+	if !errors.Is(err, ErrInsufficientStoreAccess) {
+		t.Fatalf("ListeningToStoreKey error = %v, want ErrInsufficientStoreAccess", err)
+	}
+
+	info := registry.storeMap[store.GetName()]
+	assertEqual(t, 0, info.ActiveSubCount)
+	assertEqual(t, 0, len(info.ActiveKeySubCount))
+	assertEqual(t, 0, store.storeStarted)
+	assertEqualSlices(t, nil, store.keyStarted)
+
+	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "values%&a", AccessLevel(2)))
+	assertEqual(t, 1, info.ActiveSubCount)
+	assertEqual(t, 1, info.ActiveKeySubCount["values%&a"])
+	assertEqual(t, 1, store.storeStarted)
+	assertEqualSlices(t, []string{"values%&a"}, store.keyStarted)
+}
+
+func TestStoreRegistryRejectsInsufficientAccessForKeyedPartialFetch(t *testing.T) {
+	store := newRegistryTestStore()
+	store.minimumAccessLevel = AccessLevel(2)
+	registry, err := NewStoreRegistry([]Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+
+	_, _, err = registry.GetSerializedPartialForSubscriptionKey(store.GetName(), "values%&a", AccessLevel(1))
+	if !errors.Is(err, ErrInsufficientStoreAccess) {
+		t.Fatalf("GetSerializedPartialForSubscriptionKey error = %v, want ErrInsufficientStoreAccess", err)
+	}
+
+	partialBytes, exists, err := registry.GetSerializedPartialForSubscriptionKey(store.GetName(), "values%&a", AccessLevel(2))
+	if err != nil {
+		t.Fatalf("GetSerializedPartialForSubscriptionKey with enough access failed: %v", err)
+	}
+	if !exists {
+		t.Fatal("expected keyed partial to exist")
+	}
+	assertEqualSlices(t, []byte{4, 5, 6}, partialBytes)
 }
 
 func mustNoError(t *testing.T, err error) {

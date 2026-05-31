@@ -1,9 +1,11 @@
 package restream
 
 import (
+	"io"
 	"testing"
 
 	"github.com/boatkit-io/restream/pkg/binarystreams"
+	"github.com/sirupsen/logrus"
 )
 
 type viewerSocketTestState struct {
@@ -325,7 +327,7 @@ func TestViewerSocketKeyedCatchupUsesRelayStorePartial(t *testing.T) {
 			sourceKey: 10,
 			otherKey:  20,
 		},
-	})
+	}, AccessLevelPublic)
 	registry, err := NewStoreRegistry([]Store{store})
 	if err != nil {
 		t.Fatalf("NewStoreRegistry failed: %v", err)
@@ -365,6 +367,50 @@ func TestViewerSocketKeyedCatchupUsesRelayStorePartial(t *testing.T) {
 
 	if _, subscribed := socket.storeSubscriptions[viewerSocketTestStoreName]["values%&"+sourceKey]; !subscribed {
 		t.Fatalf("expected socket to track keyed subscription for %s", sourceKey)
+	}
+}
+
+func TestViewerSocketRejectsSubscriptionBelowStoreMinimumAccess(t *testing.T) {
+	store := NewRelayStore[
+		viewerSocketTestState,
+		*viewerSocketTestState,
+		*viewerSocketTestPartial,
+	](viewerSocketTestStoreName, &viewerSocketTestState{
+		Values: map[string]int{"a": 10},
+	}, AccessLevel(2))
+	registry, err := NewStoreRegistry([]Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	log := logrus.New()
+	log.SetOutput(io.Discard)
+	socket := &socketTracker{
+		log:                log,
+		sr:                 registry,
+		emitQueue:          make(chan emitMessage, 1),
+		storeSubscriptions: map[string]map[string]int{},
+		accessLookup: func() (AccessLevel, error) {
+			return AccessLevel(1), nil
+		},
+	}
+
+	socket.onStoreSubscription(StoreSubscriptionMessage{
+		StoreName: viewerSocketTestStoreName,
+		Action:    Subscribe,
+		Key:       "values%&a",
+	})
+
+	select {
+	case emitted := <-socket.emitQueue:
+		t.Fatalf("unexpected store update for denied subscription: %#v", emitted)
+	default:
+	}
+	if _, subscribed := socket.storeSubscriptions[viewerSocketTestStoreName]; subscribed {
+		t.Fatalf("denied subscription should not be tracked: %#v", socket.storeSubscriptions)
+	}
+	info := registry.storeMap[viewerSocketTestStoreName]
+	if info.ActiveSubCount != 0 {
+		t.Fatalf("denied subscription incremented registry count to %d", info.ActiveSubCount)
 	}
 }
 
