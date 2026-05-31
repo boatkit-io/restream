@@ -6,7 +6,7 @@ import {
 } from "./SerializationTypes.js";
 import { SerializationType } from "./SerializationTypes.js";
 
-export function decodeFieldMap(r: BinaryReader, fieldMap: Map<number, FieldInfo>): Map<number, unknown> {
+export function decodeFieldMap(r: BinaryReader, fieldMap: ReadonlyMap<number, FieldInfo>): Map<number, unknown> {
     const ret = new Map<number, unknown>();
     while (!r.isEOF()) {
         const fieldID = r.readByte();

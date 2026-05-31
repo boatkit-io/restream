@@ -49,7 +49,7 @@ interface GeneratedDevicePGNState {
 }
 
 class GeneratedDevicePGN {
-    static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         { name: "RxCount", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPrimitive(SerializationType.Uint64, "uint") },
     ];
 
@@ -69,7 +69,7 @@ class GeneratedTriggerStoreSpecPartial implements PartialFor<GeneratedTriggerSto
 }
 
 class GeneratedTriggerStoreSpecStateType {
-    static _fieldInfo: FieldInfo[] = [
+    public static readonly fieldInfo: readonly FieldInfo[] = [
         {
             name: "DevicePGNs",
             fieldIdx: 0,

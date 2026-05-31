@@ -30,6 +30,7 @@ export interface Serializable {
 
 export interface Deserializable<T = unknown> {
     deserialized: (r: BinaryReader, vi: VarInfoStruct | undefined) => T;
+    readonly fieldInfo?: readonly FieldInfo[];
 }
 
 export interface AppliablePartial<V> {
@@ -61,8 +62,8 @@ export class VarInfoDynamic implements VarInfo {
 
 export class VarInfoPrimitive implements VarInfo {
     constructor(
-        public dataType: SerializationType,
-        public mappedType?: string,
+        public readonly dataType: SerializationType,
+        public readonly mappedType?: string,
     ) { }
 
     getSerializationData(): Uint8Array {
@@ -76,8 +77,8 @@ export class VarInfoPrimitive implements VarInfo {
 
 export class VarInfoPointer implements VarInfo {
     constructor(
-        public notNil: boolean,
-        public subType: VarInfo,
+        public readonly notNil: boolean,
+        public readonly subType: VarInfo,
     ) { }
 
     getSerializationData(): Uint8Array {
@@ -95,8 +96,8 @@ export class VarInfoPointer implements VarInfo {
 
 export class VarInfoArray implements VarInfo {
     constructor(
-        public notNil: boolean,
-        public elemType: VarInfo,
+        public readonly notNil: boolean,
+        public readonly elemType: VarInfo,
     ) { }
 
     getSerializationData(): Uint8Array {
@@ -114,9 +115,9 @@ export class VarInfoArray implements VarInfo {
 
 export class VarInfoMap implements VarInfo {
     constructor(
-        public notNil: boolean,
-        public keyType: VarInfo,
-        public elemType: VarInfo | undefined,
+        public readonly notNil: boolean,
+        public readonly keyType: VarInfo,
+        public readonly elemType: VarInfo | undefined,
     ) { }
 
     getSerializationData(): Uint8Array {
@@ -137,11 +138,11 @@ export class VarInfoMap implements VarInfo {
 
 export class VarInfoStruct implements VarInfo {
     constructor(
-        public name: string,
-        public packageName: string,
-        public deserializer?: Deserializable,
-        public fieldList?: FieldInfo[],
-        public genericTypes?: VarInfo[],
+        public readonly name: string,
+        public readonly packageName: string,
+        public readonly deserializer?: Deserializable,
+        public readonly fieldList?: readonly FieldInfo[],
+        public readonly genericTypes?: readonly VarInfo[],
     ) { }
 
     getSerializationData(): Uint8Array {
@@ -155,7 +156,7 @@ export class VarInfoStruct implements VarInfo {
 
 export class VarInfoGenericParam implements VarInfo {
     constructor(
-        public name: string,
+        public readonly name: string,
     ) { }
 
     getSerializationData(): Uint8Array {
@@ -300,8 +301,8 @@ export function varInfoFromObj(obj: unknown): VarInfo {
 }
 
 export interface FieldInfo {
-    name: string;
-    fieldIdx: number;
-    fieldID?: number;
-    varInfo: VarInfo;
+    readonly name: string;
+    readonly fieldIdx: number;
+    readonly fieldID?: number;
+    readonly varInfo: VarInfo;
 }

@@ -100,22 +100,22 @@ func (ft *FileTracking) documentTSSamePackageTypeDeps(vi restream.VarInfo, deps 
 func genTSFieldInfo(fields []*restream.FieldInfo) string {
 	out := ""
 	if len(fields) > 0 {
-		out += "	private static _fieldInfo: FieldInfo[] = [\n"
+		out += "    public static readonly fieldInfo: readonly FieldInfo[] = [\n"
 		for _, fi := range fields {
 			out += "        " + fi.ToTSString() + ",\n"
 		}
-		out += "	];\n"
+		out += "    ];\n"
 	}
 
 	if lo.SomeBy(fields, func(fi *restream.FieldInfo) bool { return fi.FieldID != 0 }) {
 		if out != "" {
 			out += "\n"
 		}
-		out += "	private static _fieldMap = new Map<number,FieldInfo>([\n"
+		out += "    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([\n"
 		for idx, fi := range fields {
-			out += fmt.Sprintf("        [%d, this._fieldInfo[%d]],\n", fi.FieldID, idx)
+			out += fmt.Sprintf("        [%d, this.fieldInfo[%d]],\n", fi.FieldID, idx)
 		}
-		out += "	]);\n"
+		out += "    ]);\n"
 	}
 
 	return out
@@ -159,7 +159,7 @@ func (ft *FileTracking) genTSClass(si StructInfo, fields []*restream.FieldInfo, 
 		out += "        const wi = new BinaryWriter();\n"
 
 		for idx, fi := range fields {
-			out += fmt.Sprintf("        ReStreamEncoders.serializeField(this.%s, %s._fieldInfo[%d], wi);\n",
+			out += fmt.Sprintf("        ReStreamEncoders.serializeField(this.%s, %s.fieldInfo[%d], wi);\n",
 				getTSFieldName(fi), si.Name, idx)
 		}
 		out += "        const b = wi.getBytes();\n"
@@ -274,10 +274,10 @@ func (ft *FileTracking) genTSNonFieldedStructSerializers(si StructInfo, fields [
 	out += fmt.Sprintf("        const o = new %s();\n", si.TSNameWithParams())
 	for idx, fi := range fields {
 		if si.GenericParams != nil {
-			out += fmt.Sprintf("        o.%s = ReStreamDecoders.deserializeValue(r, this._fieldInfo[%d].varInfo.fillGenerics(gm));\n",
+			out += fmt.Sprintf("        o.%s = ReStreamDecoders.deserializeValue(r, this.fieldInfo[%d].varInfo.fillGenerics(gm));\n",
 				getTSFieldName(fi), idx)
 		} else {
-			out += fmt.Sprintf("        o.%s = ReStreamDecoders.deserializeValue(r, this._fieldInfo[%d].varInfo);\n", getTSFieldName(fi), idx)
+			out += fmt.Sprintf("        o.%s = ReStreamDecoders.deserializeValue(r, this.fieldInfo[%d].varInfo);\n", getTSFieldName(fi), idx)
 		}
 	}
 	out += "        return o;\n"
@@ -300,10 +300,10 @@ func (ft *FileTracking) genTSNonFieldedStructSerializers(si StructInfo, fields [
 
 	for idx, fi := range fields {
 		if si.GenericParams != nil {
-			out += fmt.Sprintf("        ReStreamEncoders.serializeValue(this.%s, w, %s._fieldInfo[%d].varInfo.fillGenerics(gm));\n",
+			out += fmt.Sprintf("        ReStreamEncoders.serializeValue(this.%s, w, %s.fieldInfo[%d].varInfo.fillGenerics(gm));\n",
 				getTSFieldName(fi), si.Name, idx)
 		} else {
-			out += fmt.Sprintf("        ReStreamEncoders.serializeValue(this.%s, w, %s._fieldInfo[%d].varInfo);\n",
+			out += fmt.Sprintf("        ReStreamEncoders.serializeValue(this.%s, w, %s.fieldInfo[%d].varInfo);\n",
 				getTSFieldName(fi), si.Name, idx)
 		}
 	}

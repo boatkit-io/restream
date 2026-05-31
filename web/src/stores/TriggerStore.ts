@@ -20,7 +20,7 @@ const compoundKeyJoinerString = "%&";
 type GeneratedStateType<S extends object> = {
     fromValues: () => S;
     deserialized: (r: BinaryReader) => S;
-    _fieldInfo?: FieldInfo[];
+    readonly fieldInfo?: readonly FieldInfo[];
 };
 
 declare global {
@@ -169,7 +169,7 @@ export default abstract class TriggerStore<S extends object> extends StoreBase {
     }
 
     private _canonicalFieldKey(field: (string | number)[]): string {
-        return formCompoundKey(...canonicalFieldPath(field, this._stateType._fieldInfo));
+        return formCompoundKey(...canonicalFieldPath(field, this._stateType.fieldInfo));
     }
 
     private _hasActiveSubscriptionForCanonicalKey(wireKey: string): boolean {
@@ -200,7 +200,7 @@ function subscriptionKeyAffectsField(fieldKey: string, subscriptionKey: string):
     return true;
 }
 
-function canonicalFieldPath(field: (string | number)[], rootFields: FieldInfo[] | undefined): (string | number)[] {
+function canonicalFieldPath(field: (string | number)[], rootFields: readonly FieldInfo[] | undefined): (string | number)[] {
     const ret: (string | number)[] = [];
     let fields = rootFields;
     let valueInfo: VarInfo | undefined;
@@ -259,12 +259,12 @@ function clientFieldName(name: string): string {
     return name[0].toLowerCase() + name.slice(1);
 }
 
-function fieldsForValue(vi: VarInfo | undefined): FieldInfo[] | undefined {
+function fieldsForValue(vi: VarInfo | undefined): readonly FieldInfo[] | undefined {
     const unwrapped = unwrapPointer(vi);
     if (!(unwrapped instanceof VarInfoStruct)) {
         return undefined;
     }
-    return (unwrapped.deserializer as { _fieldInfo?: FieldInfo[] } | undefined)?._fieldInfo;
+    return unwrapped.deserializer?.fieldInfo;
 }
 
 function unwrapPointer(vi: VarInfo | undefined): VarInfo | undefined {

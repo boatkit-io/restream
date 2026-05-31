@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/boatkit-io/restream/pkg/restream"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -271,7 +272,7 @@ func TestStoreAnnotationGeneratesStoreBoilerplate(t *testing.T) {
 
 	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/storeannotation
 
-go 1.26.2
+go 1.26.3
 
 require github.com/boatkit-io/restream v0.0.0
 
@@ -282,9 +283,19 @@ replace github.com/boatkit-io/restream => `+repoRoot+`
 
 	if err := os.WriteFile(filepath.Join(serverDir, "boardstore.go"), []byte(`package main
 
+import "github.com/boatkit-io/restream/pkg/restream"
+
+type AccessLevel = restream.AccessLevel
+
+const AccessLevelAdmin AccessLevel = 2
+
 // @restream.store(BoardStore)
 type BoardStore struct {
 	storeData any
+}
+
+func (*BoardStore) GetMinimumAccessLevel() restream.AccessLevel {
+	return AccessLevelAdmin
 }
 `), 0644); err != nil {
 		t.Fatal(err)
@@ -300,6 +311,9 @@ type BoardStore struct {
 		if err := ft.Run(); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := pt.Run(); err != nil {
+		t.Fatal(err)
 	}
 
 	out, err := os.ReadFile(filepath.Join(serverDir, "boardstore_rs.go"))
@@ -350,6 +364,104 @@ type BoardStore struct {
 	}
 	if !foundTSConst {
 		t.Fatalf("store annotation did not generate TypeScript store name const")
+	}
+
+	relayOut, err := os.ReadFile(filepath.Join(serverDir, "relaystores_rs.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	relayGenerated := string(relayOut)
+	for _, expected := range []string{
+		"func NewRelayStores() []restream.Store",
+		"restream.NewRelayStore[BoardStoreState, *BoardStoreState, *BoardStoreStatePartial]",
+		"BoardStoreName",
+		"restream.AccessLevel(2)",
+	} {
+		if !strings.Contains(relayGenerated, expected) {
+			t.Fatalf("generated relay store factory missing expected %q:\n%s", expected, relayGenerated)
+		}
+	}
+}
+
+func TestStoreAnnotationRelayFactoryResolvesImportedMinimumAccessConstant(t *testing.T) {
+	repoRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	projectDir := t.TempDir()
+	serverDir := filepath.Join(projectDir, "cmd", "server")
+	authDir := filepath.Join(projectDir, "internal", "auth")
+	for _, dir := range []string{serverDir, authDir} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/importedaccess
+
+go 1.26.3
+
+require github.com/boatkit-io/restream v0.0.0
+
+replace github.com/boatkit-io/restream => `+repoRoot+`
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(authDir, "access.go"), []byte(`package auth
+
+type AccessLevel int
+
+const AccessLevelAdmin AccessLevel = 7
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(serverDir, "boardstore.go"), []byte(`package main
+
+import (
+	"example.com/importedaccess/internal/auth"
+	"github.com/boatkit-io/restream/pkg/restream"
+)
+
+// @restream.store(BoardStore)
+type BoardStore struct {
+	storeData any
+}
+
+func (*BoardStore) GetMinimumAccessLevel() restream.AccessLevel {
+	return restream.AccessLevel(auth.AccessLevelAdmin)
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	pt := NewProjTracking(projectDir, &restreamConfig{
+		InputDirs: []string{"cmd/server"},
+	})
+	if err := pt.parseProject(); err != nil {
+		t.Fatal(err)
+	}
+	for _, ft := range pt.files {
+		if err := ft.Run(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := pt.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	relayOut, err := os.ReadFile(filepath.Join(serverDir, "relaystores_rs.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	relayGenerated := string(relayOut)
+	if !strings.Contains(relayGenerated, "restream.AccessLevel(7)") {
+		t.Fatalf("generated relay store factory did not resolve imported access constant:\n%s", relayGenerated)
+	}
+	if strings.Contains(relayGenerated, "AccessLevelAdmin") || strings.Contains(relayGenerated, "importedaccess/internal/auth") {
+		t.Fatalf("generated relay store factory should hardcode resolved access value without importing caller auth package:\n%s", relayGenerated)
 	}
 }
 
@@ -510,6 +622,9 @@ func (*BoardStoreStatePartial) ApplyTo(any) [][]any { return nil }
 			t.Fatal(err)
 		}
 	}
+	if err := pt.Run(); err != nil {
+		t.Fatal(err)
+	}
 
 	storeOut, err := os.ReadFile(storeSourcePath)
 	if err != nil {
@@ -549,6 +664,13 @@ func (*BoardStoreStatePartial) ApplyTo(any) [][]any { return nil }
 	}
 	if !strings.Contains(string(storeGenerated), `const BoardStoreName = "BoardStore"`) {
 		t.Fatalf("generated store source missing BoardStoreName:\n%s", string(storeGenerated))
+	}
+	relayGenerated, err := os.ReadFile(filepath.Join(storeImplsDir, "relaystores_rs.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(relayGenerated), "restream.NewRelayStore[storestates.BoardStoreState, *storestates.BoardStoreState, *storestates.BoardStoreStatePartial]") {
+		t.Fatalf("generated relay store source missing cross-package state type:\n%s", string(relayGenerated))
 	}
 
 	stateGenerated, err := os.ReadFile(filepath.Join(storeStatesDir, "boardstorestate_rs.go"))
@@ -940,7 +1062,7 @@ func TestWriteTSFileFiltersUnusedRuntimeImports(t *testing.T) {
 	if err := pt.writeTSFile("PackageModel.ts", []fdef{
 		{
 			name: "Model",
-			defs: "export class Model {\n    public static deserialized(r: BinaryReader) { return r; }\n    private static _fieldInfo: FieldInfo[] = [];\n}\n",
+			defs: "export class Model {\n    public static deserialized(r: BinaryReader) { return r; }\n    public static readonly fieldInfo: readonly FieldInfo[] = [];\n}\n",
 			typ:  fdefTypeOther,
 		},
 	}, nil); err != nil {
@@ -969,6 +1091,37 @@ func TestWriteTSFileFiltersUnusedRuntimeImports(t *testing.T) {
 	} {
 		if strings.Contains(got, unexpected) {
 			t.Fatalf("generated TypeScript contains unexpected unused import %q:\n%s", unexpected, got)
+		}
+	}
+}
+
+func TestGenTSFieldInfoUsesPublicReadonlyMetadata(t *testing.T) {
+	got := genTSFieldInfo([]*restream.FieldInfo{
+		{
+			Name:     "Name",
+			FieldIdx: 0,
+			FieldID:  7,
+			VarInfo:  &restream.VarInfoPrimitive{DataType: restream.SerializationTypeString},
+		},
+	})
+
+	for _, expected := range []string{
+		"public static readonly fieldInfo: readonly FieldInfo[] = [",
+		"{name: \"Name\", fieldIdx: 0, fieldID: 7",
+		"private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([",
+		"[7, this.fieldInfo[0]],",
+	} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("generated TypeScript field info missing expected %q:\n%s", expected, got)
+		}
+	}
+
+	for _, unexpected := range []string{
+		"_fieldInfo",
+		"private static fieldInfo",
+	} {
+		if strings.Contains(got, unexpected) {
+			t.Fatalf("generated TypeScript field info contains unexpected %q:\n%s", unexpected, got)
 		}
 	}
 }
