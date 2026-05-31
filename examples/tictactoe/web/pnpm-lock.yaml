@@ -12,8 +12,8 @@ importers:
         specifier: link:../../../web
         version: link:../../../web
       '@boatkit-io/resub':
-        specifier: ^2.4.1
-        version: 2.4.1(react@19.2.6)(typescript@6.0.3)
+        specifier: ^2.4.2
+        version: 2.4.2(react@19.2.6)(typescript@6.0.3)
       react:
         specifier: ^19.2.6
         version: 19.2.6
@@ -130,8 +130,8 @@ packages:
     resolution: {integrity: sha512-LwdZHpScM4Qz8Xw2iKSzS+cfglZzJGvofQICy7W7v4caru4EaAmyUuO6BGrbyQ2mYV11W0U8j5mBhd14dd3B0A==}
     engines: {node: '>=6.9.0'}
 
-  '@boatkit-io/resub@2.4.1':
-    resolution: {integrity: sha512-a9dc4WfHaWmxtZBZxzWuEd9ujCyQnQSek3hktHNXb5KAZvMqxYD7TBiPJerDDnL6Ks0Q2Qrl87aReIkVdj1qAA==}
+  '@boatkit-io/resub@2.4.2':
+    resolution: {integrity: sha512-i37cb/VYQHMO8u1HcHrvZkTw4x7fgPEIPSGRMVycIzm683XWINCk2RS9L4PMKSlBDix6XSf2uJGzxijOYQxRdQ==}
     peerDependencies:
       react: '>=16.11.0'
       typescript: '>=5.0.0'
@@ -1078,7 +1078,7 @@ snapshots:
       '@babel/helper-string-parser': 7.27.1
       '@babel/helper-validator-identifier': 7.28.5
 
-  '@boatkit-io/resub@2.4.1(react@19.2.6)(typescript@6.0.3)':
+  '@boatkit-io/resub@2.4.2(react@19.2.6)(typescript@6.0.3)':
     dependencies:
       react: 19.2.6
       tslib: 2.8.1
