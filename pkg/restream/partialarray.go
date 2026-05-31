@@ -87,12 +87,20 @@ func (p *PartialModArray[V, PV]) ApplyTo(por any) [][]any {
 		ret = append(ret, []any{})
 	}
 	for k, v := range p.dataSets {
+		if k < 0 {
+			continue
+		}
+		*po = ensureSliceIndex(*po, k)
 		(*po)[k] = v
 		if p.whole == nil {
 			ret = append(ret, []any{k})
 		}
 	}
 	for k, pv := range p.dataMods {
+		if k < 0 {
+			continue
+		}
+		*po = ensureSliceIndex(*po, k)
 		fs := pv.ApplyTo(&(*po)[k])
 		if p.whole == nil {
 			for _, f := range fs {
@@ -216,11 +224,24 @@ func (p *PartialArray[V]) ApplyTo(por any) [][]any {
 		ret = append(ret, []any{})
 	}
 	for k, v := range p.dataSets {
+		if k < 0 {
+			continue
+		}
+		*po = ensureSliceIndex(*po, k)
 		(*po)[k] = v
 		if p.whole == nil {
 			ret = append(ret, []any{k})
 		}
 	}
+	return ret
+}
+
+func ensureSliceIndex[V any](slice []V, index int) []V {
+	if index < len(slice) {
+		return slice
+	}
+	ret := make([]V, index+1)
+	copy(ret, slice)
 	return ret
 }
 
