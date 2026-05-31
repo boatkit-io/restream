@@ -8,7 +8,11 @@ import * as ReStreamEncoders from '../utils/Encoders.js';
 import { SerializationType, VarInfoArray, VarInfoGenericParam, VarInfoMap, VarInfoPointer, VarInfoPrimitive, VarInfoStruct } from '../utils/SerializationTypes.js';
 import type { AppliableOnTopPartial, AppliablePartial, FieldInfo, VarInfo } from '../utils/SerializationTypes.js';
 
-export type AccessLevel = number;
+export enum AccessLevel {
+    Public = 0,
+}
+
+export const AccessLevelPublic = 0;
 
 export const SocketEventNameStoreUpdate = "storeupdate";
 
