@@ -106,8 +106,3 @@ func (s *RelayStore[S, SP, P]) SubscriptionEndedForKey(key string) {
 		forwarder(s.name, key, false)
 	}
 }
-
-// GetPartialForSubscriptionKey implements SubscriptionKeyStateProvider.
-func (s *RelayStore[S, SP, P]) GetPartialForSubscriptionKey(key string) (Partial, bool, error) {
-	return partialForSubscriptionKeyFromState(s.storeData, key)
-}

@@ -58,6 +58,19 @@ type BoardStoreState struct {
 	if _, err := os.Stat(filepath.Join(serverDir, "boardstorestate_rs.go")); err != nil {
 		t.Fatal(err)
 	}
+	generated, err := os.ReadFile(filepath.Join(serverDir, "boardstorestate_rs.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"func (s *BoardStoreState) PartialForFields(fields [][]any) (restream.Partial, bool)",
+		"partialForFieldsBoard",
+		"restream.NewPartialArray[[]string]()",
+	} {
+		if !strings.Contains(string(generated), expected) {
+			t.Fatalf("generated partial snapshot support missing expected %q:\n%s", expected, string(generated))
+		}
+	}
 }
 
 func TestParseProjectIgnoresRestreamGeneratedGoFiles(t *testing.T) {

@@ -25,9 +25,12 @@ type StoreInfo struct {
 	Store             Store
 	SubAwareCallbacks SubscriptionAwareStore
 	KeySubCallbacks   KeySubscriptionAwareStore
-	KeyStateProvider  SubscriptionKeyStateProvider
 	ActiveSubCount    int
 	ActiveKeySubCount map[string]int
+}
+
+type subscriptionKeyStoreData interface {
+	GetSerializedPartialForSubscriptionKey(key string) ([]byte, bool, error)
 }
 
 // NewStoreRegistry brings up a StoreRegistry, holding an explicit list of Stores/StoreDatas (this list may not grow
@@ -51,9 +54,6 @@ func NewStoreRegistry(storeList []Store) (*StoreRegistry, error) {
 		}
 		if kasV, implements := s.(KeySubscriptionAwareStore); implements {
 			si.KeySubCallbacks = kasV
-		}
-		if kspV, implements := s.(SubscriptionKeyStateProvider); implements {
-			si.KeyStateProvider = kspV
 		}
 
 		si.StoreData.AddCallback(sdr.PartialCallback)
@@ -102,20 +102,10 @@ func (s *StoreRegistry) GetSerializedPartialForSubscriptionKey(storeName string,
 	if !has {
 		return nil, false, fmt.Errorf("no store found (%s) in GetSerializedPartialForSubscriptionKey", storeName)
 	}
-	if si.KeyStateProvider == nil {
-		return nil, false, nil
+	if provider, ok := si.StoreData.(subscriptionKeyStoreData); ok {
+		return provider.GetSerializedPartialForSubscriptionKey(key)
 	}
-
-	partial, exists, err := si.KeyStateProvider.GetPartialForSubscriptionKey(key)
-	if err != nil || !exists {
-		return nil, exists, err
-	}
-
-	b, err := SerializeToBytes(partial, nil)
-	if err != nil {
-		return nil, true, err
-	}
-	return b, true, nil
+	return nil, false, nil
 }
 
 // ListeningToStore is a callback to indicate that someone has subscribed to the store

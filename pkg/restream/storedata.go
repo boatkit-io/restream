@@ -107,6 +107,40 @@ func (d *StoreData[S, SP, PS]) GetSerializedFullState() ([]byte, error) {
 	return ret, retError
 }
 
+// GetSerializedPartialForSubscriptionKey returns a serialized partial snapshot for a keyed subscription.
+func (d *StoreData[S, SP, PS]) GetSerializedPartialForSubscriptionKey(key string) ([]byte, bool, error) {
+	fieldPath := FieldPathFromSubscriptionKey(key)
+	if len(fieldPath) == 0 {
+		return nil, false, nil
+	}
+
+	var ret []byte
+	var exists bool
+	var retErr error
+	d.ReadState(func(state SP) {
+		var partial Partial
+		if provider, ok := any(state).(StateFieldPartialProvider); ok {
+			partial, exists = provider.PartialForFields([][]any{fieldPath})
+		} else {
+			var partialValue reflect.Value
+			partialValue, exists, retErr = partialForFieldPathReflect(
+				reflect.ValueOf(state).Elem(),
+				reflect.TypeFor[PS](),
+				fieldPath,
+			)
+			if retErr != nil || !exists {
+				return
+			}
+			partial = partialValue.Interface().(Partial)
+		}
+		if !exists {
+			return
+		}
+		ret, retErr = SerializeToBytes(partial, nil)
+	})
+	return ret, exists, retErr
+}
+
 // ReadState is a helper to read the current state under a lock, calling the callback with the state
 func (d *StoreData[S, SP, PS]) ReadState(cb func(SP)) {
 	d.stateMutex.RLock()

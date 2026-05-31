@@ -6,31 +6,6 @@ import (
 	"strconv"
 )
 
-func partialForSubscriptionKeyFromState[S any, SP StoreDataPtrType[S], P Partial](
-	storeData *StoreData[S, SP, P],
-	key string,
-) (Partial, bool, error) {
-	fieldPath := FieldPathFromSubscriptionKey(key)
-	if len(fieldPath) == 0 {
-		return nil, false, nil
-	}
-
-	var ret Partial
-	var exists bool
-	var retErr error
-	storeData.ReadState(func(state SP) {
-		partialValue, ok, err := partialForFieldPathReflect(reflect.ValueOf(state).Elem(), reflect.TypeFor[P](), fieldPath)
-		if err != nil || !ok {
-			exists = ok
-			retErr = err
-			return
-		}
-		ret = partialValue.Interface().(Partial)
-		exists = true
-	})
-	return ret, exists, retErr
-}
-
 func partialForFieldPathReflect(stateValue reflect.Value, partialType reflect.Type, fieldPath []any) (reflect.Value, bool, error) {
 	if len(fieldPath) == 0 {
 		return reflect.Value{}, false, nil
@@ -55,11 +30,17 @@ func partialForFieldPathReflect(stateValue reflect.Value, partialType reflect.Ty
 
 	stateField := stateValue.FieldByName(fieldName)
 	if !stateField.IsValid() {
+		stateField = stateValue.FieldByName(serverFieldName(fieldName))
+	}
+	if !stateField.IsValid() {
 		return reflect.Value{}, false, nil
 	}
 
 	partialValue := reflect.New(partialType.Elem())
 	partialField := partialValue.Elem().FieldByName(fieldName)
+	if !partialField.IsValid() {
+		partialField = partialValue.Elem().FieldByName(serverFieldName(fieldName))
+	}
 	if !partialField.IsValid() {
 		return reflect.Value{}, false, nil
 	}

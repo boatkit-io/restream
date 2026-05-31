@@ -5,9 +5,9 @@ import BinaryReader from '../utils/BinaryReader.js';
 import BinaryWriter from '../utils/BinaryWriter.js';
 import * as ReStreamDecoders from '../utils/Decoders.js';
 import * as ReStreamEncoders from '../utils/Encoders.js';
-import { SerializationType, VarInfoMap, VarInfoPointer, VarInfoPrimitive, VarInfoStruct } from '../utils/SerializationTypes.js';
+import { SerializationType, VarInfoArray, VarInfoMap, VarInfoPointer, VarInfoPrimitive, VarInfoStruct } from '../utils/SerializationTypes.js';
 import type { FieldInfo } from '../utils/SerializationTypes.js';
-import { PartialModMap, PartialValue } from './PackageRestream.js';
+import { PartialArray, PartialModArray, PartialModMap, PartialValue } from './PackageRestream.js';
 
 export type TestString = string;
 
@@ -116,14 +116,17 @@ export class TestCPartial {
 
 export class TestMapData {
     public number!: number;
+    public data!: number[]|undefined;
 
     private constructor() {}
 
     public static fromValues(
         number: number = 0,
+        data: number[]|undefined = [],
     ) {
         const o = new TestMapData();
         o.number = number;
+        o.data = data;
         return o;
     }
 
@@ -135,12 +138,14 @@ export class TestMapData {
         }
         const o = new TestMapData();
         o.number = fieldMap?.has(1) ? fieldMap.get(1) as number : 0;
+        o.data = fieldMap?.has(2) ? fieldMap.get(2) as number[]|undefined : [];
         return o;
     }
 
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
         const wi = new BinaryWriter();
         ReStreamEncoders.serializeField(this.number, TestMapData._fieldInfo[0], wi);
+        ReStreamEncoders.serializeField(this.data, TestMapData._fieldInfo[1], wi);
         const b = wi.getBytes();
         ReStreamEncoders.serializePackedInt(b.length, w);
         w.writeBytes(b);
@@ -148,23 +153,28 @@ export class TestMapData {
 
 	private static _fieldInfo: FieldInfo[] = [
         {name: "Number", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPrimitive(SerializationType.Uint64, "uint")},
+        {name: "Data", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoArray(false, new VarInfoPrimitive(SerializationType.Uint8, "byte"))},
 	];
 
 	private static _fieldMap = new Map<number,FieldInfo>([
         [1, this._fieldInfo[0]],
+        [2, this._fieldInfo[1]],
 	]);
 }
 
 export class TestMapDataPartial {
     public number!: number|undefined;
+    public data!: PartialArray<number>|undefined;
 
     private constructor() {}
 
     public static fromValues(
         number: number|undefined = undefined,
+        data: PartialArray<number>|undefined = undefined,
     ) {
         const o = new TestMapDataPartial();
         o.number = number;
+        o.data = data;
         return o;
     }
 
@@ -176,12 +186,14 @@ export class TestMapDataPartial {
         }
         const o = new TestMapDataPartial();
         o.number = fieldMap?.has(1) ? fieldMap.get(1) as number|undefined : undefined;
+        o.data = fieldMap?.has(2) ? fieldMap.get(2) as PartialArray<number>|undefined : undefined;
         return o;
     }
 
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
         const wi = new BinaryWriter();
         ReStreamEncoders.serializeField(this.number, TestMapDataPartial._fieldInfo[0], wi);
+        ReStreamEncoders.serializeField(this.data, TestMapDataPartial._fieldInfo[1], wi);
         const b = wi.getBytes();
         ReStreamEncoders.serializePackedInt(b.length, w);
         w.writeBytes(b);
@@ -189,15 +201,18 @@ export class TestMapDataPartial {
 
 	private static _fieldInfo: FieldInfo[] = [
         {name: "Number", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Uint64, "uint"))},
+        {name: "Data", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialArray", "restream", PartialArray, undefined, [new VarInfoPrimitive(SerializationType.Uint8, "byte")]))},
 	];
 
 	private static _fieldMap = new Map<number,FieldInfo>([
         [1, this._fieldInfo[0]],
+        [2, this._fieldInfo[1]],
 	]);
 
     applyTo(por: TestMapData): (string | number)[][] {
         const ret: (string | number)[][] = [];
         if (this.number !== undefined) { por.number = this.number; ret.push(["number"]); }
+        if (this.data !== undefined) { if (!Array.isArray(por.data)) { por.data = Array.from(por.data ?? []); } const fs = this.data.applyTo(por.data!); for (const f of fs) { ret.push(["data",...f]); }}
         return reduceFieldPaths(ret);
     }
 }
@@ -474,6 +489,124 @@ export class TestStatePartial {
         if (this.baseField !== undefined) { por.baseField = this.baseField; ret.push(["baseField"]); }
         if (this.baseStruct !== undefined) { let fs; [por.baseStruct,fs] = this.baseStruct.applyOnTop(por.baseStruct); for (const f of fs) { ret.push(["baseStruct",...f]); }}
         if (this.baseStructPtr !== undefined) { let fs; [por.baseStructPtr,fs] = this.baseStructPtr.applyOnTop(por.baseStructPtr); for (const f of fs) { ret.push(["baseStructPtr",...f]); }}
+        return reduceFieldPaths(ret);
+    }
+}
+
+export class TestArrayState {
+    public numbers!: number[]|undefined;
+    public items!: TestMapData[]|undefined;
+    public ptrItems!: (TestMapData|undefined)[]|undefined;
+
+    private constructor() {}
+
+    public static fromValues(
+        numbers: number[]|undefined = [],
+        items: TestMapData[]|undefined = [],
+        ptrItems: (TestMapData|undefined)[]|undefined = [],
+    ) {
+        const o = new TestArrayState();
+        o.numbers = numbers;
+        o.items = items;
+        o.ptrItems = ptrItems;
+        return o;
+    }
+
+    public static deserialized(r: BinaryReader) {
+        let fieldMap: Map<number, unknown>|undefined;
+        if (r) {
+            const sl = ReStreamDecoders.decodeUint32(r);
+            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestArrayState._fieldMap);
+        }
+        const o = new TestArrayState();
+        o.numbers = fieldMap?.has(1) ? fieldMap.get(1) as number[]|undefined : [];
+        o.items = fieldMap?.has(2) ? fieldMap.get(2) as TestMapData[]|undefined : [];
+        o.ptrItems = fieldMap?.has(3) ? fieldMap.get(3) as (TestMapData|undefined)[]|undefined : [];
+        return o;
+    }
+
+    public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
+        const wi = new BinaryWriter();
+        ReStreamEncoders.serializeField(this.numbers, TestArrayState._fieldInfo[0], wi);
+        ReStreamEncoders.serializeField(this.items, TestArrayState._fieldInfo[1], wi);
+        ReStreamEncoders.serializeField(this.ptrItems, TestArrayState._fieldInfo[2], wi);
+        const b = wi.getBytes();
+        ReStreamEncoders.serializePackedInt(b.length, w);
+        w.writeBytes(b);
+    }
+
+	private static _fieldInfo: FieldInfo[] = [
+        {name: "Numbers", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoArray(false, new VarInfoPrimitive(SerializationType.Uint64, "uint"))},
+        {name: "Items", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoArray(false, new VarInfoStruct("TestMapData", "storetest", TestMapData))},
+        {name: "PtrItems", fieldIdx: 2, fieldID: 3, varInfo: new VarInfoArray(false, new VarInfoPointer(false, new VarInfoStruct("TestMapData", "storetest", TestMapData)))},
+	];
+
+	private static _fieldMap = new Map<number,FieldInfo>([
+        [1, this._fieldInfo[0]],
+        [2, this._fieldInfo[1]],
+        [3, this._fieldInfo[2]],
+	]);
+}
+
+export class TestArrayStatePartial {
+    public numbers!: PartialArray<number>|undefined;
+    public items!: PartialModArray<TestMapData, TestMapDataPartial>|undefined;
+    public ptrItems!: PartialModArray<TestMapData|undefined, TestMapDataPartial>|undefined;
+
+    private constructor() {}
+
+    public static fromValues(
+        numbers: PartialArray<number>|undefined = undefined,
+        items: PartialModArray<TestMapData, TestMapDataPartial>|undefined = undefined,
+        ptrItems: PartialModArray<TestMapData|undefined, TestMapDataPartial>|undefined = undefined,
+    ) {
+        const o = new TestArrayStatePartial();
+        o.numbers = numbers;
+        o.items = items;
+        o.ptrItems = ptrItems;
+        return o;
+    }
+
+    public static deserialized(r: BinaryReader) {
+        let fieldMap: Map<number, unknown>|undefined;
+        if (r) {
+            const sl = ReStreamDecoders.decodeUint32(r);
+            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestArrayStatePartial._fieldMap);
+        }
+        const o = new TestArrayStatePartial();
+        o.numbers = fieldMap?.has(1) ? fieldMap.get(1) as PartialArray<number>|undefined : undefined;
+        o.items = fieldMap?.has(2) ? fieldMap.get(2) as PartialModArray<TestMapData, TestMapDataPartial>|undefined : undefined;
+        o.ptrItems = fieldMap?.has(3) ? fieldMap.get(3) as PartialModArray<TestMapData|undefined, TestMapDataPartial>|undefined : undefined;
+        return o;
+    }
+
+    public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
+        const wi = new BinaryWriter();
+        ReStreamEncoders.serializeField(this.numbers, TestArrayStatePartial._fieldInfo[0], wi);
+        ReStreamEncoders.serializeField(this.items, TestArrayStatePartial._fieldInfo[1], wi);
+        ReStreamEncoders.serializeField(this.ptrItems, TestArrayStatePartial._fieldInfo[2], wi);
+        const b = wi.getBytes();
+        ReStreamEncoders.serializePackedInt(b.length, w);
+        w.writeBytes(b);
+    }
+
+	private static _fieldInfo: FieldInfo[] = [
+        {name: "Numbers", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialArray", "restream", PartialArray, undefined, [new VarInfoPrimitive(SerializationType.Uint64, "uint")]))},
+        {name: "Items", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialModArray", "restream", PartialModArray, undefined, [new VarInfoStruct("TestMapData", "storetest", TestMapData), new VarInfoPointer(false, new VarInfoStruct("TestMapDataPartial", "storetest", TestMapDataPartial))]))},
+        {name: "PtrItems", fieldIdx: 2, fieldID: 3, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialModArray", "restream", PartialModArray, undefined, [new VarInfoPointer(false, new VarInfoStruct("TestMapData", "storetest", TestMapData)), new VarInfoPointer(false, new VarInfoStruct("TestMapDataPartial", "storetest", TestMapDataPartial))]))},
+	];
+
+	private static _fieldMap = new Map<number,FieldInfo>([
+        [1, this._fieldInfo[0]],
+        [2, this._fieldInfo[1]],
+        [3, this._fieldInfo[2]],
+	]);
+
+    applyTo(por: TestArrayState): (string | number)[][] {
+        const ret: (string | number)[][] = [];
+        if (this.numbers !== undefined) { if (!Array.isArray(por.numbers)) { por.numbers = Array.from(por.numbers ?? []); } const fs = this.numbers.applyTo(por.numbers!); for (const f of fs) { ret.push(["numbers",...f]); }}
+        if (this.items !== undefined) { if (!Array.isArray(por.items)) { por.items = Array.from(por.items ?? []); } const fs = this.items.applyTo(por.items!); for (const f of fs) { ret.push(["items",...f]); }}
+        if (this.ptrItems !== undefined) { if (!Array.isArray(por.ptrItems)) { por.ptrItems = Array.from(por.ptrItems ?? []); } const fs = this.ptrItems.applyTo(por.ptrItems!); for (const f of fs) { ret.push(["ptrItems",...f]); }}
         return reduceFieldPaths(ret);
     }
 }

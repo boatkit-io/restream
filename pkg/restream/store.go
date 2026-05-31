@@ -19,7 +19,7 @@ type KeySubscriptionAwareStore interface {
 	SubscriptionEndedForKey(key string)
 }
 
-// SubscriptionKeyStateProvider is implemented by stores that can provide an initial partial for a keyed subscription.
-type SubscriptionKeyStateProvider interface {
-	GetPartialForSubscriptionKey(key string) (Partial, bool, error)
+// StateFieldPartialProvider is implemented by generated state structs that can create a partial snapshot for field paths.
+type StateFieldPartialProvider interface {
+	PartialForFields(fields [][]any) (Partial, bool)
 }

@@ -23,7 +23,8 @@ type TestState struct {
 // @restream.partials
 type TestMapData struct {
 	// MAXFIELD(2)
-	Number uint `restream:",fID=1"`
+	Number uint   `restream:",fID=1"`
+	Data   []byte `restream:",fID=2"`
 }
 
 // @restream.fields
@@ -217,6 +218,7 @@ func TestFieldPathAffectsSubscriptionCascadesBothDirections(t *testing.T) {
 
 	assert.Equal(t, "mapPtrTest%&5%&number", restream.SubscriptionKeyFromFieldPath([]any{"MapPtrTest", uint8(5), "Number"}))
 	assert.Equal(t, []any{"MapPtrTest", "5", "Number"}, restream.FieldPathFromSubscriptionKey("mapPtrTest%&5%&Number"))
+	assert.Equal(t, [][]any{{}}, restream.ChildFieldsForField([][]any{{"number"}}, "Number"))
 }
 
 func TestRelayStoreProvidesKeyedInitialPartial(t *testing.T) {
@@ -230,9 +232,7 @@ func TestRelayStoreProvidesKeyedInitialPartial(t *testing.T) {
 		BaseField: "unused",
 	})
 
-	partial, exists, err := relayStore.GetPartialForSubscriptionKey("mapPtrTest%&5")
-	assert.NoError(t, err)
-	assert.True(t, exists)
+	partial := getRelayStorePartialForKey(t, relayStore, "mapPtrTest%&5")
 
 	state := TestState{MapPtrTest: map[uint8]*TestMapData{}}
 	fields := partial.ApplyTo(&state)
@@ -249,9 +249,7 @@ func TestRelayStoreKeyedInitialPartialDeletesMissingMapKey(t *testing.T) {
 		},
 	})
 
-	partial, exists, err := relayStore.GetPartialForSubscriptionKey("mapPtrTest%&7")
-	assert.NoError(t, err)
-	assert.True(t, exists)
+	partial := getRelayStorePartialForKey(t, relayStore, "mapPtrTest%&7")
 
 	state := TestState{MapPtrTest: map[uint8]*TestMapData{
 		7: {Number: 7},
@@ -260,6 +258,95 @@ func TestRelayStoreKeyedInitialPartialDeletesMissingMapKey(t *testing.T) {
 	assert.Equal(t, [][]any{{"MapPtrTest", uint8(7)}}, fields)
 	assert.Nil(t, state.MapPtrTest[7])
 	assert.Equal(t, uint(0), state.BaseStruct.Number)
+}
+
+func TestRelayStoreKeyedInitialPartialSupportsNestedMapValue(t *testing.T) {
+	relayStore := restream.NewRelayStore[TestState, *TestState, *TestStatePartial]("relay-test", &TestState{
+		MapPtrTest: map[uint8]*TestMapData{
+			5: {Number: 5, Data: []byte{1, 2, 3}},
+			6: {Number: 6},
+		},
+		BaseField: "unused",
+	})
+
+	partial := getRelayStorePartialForKey(t, relayStore, "mapPtrTest%&5%&number")
+
+	state := TestState{MapPtrTest: map[uint8]*TestMapData{}}
+	fields := partial.ApplyTo(&state)
+	assert.Equal(t, [][]any{{"MapPtrTest", uint8(5), "Number"}}, fields)
+	assert.Equal(t, uint(5), state.MapPtrTest[5].Number)
+	assert.Empty(t, state.MapPtrTest[5].Data)
+	assert.Nil(t, state.MapPtrTest[6])
+	assert.Empty(t, state.BaseField)
+}
+
+func TestGeneratedStatePartialForFieldsSupportsNestedStructValues(t *testing.T) {
+	state := &TestState{
+		BaseField:     "unused",
+		BaseStruct:    TestMapData{Number: 9, Data: []byte{1, 2, 3}},
+		BaseStructPtr: &TestMapData{Number: 11, Data: []byte{4, 5, 6}},
+	}
+
+	baseStructPartial, exists := state.PartialForFields([][]any{{"baseStruct", "number"}})
+	assert.True(t, exists)
+	baseStructTarget := TestState{}
+	fields := baseStructPartial.ApplyTo(&baseStructTarget)
+	assert.Equal(t, [][]any{{"BaseStruct", "Number"}}, fields)
+	assert.Equal(t, uint(9), baseStructTarget.BaseStruct.Number)
+	assert.Empty(t, baseStructTarget.BaseStruct.Data)
+	assert.Empty(t, baseStructTarget.BaseField)
+
+	ptrPartial, exists := state.PartialForFields([][]any{{"baseStructPtr", "number"}})
+	assert.True(t, exists)
+	ptrTarget := TestState{}
+	fields = ptrPartial.ApplyTo(&ptrTarget)
+	assert.Equal(t, [][]any{{"BaseStructPtr", "Number"}}, fields)
+	if assert.NotNil(t, ptrTarget.BaseStructPtr) {
+		assert.Equal(t, uint(11), ptrTarget.BaseStructPtr.Number)
+		assert.Empty(t, ptrTarget.BaseStructPtr.Data)
+	}
+}
+
+func TestGeneratedStatePartialForFieldsClearsNilPointerForNestedPath(t *testing.T) {
+	state := &TestState{}
+	partial, exists := state.PartialForFields([][]any{{"baseStructPtr", "number"}})
+	assert.True(t, exists)
+
+	target := TestState{BaseStructPtr: &TestMapData{Number: 22}}
+	fields := partial.ApplyTo(&target)
+	assert.Equal(t, [][]any{{"BaseStructPtr"}}, fields)
+	assert.Nil(t, target.BaseStructPtr)
+}
+
+func TestGeneratedStatePartialForFieldsSupportsArrayIndexes(t *testing.T) {
+	state := &TestArrayState{
+		Numbers:  []uint{3, 5, 8},
+		Items:    []TestMapData{{Number: 1}, {Number: 2, Data: []byte{9}}},
+		PtrItems: []*TestMapData{nil, {Number: 4, Data: []byte{7}}},
+	}
+
+	numberPartial, exists := state.PartialForFields([][]any{{"numbers", "2"}})
+	assert.True(t, exists)
+	numberTarget := TestArrayState{}
+	fields := numberPartial.ApplyTo(&numberTarget)
+	assert.Equal(t, [][]any{{"Numbers", 2}}, fields)
+	assert.Equal(t, []uint{0, 0, 8}, numberTarget.Numbers)
+
+	itemPartial, exists := state.PartialForFields([][]any{{"items", "1", "number"}})
+	assert.True(t, exists)
+	itemTarget := TestArrayState{}
+	fields = itemPartial.ApplyTo(&itemTarget)
+	assert.Equal(t, [][]any{{"Items", 1, "Number"}}, fields)
+	assert.Len(t, itemTarget.Items, 2)
+	assert.Equal(t, uint(2), itemTarget.Items[1].Number)
+	assert.Empty(t, itemTarget.Items[1].Data)
+
+	nilPtrPartial, exists := state.PartialForFields([][]any{{"ptrItems", "0", "number"}})
+	assert.True(t, exists)
+	nilPtrTarget := TestArrayState{PtrItems: []*TestMapData{{Number: 99}}}
+	fields = nilPtrPartial.ApplyTo(&nilPtrTarget)
+	assert.Equal(t, [][]any{{"PtrItems", 0}}, fields)
+	assert.Nil(t, nilPtrTarget.PtrItems[0])
 }
 
 func TestRelayStoreForwardsKeyedSubscriptionLifecycle(t *testing.T) {
@@ -398,6 +485,25 @@ func applyRelayStorePartial(t *testing.T, relayStore *restream.RelayStore[TestSt
 	assert.NoError(t, relayStore.GetStoreData().DecodeAndApplyPartial(partialBytes))
 }
 
+func getRelayStorePartialForKey(
+	t *testing.T,
+	relayStore *restream.RelayStore[TestState, *TestState, *TestStatePartial],
+	key string,
+) *TestStatePartial {
+	t.Helper()
+	provider, ok := relayStore.GetStoreData().(interface {
+		GetSerializedPartialForSubscriptionKey(string) ([]byte, bool, error)
+	})
+	assert.True(t, ok)
+	partialBytes, exists, err := provider.GetSerializedPartialForSubscriptionKey(key)
+	assert.NoError(t, err)
+	assert.True(t, exists)
+
+	var partial TestStatePartial
+	assert.NoError(t, partial.Deserialize(binarystreams.NewReaderFromBytes(partialBytes), nil))
+	return &partial
+}
+
 // @restream.fields
 // @restream.partials
 type TestA struct {
@@ -420,6 +526,15 @@ type TestC struct {
 	// MAXFIELD(2)
 	A int `restream:",fID=1"`
 	B int `restream:",fID=2"`
+}
+
+// @restream.fields
+// @restream.partials
+type TestArrayState struct {
+	// MAXFIELD(3)
+	Numbers  []uint         `restream:",fID=1"`
+	Items    []TestMapData  `restream:",fID=2"`
+	PtrItems []*TestMapData `restream:",fID=3"`
 }
 
 type TestAStore struct {

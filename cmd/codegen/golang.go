@@ -134,6 +134,8 @@ func (ft *FileTracking) createGoStructSerializers(si StructInfo, fields []*restr
 		outPartial += "    return ret, included\n"
 		outPartial += "}\n"
 
+		outPartial += ft.createGolangPartialForFields(si, fields, partialFields)
+
 		sip := si
 		sip.Name += "Partial"
 
@@ -143,6 +145,251 @@ func (ft *FileTracking) createGoStructSerializers(si StructInfo, fields []*restr
 	}
 
 	return nil
+}
+
+func (ft *FileTracking) createGolangPartialForFields(
+	si StructInfo,
+	fields []*restream.FieldInfo,
+	partialFields []*restream.FieldInfo,
+) string {
+	out := "\n"
+	out += "// PartialForFields returns a snapshot partial containing the requested field paths\n"
+	out += fmt.Sprintf("func (s *%s) PartialForFields(fields [][]any) (restream.Partial, bool) {\n", si.Name)
+	out += "    fields = restream.ReduceFieldPaths(fields)\n"
+	out += fmt.Sprintf("    ret := &%sPartial{}\n", si.Name)
+	out += "    included := false\n"
+	for _, pfi := range partialFields {
+		out += fmt.Sprintf("    if partial, ok := s.partialForFields%s(restream.ChildFieldsForField(fields, %q)); ok {\n", pfi.Name, pfi.Name)
+		out += fmt.Sprintf("        ret.%s = partial\n", pfi.Name)
+		out += "        included = true\n"
+		out += "    }\n"
+	}
+	out += "    return ret, included\n"
+	out += "}\n\n"
+
+	for idx, pfi := range partialFields {
+		out += ft.createGolangFieldPartialForFields(si, fields[idx], pfi)
+	}
+	return out
+}
+
+func (ft *FileTracking) createGolangFieldPartialForFields(
+	si StructInfo,
+	fi *restream.FieldInfo,
+	pfi *restream.FieldInfo,
+) string {
+	switch fi.VarInfo.(type) {
+	case *restream.VarInfoMap:
+		return ft.createGolangMapPartialForFields(si, fi, pfi)
+	case *restream.VarInfoArray:
+		return ft.createGolangArrayPartialForFields(si, fi, pfi)
+	default:
+		if ft.supportsPartials(pfi.VarInfo) {
+			return ft.createGolangPartialValueForFields(si, fi, pfi)
+		}
+		return ft.createGolangDirectPartialForFields(si, fi, pfi)
+	}
+}
+
+func (ft *FileTracking) createGolangDirectPartialForFields(
+	si StructInfo,
+	fi *restream.FieldInfo,
+	pfi *restream.FieldInfo,
+) string {
+	retType := ft.getGolangTypeName(pfi.VarInfo)
+	out := fmt.Sprintf("func (s *%s) partialForFields%s(fields [][]any) (%s, bool) {\n", si.Name, fi.Name, retType)
+	out += "    if len(fields) == 0 { return nil, false }\n"
+	out += "    for _, field := range fields {\n"
+	out += fmt.Sprintf("        if len(field) == 0 { return restream.Ptr(s.%s), true }\n", fi.Name)
+	out += "    }\n"
+	out += "    return nil, false\n"
+	out += "}\n\n"
+	return out
+}
+
+func (ft *FileTracking) createGolangPartialValueForFields(
+	si StructInfo,
+	fi *restream.FieldInfo,
+	pfi *restream.FieldInfo,
+) string {
+	retType := ft.getGolangTypeName(pfi.VarInfo)
+	partialStruct := mustPartialStructInfo(pfi.VarInfo)
+	valueType := ft.getGolangTypeName(partialStruct.GenericTypes[0])
+	partialType := ft.getGolangTypeName(partialStruct.GenericTypes[1])
+	fieldIsPointer := isPointerVarInfo(fi.VarInfo)
+
+	out := fmt.Sprintf("func (s *%s) partialForFields%s(fields [][]any) (%s, bool) {\n", si.Name, fi.Name, retType)
+	out += "    if len(fields) == 0 { return nil, false }\n"
+	out += fmt.Sprintf("    ret := &restream.PartialValue[%s, %s]{}\n", valueType, partialType)
+	out += "    included := false\n"
+	out += "    for _, field := range fields {\n"
+	out += fmt.Sprintf("        if len(field) == 0 { return ret.SetWhole(restream.Ptr(s.%s)), true }\n", fi.Name)
+	if fieldIsPointer {
+		out += fmt.Sprintf("        if s.%s == nil {\n", fi.Name)
+		out += fmt.Sprintf("            ret.SetWhole(restream.Ptr(s.%s))\n", fi.Name)
+		out += "            included = true\n"
+		out += "            continue\n"
+		out += "        }\n"
+		out += fmt.Sprintf("        partial, ok := s.%s.PartialForFields([][]any{field})\n", fi.Name)
+	} else {
+		out += fmt.Sprintf("        partial, ok := (&s.%s).PartialForFields([][]any{field})\n", fi.Name)
+	}
+	out += "        if ok {\n"
+	out += fmt.Sprintf("            ret.ApplyPartial(partial.(%s))\n", partialType)
+	out += "            included = true\n"
+	out += "        }\n"
+	out += "    }\n"
+	out += "    return ret, included\n"
+	out += "}\n\n"
+	return out
+}
+
+func (ft *FileTracking) createGolangMapPartialForFields(
+	si StructInfo,
+	fi *restream.FieldInfo,
+	pfi *restream.FieldInfo,
+) string {
+	retType := ft.getGolangTypeName(pfi.VarInfo)
+	mapInfo := fi.VarInfo.(*restream.VarInfoMap)
+	keyType := ft.getGolangTypeName(mapInfo.KeyType)
+	valueSupportsPartials := ft.supportsPartials(mapInfo.ElemType)
+	valueIsPointer := isPointerVarInfo(mapInfo.ElemType)
+	partialStruct := mustPartialStructInfo(pfi.VarInfo)
+	constructor := ft.partialContainerConstructor(partialStruct)
+
+	out := fmt.Sprintf("func (s *%s) partialForFields%s(fields [][]any) (%s, bool) {\n", si.Name, fi.Name, retType)
+	out += "    if len(fields) == 0 { return nil, false }\n"
+	out += fmt.Sprintf("    ret := %s\n", constructor)
+	out += "    included := false\n"
+	out += "    for _, field := range fields {\n"
+	out += fmt.Sprintf("        if len(field) == 0 { return ret.SetWhole(s.%s), true }\n", fi.Name)
+	out += fmt.Sprintf("        key, ok := restream.FieldPathPartToKey[%s](field[0])\n", keyType)
+	out += "        if !ok { continue }\n"
+	out += fmt.Sprintf("        value, exists := s.%s[key]\n", fi.Name)
+	out += "        if !exists {\n"
+	out += "            ret.Delete(key)\n"
+	out += "            included = true\n"
+	out += "            continue\n"
+	out += "        }\n"
+	if valueSupportsPartials {
+		partialType := ft.getGolangTypeName(partialStruct.GenericTypes[2])
+		out += "        if len(field) == 1 {\n"
+		out += "            ret.Set(key, value)\n"
+		out += "            included = true\n"
+		out += "            continue\n"
+		out += "        }\n"
+		if valueIsPointer {
+			out += "        if value == nil {\n"
+			out += "            ret.Set(key, value)\n"
+			out += "            included = true\n"
+			out += "            continue\n"
+			out += "        }\n"
+			out += "        partial, ok := value.PartialForFields([][]any{field[1:]})\n"
+		} else {
+			out += "        partial, ok := (&value).PartialForFields([][]any{field[1:]})\n"
+		}
+		out += "        if ok {\n"
+		out += fmt.Sprintf("            ret.ApplyPartial(key, partial.(%s))\n", partialType)
+		out += "            included = true\n"
+		out += "        }\n"
+	} else {
+		out += "        ret.Set(key, value)\n"
+		out += "        included = true\n"
+	}
+	out += "    }\n"
+	out += "    return ret, included\n"
+	out += "}\n\n"
+	return out
+}
+
+func (ft *FileTracking) createGolangArrayPartialForFields(
+	si StructInfo,
+	fi *restream.FieldInfo,
+	pfi *restream.FieldInfo,
+) string {
+	retType := ft.getGolangTypeName(pfi.VarInfo)
+	arrayInfo := fi.VarInfo.(*restream.VarInfoArray)
+	valueSupportsPartials := ft.supportsPartials(arrayInfo.ElemType)
+	valueIsPointer := isPointerVarInfo(arrayInfo.ElemType)
+	partialStruct := mustPartialStructInfo(pfi.VarInfo)
+	constructor := ft.partialContainerConstructor(partialStruct)
+
+	out := fmt.Sprintf("func (s *%s) partialForFields%s(fields [][]any) (%s, bool) {\n", si.Name, fi.Name, retType)
+	out += "    if len(fields) == 0 { return nil, false }\n"
+	out += fmt.Sprintf("    ret := %s\n", constructor)
+	out += "    included := false\n"
+	out += "    for _, field := range fields {\n"
+	out += fmt.Sprintf("        if len(field) == 0 { return ret.SetWhole(s.%s), true }\n", fi.Name)
+	out += "        index, ok := restream.FieldPathPartToIndex(field[0])\n"
+	out += fmt.Sprintf("        if !ok || index < 0 || index >= len(s.%s) { continue }\n", fi.Name)
+	out += fmt.Sprintf("        value := s.%s[index]\n", fi.Name)
+	if valueSupportsPartials {
+		partialType := ft.getGolangTypeName(partialStruct.GenericTypes[1])
+		out += "        if len(field) == 1 {\n"
+		out += "            ret.Set(index, value)\n"
+		out += "            included = true\n"
+		out += "            continue\n"
+		out += "        }\n"
+		if valueIsPointer {
+			out += "        if value == nil {\n"
+			out += "            ret.Set(index, value)\n"
+			out += "            included = true\n"
+			out += "            continue\n"
+			out += "        }\n"
+			out += "        partial, ok := value.PartialForFields([][]any{field[1:]})\n"
+		} else {
+			out += "        partial, ok := (&value).PartialForFields([][]any{field[1:]})\n"
+		}
+		out += "        if ok {\n"
+		out += fmt.Sprintf("            ret.ApplyPartial(index, partial.(%s))\n", partialType)
+		out += "            included = true\n"
+		out += "        }\n"
+	} else {
+		out += "        ret.Set(index, value)\n"
+		out += "        included = true\n"
+	}
+	out += "    }\n"
+	out += "    return ret, included\n"
+	out += "}\n\n"
+	return out
+}
+
+func (ft *FileTracking) partialContainerConstructor(si *restream.VarInfoStruct) string {
+	switch si.Name {
+	case "PartialMap":
+		return fmt.Sprintf("restream.NewPartialMap[%s, %s]()",
+			ft.getGolangTypeName(si.GenericTypes[0]),
+			ft.getGolangTypeName(si.GenericTypes[1]))
+	case "PartialModMap":
+		return fmt.Sprintf("restream.NewPartialModMap[%s, %s, %s]()",
+			ft.getGolangTypeName(si.GenericTypes[0]),
+			ft.getGolangTypeName(si.GenericTypes[1]),
+			ft.getGolangTypeName(si.GenericTypes[2]))
+	case "PartialArray":
+		return fmt.Sprintf("restream.NewPartialArray[%s]()",
+			ft.getGolangTypeName(si.GenericTypes[0]))
+	case "PartialModArray":
+		return fmt.Sprintf("restream.NewPartialModArray[%s, %s]()",
+			ft.getGolangTypeName(si.GenericTypes[0]),
+			ft.getGolangTypeName(si.GenericTypes[1]))
+	default:
+		panic(fmt.Sprintf("unsupported partial container %s", si.Name))
+	}
+}
+
+func mustPartialStructInfo(vi restream.VarInfo) *restream.VarInfoStruct {
+	if ptr, ok := vi.(*restream.VarInfoPointer); ok {
+		vi = ptr.SubType
+	}
+	if st, ok := vi.(*restream.VarInfoStruct); ok {
+		return st
+	}
+	panic(fmt.Sprintf("partial field is not a struct: %T", vi))
+}
+
+func isPointerVarInfo(vi restream.VarInfo) bool {
+	_, ok := vi.(*restream.VarInfoPointer)
+	return ok
 }
 
 // createGolangStructFieldedSerializers is a reusable helper to write out the serializer/deserializer functions for a fielded struct

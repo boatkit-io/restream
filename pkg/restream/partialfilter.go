@@ -44,7 +44,7 @@ func ChildFieldsForField(fields [][]any, fieldName string) [][]any {
 			continue
 		}
 		fieldNamePart, ok := field[0].(string)
-		if !ok || fieldNamePart != fieldName {
+		if !ok || subscriptionKeyPart(fieldNamePart) != subscriptionKeyPart(fieldName) {
 			continue
 		}
 		ret = append(ret, append([]any{}, field[1:]...))
@@ -200,6 +200,11 @@ func partialFieldKey[K comparable](raw any) (K, bool) {
 	return keyValue.Interface().(K), true
 }
 
+// FieldPathPartToKey converts a field-path value into a map key type.
+func FieldPathPartToKey[K comparable](raw any) (K, bool) {
+	return partialFieldKey[K](raw)
+}
+
 func partialArrayIndex(raw any) (int, bool) {
 	if idx, ok := raw.(int); ok {
 		return idx, true
@@ -213,4 +218,9 @@ func partialArrayIndex(raw any) (int, bool) {
 		return 0, false
 	}
 	return parsed, true
+}
+
+// FieldPathPartToIndex converts a field-path value into a slice index.
+func FieldPathPartToIndex(raw any) (int, bool) {
+	return partialArrayIndex(raw)
 }
