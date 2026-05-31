@@ -3,7 +3,17 @@ import { beforeAll, describe, expect, test, vi } from 'vitest';
 
 import TriggerStore from './TriggerStore.js';
 import BinaryReader from '../utils/BinaryReader.js';
-import { PartialFor } from '../utils/SerializationTypes.js';
+import type {
+    FieldInfo,
+    PartialFor,
+} from '../utils/SerializationTypes.js';
+import {
+    SerializationType,
+    VarInfoMap,
+    VarInfoPointer,
+    VarInfoPrimitive,
+    VarInfoStruct,
+} from '../utils/SerializationTypes.js';
 
 interface TriggerStoreSpecState {
     values: Map<string, number>;
@@ -26,6 +36,65 @@ class TriggerStoreSpecStore extends TriggerStore<TriggerStoreSpecState> {
             deserialized: (_r: BinaryReader) => ({ values: new Map() }),
         }, {
             deserialized: (_r: BinaryReader) => new TriggerStoreSpecPartial(),
+        });
+    }
+
+    fireField(field: (string | number)[]): void {
+        (this as unknown as TriggerStorePrivate)._triggerFieldUpdate(field);
+    }
+}
+
+interface GeneratedDevicePGNState {
+    rxCount: number;
+}
+
+class GeneratedDevicePGN {
+    static _fieldInfo: FieldInfo[] = [
+        { name: "RxCount", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPrimitive(SerializationType.Uint64, "uint") },
+    ];
+
+    static deserialized(): GeneratedDevicePGNState {
+        return { rxCount: 0 };
+    }
+}
+
+interface GeneratedTriggerStoreSpecState {
+    devicePGNs: Map<string, GeneratedDevicePGNState>;
+}
+
+class GeneratedTriggerStoreSpecPartial implements PartialFor<GeneratedTriggerStoreSpecState> {
+    applyTo(): (string | number)[][] {
+        return [];
+    }
+}
+
+class GeneratedTriggerStoreSpecStateType {
+    static _fieldInfo: FieldInfo[] = [
+        {
+            name: "DevicePGNs",
+            fieldIdx: 0,
+            fieldID: 1,
+            varInfo: new VarInfoMap(
+                false,
+                new VarInfoPrimitive(SerializationType.String),
+                new VarInfoPointer(false, new VarInfoStruct("GeneratedDevicePGN", "test", GeneratedDevicePGN)),
+            ),
+        },
+    ];
+
+    static fromValues(): GeneratedTriggerStoreSpecState {
+        return { devicePGNs: new Map() };
+    }
+
+    static deserialized(): GeneratedTriggerStoreSpecState {
+        return { devicePGNs: new Map() };
+    }
+}
+
+class GeneratedTriggerStoreSpecStore extends TriggerStore<GeneratedTriggerStoreSpecState> {
+    constructor(public readonly testStoreName: string) {
+        super(testStoreName, GeneratedTriggerStoreSpecStateType, {
+            deserialized: (_r: BinaryReader) => new GeneratedTriggerStoreSpecPartial(),
         });
     }
 
@@ -119,6 +188,61 @@ describe('TriggerStore keyed subscriptions', () => {
 
         store.unsubscribe(tokenA);
         store.unsubscribe(tokenB);
+    });
+
+    test('generated store subscriptions normalize field names for trigger matching and wire keys', () => {
+        const store = new GeneratedTriggerStoreSpecStore(uniqueStoreName());
+        const callback = vi.fn();
+        const token = store.subscribe(callback, 'DevicePGNs');
+
+        expect(TriggerStore.getStoreSubs().filter(sub => sub.storeName === store.testStoreName)).toEqual([
+            { storeName: store.testStoreName, key: 'devicePGNs' },
+        ]);
+
+        store.fireField(['devicePGNs']);
+
+        expect(callback).toHaveBeenCalledTimes(1);
+
+        store.unsubscribe(token);
+    });
+
+    test('generated store nested keypaths normalize struct fields but preserve map keys', () => {
+        const store = new GeneratedTriggerStoreSpecStore(uniqueStoreName());
+        const matchingCallback = vi.fn();
+        const wrongMapKeyCallback = vi.fn();
+        const matchingToken = store.subscribe(matchingCallback, 'DevicePGNs%&CAN0%&RxCount');
+        const wrongMapKeyToken = store.subscribe(wrongMapKeyCallback, 'DevicePGNs%&can0%&RxCount');
+
+        expect(TriggerStore.getStoreSubs().filter(sub => sub.storeName === store.testStoreName)).toEqual([
+            { storeName: store.testStoreName, key: 'devicePGNs%&CAN0%&rxCount' },
+            { storeName: store.testStoreName, key: 'devicePGNs%&can0%&rxCount' },
+        ]);
+
+        store.fireField(['devicePGNs', 'CAN0', 'rxCount']);
+
+        expect(matchingCallback).toHaveBeenCalledTimes(1);
+        expect(wrongMapKeyCallback).not.toHaveBeenCalled();
+
+        store.unsubscribe(matchingToken);
+        store.unsubscribe(wrongMapKeyToken);
+    });
+
+    test('generated store equivalent field keys share one wire subscription until all aliases unsubscribe', () => {
+        const store = new GeneratedTriggerStoreSpecStore(uniqueStoreName());
+        const upperToken = store.subscribe(vi.fn(), 'DevicePGNs');
+        const lowerToken = store.subscribe(vi.fn(), 'devicePGNs');
+
+        expect(TriggerStore.getStoreSubs().filter(sub => sub.storeName === store.testStoreName)).toEqual([
+            { storeName: store.testStoreName, key: 'devicePGNs' },
+        ]);
+
+        store.unsubscribe(upperToken);
+        expect(TriggerStore.getStoreSubs().filter(sub => sub.storeName === store.testStoreName)).toEqual([
+            { storeName: store.testStoreName, key: 'devicePGNs' },
+        ]);
+
+        store.unsubscribe(lowerToken);
+        expect(TriggerStore.getStoreSubs().filter(sub => sub.storeName === store.testStoreName)).toEqual([]);
     });
 });
 

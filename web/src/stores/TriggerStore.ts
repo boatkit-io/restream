@@ -2,10 +2,26 @@ import { StoreBase, formCompoundKey } from '@boatkit-io/resub';
 
 import { StoreUpdateFullMessage, StoreUpdateMessage, StoreUpdateMessageKind, StoreUpdatePartialMessage } from '../websocket/SocketHelper.js';
 import BinaryReader from '../utils/BinaryReader.js';
-import { PartialFor } from '../utils/SerializationTypes.js';
+import type {
+    FieldInfo,
+    PartialFor,
+    VarInfo,
+} from '../utils/SerializationTypes.js';
+import {
+    VarInfoArray,
+    VarInfoMap,
+    VarInfoPointer,
+    VarInfoStruct,
+} from '../utils/SerializationTypes.js';
 import SubscribableEvent from '../utils/SubscribableEvent.js';
 
 const compoundKeyJoinerString = "%&";
+
+type GeneratedStateType<S extends object> = {
+    fromValues: () => S;
+    deserialized: (r: BinaryReader) => S;
+    _fieldInfo?: FieldInfo[];
+};
 
 declare global {
     var __DEV__: boolean | undefined;
@@ -43,7 +59,7 @@ export default abstract class TriggerStore<S extends object> extends StoreBase {
         return Object.values(this._storeMap);
     }
 
-    constructor(private _storeName: string, private _stateType: { fromValues: () => S, deserialized: (r: BinaryReader) => S },
+    constructor(private _storeName: string, private _stateType: GeneratedStateType<S>,
         private _partialType: { deserialized: (r: BinaryReader) => PartialFor<S> }) {
         super();
 
@@ -67,22 +83,26 @@ export default abstract class TriggerStore<S extends object> extends StoreBase {
 
     // Track when the app first starts caring and last stops caring about this store, for the streaming service
     protected override _startedTrackingSub(key?: string) {
-        const wireKey = key ?? "";
+        const wireKey = this._canonicalSubscriptionKey(key);
         let keys = TriggerStore._storeSubs.get(this._storeName);
         if (!keys) {
             keys = new Set();
             TriggerStore._storeSubs.set(this._storeName, keys);
         }
         if (keys.has(wireKey)) {
-            throw new Error('Started tracking already tracked sub: ' + this._storeName + "/" + wireKey);
+            return;
         }
 
         keys.add(wireKey);
-        TriggerStore.eventSubscriptionStarted.fire(this._storeName, key);
+        TriggerStore.eventSubscriptionStarted.fire(this._storeName, wireKey === "" ? undefined : wireKey);
     }
 
     protected override _stoppedTrackingSub(key?: string) {
-        const wireKey = key ?? "";
+        const wireKey = this._canonicalSubscriptionKey(key);
+        if (this._hasActiveSubscriptionForCanonicalKey(wireKey)) {
+            return;
+        }
+
         const keys = TriggerStore._storeSubs.get(this._storeName);
         if (!keys?.has(wireKey)) {
             throw new Error('Got _stoppedTrackingKey without _hasAnySubscriptions: ' + this._storeName + "/" + wireKey);
@@ -93,7 +113,7 @@ export default abstract class TriggerStore<S extends object> extends StoreBase {
         if (keys.size === 0) {
             TriggerStore._storeSubs.delete(this._storeName);
         }
-        TriggerStore.eventSubscriptionStopped.fire(this._storeName, key);
+        TriggerStore.eventSubscriptionStopped.fire(this._storeName, wireKey === "" ? undefined : wireKey);
     }
 
     private _processUpdateMessage(message: StoreUpdateMessage): void {
@@ -125,17 +145,46 @@ export default abstract class TriggerStore<S extends object> extends StoreBase {
             return;
         }
 
-        const fieldKey = formCompoundKey(...field);
-        const keysToTrigger = new Set<string>([fieldKey]);
+        const fieldKey = this._canonicalFieldKey(field);
+        const keysToTrigger = new Set<string>();
         for (const subscriptionKey of this._getSubscriptionKeys()) {
             if (subscriptionKey === StoreBase.Key_All) {
                 continue;
             }
-            if (subscriptionKeyAffectsField(fieldKey, subscriptionKey)) {
+            if (subscriptionKeyAffectsField(fieldKey, this._canonicalSubscriptionKey(subscriptionKey))) {
                 keysToTrigger.add(subscriptionKey);
             }
         }
+        if (keysToTrigger.size === 0) {
+            keysToTrigger.add(fieldKey);
+        }
         this.trigger([...keysToTrigger]);
+    }
+
+    private _canonicalSubscriptionKey(key?: string): string {
+        if (key === undefined || key === StoreBase.Key_All) {
+            return "";
+        }
+        return this._canonicalFieldKey(key.split(compoundKeyJoinerString));
+    }
+
+    private _canonicalFieldKey(field: (string | number)[]): string {
+        return formCompoundKey(...canonicalFieldPath(field, this._stateType._fieldInfo));
+    }
+
+    private _hasActiveSubscriptionForCanonicalKey(wireKey: string): boolean {
+        for (const subscriptionKey of this._getSubscriptionKeys()) {
+            if (subscriptionKey === StoreBase.Key_All) {
+                if (wireKey === "") {
+                    return true;
+                }
+                continue;
+            }
+            if (this._canonicalSubscriptionKey(subscriptionKey) === wireKey) {
+                return true;
+            }
+        }
+        return false;
     }
 }
 
@@ -149,4 +198,78 @@ function subscriptionKeyAffectsField(fieldKey: string, subscriptionKey: string):
         }
     }
     return true;
+}
+
+function canonicalFieldPath(field: (string | number)[], rootFields: FieldInfo[] | undefined): (string | number)[] {
+    const ret: (string | number)[] = [];
+    let fields = rootFields;
+    let valueInfo: VarInfo | undefined;
+
+    for (let idx = 0; idx < field.length;) {
+        if (fields) {
+            const fieldInfo = fields.find(fi => fieldNameMatches(field[idx], fi.name));
+            if (!fieldInfo) {
+                ret.push(...field.slice(idx));
+                break;
+            }
+
+            ret.push(clientFieldName(fieldInfo.name));
+            valueInfo = fieldInfo.varInfo;
+            fields = undefined;
+            idx++;
+            continue;
+        }
+
+        const unwrapped = unwrapPointer(valueInfo);
+        if (unwrapped instanceof VarInfoMap) {
+            ret.push(field[idx]);
+            valueInfo = unwrapped.elemType;
+            fields = fieldsForValue(valueInfo);
+            idx++;
+            continue;
+        }
+        if (unwrapped instanceof VarInfoArray) {
+            ret.push(field[idx]);
+            valueInfo = unwrapped.elemType;
+            fields = fieldsForValue(valueInfo);
+            idx++;
+            continue;
+        }
+
+        fields = fieldsForValue(valueInfo);
+        if (fields) {
+            continue;
+        }
+
+        ret.push(...field.slice(idx));
+        break;
+    }
+
+    return ret;
+}
+
+function fieldNameMatches(part: string | number, fieldName: string): boolean {
+    return typeof part === "string" && clientFieldName(part) === clientFieldName(fieldName);
+}
+
+function clientFieldName(name: string): string {
+    if (name === "" || name.includes("_")) {
+        return name;
+    }
+    return name[0].toLowerCase() + name.slice(1);
+}
+
+function fieldsForValue(vi: VarInfo | undefined): FieldInfo[] | undefined {
+    const unwrapped = unwrapPointer(vi);
+    if (!(unwrapped instanceof VarInfoStruct)) {
+        return undefined;
+    }
+    return (unwrapped.deserializer as { _fieldInfo?: FieldInfo[] } | undefined)?._fieldInfo;
+}
+
+function unwrapPointer(vi: VarInfo | undefined): VarInfo | undefined {
+    while (vi instanceof VarInfoPointer) {
+        vi = vi.subType;
+    }
+    return vi;
 }

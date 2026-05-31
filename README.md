@@ -13,7 +13,41 @@ ReStream is a data streaming framework based on [ReSub](https://github.com/boatk
 
 The data model for resub is designed around Stores that hold all state and emit events when changes are made.  See [the ReSub complete example](https://github.com/boatkit-io/resub) to get a basic idea of how to think about stores.
 
-In ReStream, we use the same store model as in ReSub, but the stores are created in golang and streamed over to codegenned TypeScript versions of the stores.  The pattern for ReStream stores is to first create a 
+In ReStream, we use the same store model as in ReSub, but the stores are created in golang and streamed over to codegenned TypeScript versions of the stores.
+
+### Field-Keyed TypeScript Subscriptions
+
+Generated ReStream store states support field-keyed ReSub subscriptions on the TypeScript side. Use `@autoSubscribeWithKey` with a generated field name or nested key path when a getter should only re-run for partial updates that touch that part of the store.
+
+```typescript
+import { AutoSubscribeStore, autoSubscribeWithKey, formCompoundKey } from '@boatkit-io/resub';
+import { TriggerStore } from '@boatkit-io/restream';
+
+import { DeviceStoreName, DeviceStoreState, DeviceStoreStatePartial } from './restream/PackageDevice';
+
+@AutoSubscribeStore
+class DeviceStore extends TriggerStore<DeviceStoreState> {
+    constructor() {
+        super(DeviceStoreName, DeviceStoreState, DeviceStoreStatePartial);
+    }
+
+    @autoSubscribeWithKey("DevicePGNs")
+    getAllDevicePGNs() {
+        return this._state.devicePGNs;
+    }
+}
+```
+
+For generated ReStream stores, subscription keys are treated as store-state field paths rather than arbitrary opaque tokens. Field names are normalized between Go-style names and generated TypeScript names, so `DevicePGNs` and `devicePGNs` refer to the same field. Build nested key paths with ReSub's compound-key helper:
+
+```typescript
+@autoSubscribeWithKey(formCompoundKey("DevicePGNs", "CAN0", "RxCount"))
+getCAN0RxCount() {
+    return this._state.devicePGNs?.get("CAN0")?.rxCount;
+}
+```
+
+Struct field names in nested paths are normalized the same way, but map keys are exact. In the example above, `CAN0` is a map key and will not match `can0`. Full-store subscriptions still update for any store change, while field-keyed subscriptions update only when the generated partial reports that exact field path or one of its parent/child paths.
 
 ## Annotations
 
