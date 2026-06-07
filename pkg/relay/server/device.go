@@ -6,6 +6,12 @@ import (
 
 	"github.com/boatkit-io/restream/pkg/relay/protocol"
 	"github.com/boatkit-io/restream/pkg/restream"
+	gws "github.com/gorilla/websocket"
+)
+
+const (
+	duplicateRelayConnectionReason          = "replaced by a newer relay connection for this device"
+	storeSubscriptionForwardingFailedReason = "store subscription forwarding failed; reconnect required"
 )
 
 // Device stores aggregated relay data for one device.
@@ -62,7 +68,7 @@ func (d *Device) DeviceConnected(conn *Connection) {
 	d.connMutex.Unlock()
 
 	if previous != nil {
-		previous.Close() //nolint:errcheck // Why: Closing stale connection best-effort.
+		previous.CloseWithReason(gws.ClosePolicyViolation, duplicateRelayConnectionReason) //nolint:errcheck // Why: Closing stale connection best-effort.
 		d.closePendingRPCsForConn(previous)
 	}
 
@@ -107,7 +113,7 @@ func (d *Device) forwardStoreSubscription(storeName string, key string, subscrib
 	}
 
 	if err := conn.SendStoreSubscription(storeName, key, subscribe); err != nil {
-		conn.Close() //nolint:errcheck // Why: Closing forces reconnect and subscription replay.
+		conn.CloseWithReason(gws.CloseGoingAway, storeSubscriptionForwardingFailedReason) //nolint:errcheck // Why: Closing forces reconnect and subscription replay.
 	}
 }
 

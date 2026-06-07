@@ -3,10 +3,12 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/boatkit-io/restream/pkg/relay/protocol"
 	"github.com/boatkit-io/restream/pkg/restream"
@@ -14,7 +16,10 @@ import (
 )
 
 const (
-	defaultRPCWriteTimeout = 5 * time.Second
+	defaultRPCWriteTimeout       = 5 * time.Second
+	defaultCloseWriteTimeout     = time.Second
+	maxWebsocketCloseReasonBytes = 123
+	relayServerShutdownReason    = "relay server shutting down"
 )
 
 // AuthFunc authenticates a device hello and returns the relay access level for the connection.
@@ -42,7 +47,7 @@ func New(config Config) *Server {
 }
 
 // AcceptConn handles a device websocket until it disconnects or ctx is cancelled.
-func (s *Server) AcceptConn(ctx context.Context, conn *gws.Conn) error {
+func (s *Server) AcceptConn(ctx context.Context, conn *gws.Conn) (retErr error) {
 	if s.config.DeviceManager == nil {
 		return fmt.Errorf("relay server DeviceManager is not configured")
 	}
@@ -56,13 +61,19 @@ func (s *Server) AcceptConn(ctx context.Context, conn *gws.Conn) error {
 		rpcWriteTimeout: s.config.RPCWriteTimeout,
 		streamStarted:   time.Now(),
 	}
+	closeOnReturn := true
+	defer func() {
+		if closeOnReturn {
+			closeConnectionForReturn(c, retErr)
+		}
+	}()
 
 	closeOnContextDone := make(chan struct{})
 	defer close(closeOnContextDone)
 	go func() {
 		select {
 		case <-ctx.Done():
-			conn.Close() //nolint:errcheck // Why: Closing best effort to unblock ReadMessage.
+			c.CloseWithReason(gws.CloseGoingAway, relayServerShutdownReason) //nolint:errcheck // Why: Closing best effort to unblock ReadMessage.
 		case <-closeOnContextDone:
 		}
 	}()
@@ -78,6 +89,10 @@ func (s *Server) AcceptConn(ctx context.Context, conn *gws.Conn) error {
 
 	device.DeviceConnected(c)
 	defer device.DeviceDisconnected(c)
+	defer func() {
+		closeOnReturn = false
+		closeConnectionForReturn(c, retErr)
+	}()
 
 	if err := device.sendActiveStoreSubscriptions(c); err != nil {
 		return err
@@ -223,6 +238,28 @@ func (c *Connection) Close() error {
 	return c.conn.Close()
 }
 
+// CloseWithReason sends a websocket close control frame with reason before closing the connection.
+func (c *Connection) CloseWithReason(code int, reason string) error {
+	if c == nil || c.conn == nil {
+		return nil
+	}
+
+	var retErr error
+	deadline := time.Now().Add(defaultCloseWriteTimeout)
+	msg := gws.FormatCloseMessage(code, truncateWebsocketCloseReason(reason))
+
+	c.rpcWriteMutex.Lock()
+	if err := c.conn.WriteControl(gws.CloseMessage, msg, deadline); err != nil {
+		retErr = err
+	}
+	c.rpcWriteMutex.Unlock()
+
+	if err := c.conn.Close(); retErr == nil {
+		retErr = err
+	}
+	return retErr
+}
+
 // SendRPC sends an RPC command to the connected device.
 func (c *Connection) SendRPC(rpcID uint32, name string, accessLevel restream.AccessLevel, binaryData []byte) error {
 	packetBytes, err := protocol.EncodePacket(&protocol.RPCCallPacket{
@@ -311,4 +348,40 @@ func (c *Connection) ID() string {
 		return fmt.Sprintf("%+v", c.RemoteAddr())
 	}
 	return "unknown"
+}
+
+func shouldSendCloseReason(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var closeErr *gws.CloseError
+	if errors.As(err, &closeErr) {
+		return false
+	}
+	if errors.Is(err, net.ErrClosed) {
+		return false
+	}
+	return true
+}
+
+func closeConnectionForReturn(c *Connection, err error) {
+	if shouldSendCloseReason(err) {
+		c.CloseWithReason(gws.CloseInternalServerErr, err.Error()) //nolint:errcheck // Why: Already returning the stream error.
+		return
+	}
+	c.Close() //nolint:errcheck // Why: Cleanup is best effort after the stream ends.
+}
+
+func truncateWebsocketCloseReason(reason string) string {
+	if len(reason) <= maxWebsocketCloseReasonBytes {
+		return reason
+	}
+
+	truncated := []byte(reason)
+	truncated = truncated[:maxWebsocketCloseReasonBytes]
+	for len(truncated) > 0 && !utf8.Valid(truncated) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return string(truncated)
 }

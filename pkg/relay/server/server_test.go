@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -206,6 +207,43 @@ func TestConnectionSendStoreSubscriptionWritesPacket(t *testing.T) {
 	}
 }
 
+func TestConnectionCloseWithReasonWritesCloseFrame(t *testing.T) {
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	conn := NewConnection(serverConn)
+	if err := conn.CloseWithReason(gws.ClosePolicyViolation, duplicateRelayConnectionReason); err != nil {
+		t.Fatalf("CloseWithReason failed: %v", err)
+	}
+
+	_, _, err := clientConn.ReadMessage()
+	closeErr := assertCloseError(t, err)
+	if closeErr.Code != gws.ClosePolicyViolation {
+		t.Fatalf("close code = %d, want %d", closeErr.Code, gws.ClosePolicyViolation)
+	}
+	if closeErr.Text != duplicateRelayConnectionReason {
+		t.Fatalf("close reason = %q, want %q", closeErr.Text, duplicateRelayConnectionReason)
+	}
+}
+
+func TestDeviceConnectedClosesPreviousConnectionWithReason(t *testing.T) {
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	device := NewDevice("device-1", nil, DeviceManagerConfig{})
+	device.DeviceConnected(NewConnection(serverConn))
+	device.DeviceConnected(&Connection{})
+
+	_, _, err := clientConn.ReadMessage()
+	closeErr := assertCloseError(t, err)
+	if closeErr.Code != gws.ClosePolicyViolation {
+		t.Fatalf("close code = %d, want %d", closeErr.Code, gws.ClosePolicyViolation)
+	}
+	if closeErr.Text != duplicateRelayConnectionReason {
+		t.Fatalf("close reason = %q, want %q", closeErr.Text, duplicateRelayConnectionReason)
+	}
+}
+
 func TestServerAcceptConnReplaysActiveStoreSubscriptions(t *testing.T) {
 	manager := NewDeviceManager(DeviceManagerConfig{
 		Stores: func(string) ([]restream.Store, error) {
@@ -278,6 +316,53 @@ func TestServerAcceptConnReplaysActiveStoreSubscriptions(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("AcceptConn did not return after client close")
+	}
+}
+
+func TestServerAcceptConnSendsCloseReasonOnAuthenticationError(t *testing.T) {
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	authErr := errors.New("invalid relay credentials")
+	relayServer := New(Config{
+		DeviceManager: NewDeviceManager(DeviceManagerConfig{}),
+		AuthenticateDevice: func(context.Context, *protocol.DeviceHello, *Connection) (restream.AccessLevel, error) {
+			return restream.AccessLevel(0), authErr
+		},
+	})
+
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- relayServer.AcceptConn(context.Background(), serverConn)
+	}()
+
+	helloBytes, err := protocol.EncodeDeviceHello(&protocol.DeviceHello{
+		ProtocolVersion: protocol.CurrentVersion,
+		DeviceID:        "device-1",
+	})
+	if err != nil {
+		t.Fatalf("EncodeDeviceHello failed: %v", err)
+	}
+	if err := clientConn.WriteMessage(gws.BinaryMessage, helloBytes); err != nil {
+		t.Fatalf("Write hello failed: %v", err)
+	}
+
+	_, _, err = clientConn.ReadMessage()
+	closeErr := assertCloseError(t, err)
+	if closeErr.Code != gws.CloseInternalServerErr {
+		t.Fatalf("close code = %d, want %d", closeErr.Code, gws.CloseInternalServerErr)
+	}
+	if closeErr.Text != authErr.Error() {
+		t.Fatalf("close reason = %q, want %q", closeErr.Text, authErr.Error())
+	}
+
+	select {
+	case err := <-serverDone:
+		if !errors.Is(err, authErr) {
+			t.Fatalf("AcceptConn error = %v, want %v", err, authErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AcceptConn did not return after authentication error")
 	}
 }
 
@@ -388,6 +473,19 @@ func mustDecodePacket(t *testing.T, b []byte) protocol.Packet {
 		t.Fatalf("DecodePacket failed: %v", err)
 	}
 	return packet
+}
+
+func assertCloseError(t *testing.T, err error) *gws.CloseError {
+	t.Helper()
+
+	if err == nil {
+		t.Fatal("ReadMessage returned nil, want close error")
+	}
+	var closeErr *gws.CloseError
+	if !errors.As(err, &closeErr) {
+		t.Fatalf("ReadMessage error = %v, want websocket close error", err)
+	}
+	return closeErr
 }
 
 func newTestWebsocketPair(t *testing.T) (*gws.Conn, *gws.Conn, func()) {
