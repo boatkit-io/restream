@@ -46,6 +46,11 @@ func (s *RelayStore[S, SP, P]) GetMinimumAccessLevel() AccessLevel {
 	return s.minimumAccessLevel
 }
 
+// GetStoreType implements Store.
+func (s *RelayStore[S, SP, P]) GetStoreType() StoreType {
+	return StoreTypeCloudImplOfDevice
+}
+
 // GetStoreData implements Store.
 func (s *RelayStore[S, SP, P]) GetStoreData() StoreDataBase {
 	return s.storeData

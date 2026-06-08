@@ -56,6 +56,10 @@ func (s *storeDataLockTestStore) GetStoreData() StoreDataBase {
 	return s.data
 }
 
+func (s *storeDataLockTestStore) GetStoreType() StoreType {
+	return StoreTypeDeviceWithRelay
+}
+
 func (s *storeDataLockTestStore) SubscribeToField(field []any, callback any) {
 	s.data.SubscribeToField(field, callback)
 }

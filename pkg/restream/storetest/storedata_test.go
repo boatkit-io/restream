@@ -45,6 +45,9 @@ func (s *TestStore) GetName() string {
 func (s *TestStore) GetStoreData() restream.StoreDataBase {
 	return s.Sd
 }
+func (s *TestStore) GetStoreType() restream.StoreType {
+	return restream.StoreTypeDeviceWithRelay
+}
 func (s *TestStore) SubscribeToField(field []any, callback any) {
 	s.Sd.SubscribeToField(field, callback)
 }
@@ -562,6 +565,9 @@ func (s *TestAStore) GetName() string {
 }
 func (s *TestAStore) GetStoreData() restream.StoreDataBase {
 	return s.Sd
+}
+func (s *TestAStore) GetStoreType() restream.StoreType {
+	return restream.StoreTypeDeviceWithRelay
 }
 func (s *TestAStore) SubscribeToField(field []any, callback any) {
 	s.Sd.SubscribeToField(field, callback)

@@ -600,7 +600,7 @@ func (ft *FileTracking) buildGolangEventStruct(eventName, eventTypeName string, 
 }
 
 // createGoStoreMethods builds the boilerplate Store interface methods for a typed store.
-func (ft *FileTracking) createGoStoreMethods(si StructInfo, storeName string) {
+func (ft *FileTracking) createGoStoreMethods(si StructInfo, storeName string, storeTypeExpr string) {
 	constName := si.Name + "Name"
 
 	out := fmt.Sprintf("// %s is the restream store name for %s\n", constName, si.Name)
@@ -619,6 +619,11 @@ func (ft *FileTracking) createGoStoreMethods(si StructInfo, storeName string) {
 	out += "// SubscribeToField implements the restream.Store interface\n"
 	out += fmt.Sprintf("func (s *%s) SubscribeToField(field []any, callback any) {\n", si.GolangNameWithParams())
 	out += "    s.storeData.SubscribeToField(field, callback)\n"
+	out += "}\n\n"
+
+	out += "// GetStoreType returns the ReStream store implementation type.\n"
+	out += fmt.Sprintf("func (s *%s) GetStoreType() restream.StoreType {\n", si.GolangNameWithParams())
+	out += fmt.Sprintf("    return %s\n", storeTypeExpr)
 	out += "}\n"
 
 	ft.goGenEntries = append(ft.goGenEntries, fdef{name: si.Name + "Store", defs: out})
@@ -644,19 +649,7 @@ func (pt *ProjTracking) addRelayStoreFactory(
 	stateRef storeStateRef,
 	minimumAccessLevel string,
 ) {
-	key := ft.fPackage.PkgPath
-	if key == "" {
-		key = path.Dir(ft.inFile)
-	}
-
-	pkg := pt.relayStores[key]
-	if pkg == nil {
-		pkg = &relayStorePackage{
-			packageName: ft.f.Name.Name,
-			packageDir:  path.Dir(ft.inFile),
-		}
-		pt.relayStores[key] = pkg
-	}
+	pkg := pt.relayStorePackageForFile(ft)
 
 	store := relayStoreFactory{
 		storeTypeName:      si.Name,
@@ -672,12 +665,25 @@ func (pt *ProjTracking) addRelayStoreFactory(
 	pkg.stores = append(pkg.stores, store)
 }
 
+func (pt *ProjTracking) relayStorePackageForFile(ft *FileTracking) *relayStorePackage {
+	key := ft.fPackage.PkgPath
+	if key == "" {
+		key = path.Dir(ft.inFile)
+	}
+
+	pkg := pt.relayStores[key]
+	if pkg == nil {
+		pkg = &relayStorePackage{
+			packageName: ft.f.Name.Name,
+			packageDir:  path.Dir(ft.inFile),
+		}
+		pt.relayStores[key] = pkg
+	}
+	return pkg
+}
+
 func (pt *ProjTracking) writeRelayStoreFactories() error {
 	for _, pkg := range pt.relayStores {
-		if len(pkg.stores) == 0 {
-			continue
-		}
-
 		outPath := path.Join(pkg.packageDir, "relaystores_rs.go")
 		if err := pt.writeGoFile(outPath, pkg.packageName, []fdef{pkg.relayStoreFactoryDef()}); err != nil {
 			return err

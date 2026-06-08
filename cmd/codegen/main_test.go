@@ -331,6 +331,8 @@ func (*BoardStore) GetMinimumAccessLevel() restream.AccessLevel {
 		"return s.storeData",
 		"func (s *BoardStore) SubscribeToField(field []any, callback any)",
 		"s.storeData.SubscribeToField(field, callback)",
+		"func (s *BoardStore) GetStoreType() restream.StoreType",
+		"return restream.StoreTypeDeviceWithRelay",
 	} {
 		if !strings.Contains(got, expected) {
 			t.Fatalf("generated store boilerplate missing expected %q:\n%s", expected, got)
@@ -379,6 +381,133 @@ func (*BoardStore) GetMinimumAccessLevel() restream.AccessLevel {
 	} {
 		if !strings.Contains(relayGenerated, expected) {
 			t.Fatalf("generated relay store factory missing expected %q:\n%s", expected, relayGenerated)
+		}
+	}
+}
+
+func TestStoreAnnotationStoreTypesControlRelayFactory(t *testing.T) {
+	repoRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	projectDir := t.TempDir()
+	serverDir := filepath.Join(projectDir, "cmd", "server")
+	if err := os.MkdirAll(serverDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/storeannotationtypes
+
+go 1.26.3
+
+require github.com/boatkit-io/restream v0.0.0
+
+replace github.com/boatkit-io/restream => `+repoRoot+`
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	sourcePath := filepath.Join(serverDir, "stores.go")
+	if err := os.WriteFile(sourcePath, []byte(`package main
+
+import "github.com/boatkit-io/restream/pkg/restream"
+
+// @restream.partials
+type DeviceRelayState struct{}
+
+// @restream.partials
+type DeviceNoRelayState struct{}
+
+// @restream.partials
+type DeviceCloudImplState struct{}
+
+// @restream.partials
+type DeviceAndCloudState struct{}
+
+// @restream.partials
+type CloudImplOfDeviceState struct{}
+
+// @restream.partials
+type CloudOnlyState struct{}
+
+// @restream.store(RelayStore, DeviceWithRelay)
+type DeviceRelay struct {
+	storeData *restream.StoreData[DeviceRelayState, *DeviceRelayState, *DeviceRelayStatePartial]
+}
+
+// @restream.store(NoRelayStore, DeviceWithNoRelay)
+type DeviceNoRelay struct {
+	storeData *restream.StoreData[DeviceNoRelayState, *DeviceNoRelayState, *DeviceNoRelayStatePartial]
+}
+
+// @restream.store(CloudImplStore, DeviceWithCloudImpl)
+type DeviceCloudImpl struct {
+	storeData *restream.StoreData[DeviceCloudImplState, *DeviceCloudImplState, *DeviceCloudImplStatePartial]
+}
+
+// @restream.store(DeviceAndCloudStore, DeviceAndCloud)
+type DeviceAndCloud struct {
+	storeData *restream.StoreData[DeviceAndCloudState, *DeviceAndCloudState, *DeviceAndCloudStatePartial]
+}
+
+// @restream.store(CloudImplOfDeviceStore, CloudImplOfDevice)
+type CloudImplOfDevice struct {
+	storeData *restream.StoreData[CloudImplOfDeviceState, *CloudImplOfDeviceState, *CloudImplOfDeviceStatePartial]
+}
+
+// @restream.store(CloudOnlyStore, CloudOnly)
+type CloudOnly struct {
+	storeData *restream.StoreData[CloudOnlyState, *CloudOnlyState, *CloudOnlyStatePartial]
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	pt := NewProjTracking(projectDir, &restreamConfig{
+		InputDirs: []string{"cmd/server"},
+	})
+	if err := pt.parseProject(); err != nil {
+		t.Fatal(err)
+	}
+	for _, ft := range pt.files {
+		if err := ft.Run(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := pt.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	generated, err := os.ReadFile(filepath.Join(serverDir, "stores_rs.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	storeGenerated := string(generated)
+	for _, expected := range []string{
+		"return restream.StoreTypeDeviceWithRelay",
+		"return restream.StoreTypeDeviceWithNoRelay",
+		"return restream.StoreTypeDeviceWithCloudImpl",
+		"return restream.StoreTypeDeviceAndCloud",
+		"return restream.StoreTypeCloudImplOfDevice",
+		"return restream.StoreTypeCloudOnly",
+	} {
+		if !strings.Contains(storeGenerated, expected) {
+			t.Fatalf("generated store source missing expected %q:\n%s", expected, storeGenerated)
+		}
+	}
+
+	relayOut, err := os.ReadFile(filepath.Join(serverDir, "relaystores_rs.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	relayGenerated := string(relayOut)
+	if !strings.Contains(relayGenerated, "restream.NewRelayStore[DeviceRelayState, *DeviceRelayState, *DeviceRelayStatePartial]") {
+		t.Fatalf("generated relay factory missing DeviceWithRelay store:\n%s", relayGenerated)
+	}
+	for _, unexpected := range []string{"DeviceNoRelayName", "DeviceCloudImplName", "DeviceAndCloudName", "CloudImplOfDeviceName", "CloudOnlyName"} {
+		if strings.Contains(relayGenerated, unexpected) {
+			t.Fatalf("generated relay factory included non-relay store %q:\n%s", unexpected, relayGenerated)
 		}
 	}
 }

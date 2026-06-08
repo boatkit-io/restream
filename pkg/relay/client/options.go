@@ -22,7 +22,7 @@ type Credentials struct {
 	Metadata map[string]string
 }
 
-// StorePolicy controls which stores are sent to the relay and how partials are debounced.
+// StorePolicy controls additional store filtering and partial debounce behavior for stores that stream to a relay.
 type StorePolicy struct {
 	Include  map[string]struct{}
 	Exclude  map[string]struct{}

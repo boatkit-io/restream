@@ -11,6 +11,7 @@ import (
 
 type registryTestStore struct {
 	data               *registryTestStoreData
+	storeType          StoreType
 	minimumAccessLevel AccessLevel
 
 	storeStarted int
@@ -35,6 +36,10 @@ func (s *registryTestStore) GetStoreData() StoreDataBase {
 
 func (s *registryTestStore) GetMinimumAccessLevel() AccessLevel {
 	return s.minimumAccessLevel
+}
+
+func (s *registryTestStore) GetStoreType() StoreType {
+	return s.storeType
 }
 
 func (s *registryTestStore) SubscribeToField([]any, any) {
@@ -127,6 +132,27 @@ func TestStoreRegistryRefCountsDuplicateKeySubscriptions(t *testing.T) {
 	if err := registry.StopListeningToStoreKey(store.GetName(), "values%&a"); err == nil {
 		t.Fatal("expected double unsubscribe to fail")
 	}
+}
+
+func TestStoreRegistryTracksStoreType(t *testing.T) {
+	store := newRegistryTestStore()
+	store.storeType = StoreTypeDeviceWithNoRelay
+	registry, err := NewStoreRegistry([]Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+
+	storeType, err := registry.GetStoreType(store.GetName())
+	if err != nil {
+		t.Fatalf("GetStoreType failed: %v", err)
+	}
+	assertEqual(t, StoreTypeDeviceWithNoRelay, storeType)
+
+	streams, err := registry.StoreStreamsToRelay(store.GetName())
+	if err != nil {
+		t.Fatalf("StoreStreamsToRelay failed: %v", err)
+	}
+	assertEqual(t, false, streams)
 }
 
 func TestStoreRegistryRefCountsWholeStoreSubscriptions(t *testing.T) {

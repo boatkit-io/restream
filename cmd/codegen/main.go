@@ -37,6 +37,7 @@ var syntheticRestreamTypeNames = []string{
 	"PartialModMap",
 	"PartialValue",
 	"SerializationType",
+	"StoreType",
 	"VarInfo",
 	"VarInfoArray",
 	"VarInfoDynamic",

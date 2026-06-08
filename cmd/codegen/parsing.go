@@ -46,7 +46,7 @@ func (ft *FileTracking) parseStructDecls() error { //nolint:gocyclo,funlen
 		serializers := false
 		fielded := false
 		partial := false
-		storeName := ""
+		storeAnnotation := parsedRestreamStoreAnnotation{}
 		for _, dec := range dt.Decorations().Start {
 			if strings.Contains(dec, "@restream.serializers") {
 				serializers = true
@@ -60,16 +60,16 @@ func (ft *FileTracking) parseStructDecls() error { //nolint:gocyclo,funlen
 				fielded = true
 				partial = true
 			}
-			parsedStoreName, err := parseRestreamStoreAnnotation(dec)
+			parsedStoreAnnotation, err := parseRestreamStoreAnnotation(dec)
 			if err != nil {
 				return err
 			}
-			if parsedStoreName != "" {
-				storeName = parsedStoreName
+			if parsedStoreAnnotation.StoreName != "" {
+				storeAnnotation = parsedStoreAnnotation
 			}
 		}
 
-		if storeName != "" {
+		if storeAnnotation.StoreName != "" {
 			si := StructInfo{
 				Name: s.Name.Name,
 			}
@@ -85,13 +85,16 @@ func (ft *FileTracking) parseStructDecls() error { //nolint:gocyclo,funlen
 			if err := ft.ensureStoreDataMember(s, stateRef); err != nil {
 				return err
 			}
-			minimumAccessLevelExpr, err := ft.minimumAccessLevelExprForStore(si.Name)
-			if err != nil {
-				return err
+			ft.pt.relayStorePackageForFile(ft)
+			if storeAnnotation.StoreType.generatesRelayStore() {
+				minimumAccessLevelExpr, err := ft.minimumAccessLevelExprForStore(si.Name)
+				if err != nil {
+					return err
+				}
+				ft.pt.addRelayStoreFactory(ft, si, storeAnnotation.StoreName, stateRef, minimumAccessLevelExpr)
 			}
-			ft.pt.addRelayStoreFactory(ft, si, storeName, stateRef, minimumAccessLevelExpr)
-			ft.createGoStoreMethods(si, storeName)
-			ft.createTSStoreNameConst(si.Name, storeName)
+			ft.createGoStoreMethods(si, storeAnnotation.StoreName, storeAnnotation.StoreType.restreamExpr())
+			ft.createTSStoreNameConst(si.Name, storeAnnotation.StoreName)
 		}
 
 		if !serializers {
@@ -213,33 +216,146 @@ func (ft *FileTracking) parseStructDecls() error { //nolint:gocyclo,funlen
 	return nil
 }
 
-func parseRestreamStoreAnnotation(dec string) (string, error) {
+type parsedRestreamStoreAnnotation struct {
+	StoreName string
+	StoreType restreamStoreAnnotationType
+}
+
+type restreamStoreAnnotationType string
+
+const (
+	restreamStoreTypeDeviceWithRelay     restreamStoreAnnotationType = "DeviceWithRelay"
+	restreamStoreTypeDeviceWithNoRelay   restreamStoreAnnotationType = "DeviceWithNoRelay"
+	restreamStoreTypeDeviceWithCloudImpl restreamStoreAnnotationType = "DeviceWithCloudImpl"
+	restreamStoreTypeDeviceAndCloud      restreamStoreAnnotationType = "DeviceAndCloud"
+	restreamStoreTypeCloudOnly           restreamStoreAnnotationType = "CloudOnly"
+	restreamStoreTypeCloudImplOfDevice   restreamStoreAnnotationType = "CloudImplOfDevice"
+)
+
+func (t restreamStoreAnnotationType) restreamExpr() string {
+	return "restream.StoreType" + string(t)
+}
+
+func (t restreamStoreAnnotationType) generatesRelayStore() bool {
+	return t == restreamStoreTypeDeviceWithRelay
+}
+
+func parseRestreamStoreAnnotation(dec string) (parsedRestreamStoreAnnotation, error) {
 	const annotation = "@restream.store"
 
 	idx := strings.Index(dec, annotation)
 	if idx == -1 {
-		return "", nil
+		return parsedRestreamStoreAnnotation{}, nil
 	}
 
 	args := strings.TrimSpace(dec[idx+len(annotation):])
 	if !strings.HasPrefix(args, "(") {
-		return "", fmt.Errorf("%s requires a store name in parentheses", annotation)
+		return parsedRestreamStoreAnnotation{}, fmt.Errorf("%s requires a store name in parentheses", annotation)
 	}
 	endIdx := strings.Index(args, ")")
 	if endIdx == -1 {
-		return "", fmt.Errorf("%s annotation is missing a closing parenthesis", annotation)
+		return parsedRestreamStoreAnnotation{}, fmt.Errorf("%s annotation is missing a closing parenthesis", annotation)
 	}
 
-	storeName := strings.TrimSpace(args[1:endIdx])
+	parsedArgs, err := splitRestreamAnnotationArgs(args[1:endIdx])
+	if err != nil {
+		return parsedRestreamStoreAnnotation{}, fmt.Errorf("%s annotation has invalid arguments: %w", annotation, err)
+	}
+	if len(parsedArgs) < 1 || len(parsedArgs) > 2 {
+		return parsedRestreamStoreAnnotation{}, fmt.Errorf("%s requires one or two arguments: store name and optional store type", annotation)
+	}
+
+	storeName := strings.TrimSpace(parsedArgs[0])
 	if storeName == "" {
-		return "", fmt.Errorf("%s requires a non-empty store name", annotation)
+		return parsedRestreamStoreAnnotation{}, fmt.Errorf("%s requires a non-empty store name", annotation)
 	}
 
 	if unquoted, err := strconv.Unquote(storeName); err == nil {
 		storeName = unquoted
 	}
 
-	return storeName, nil
+	storeType := restreamStoreTypeDeviceWithRelay
+	if len(parsedArgs) == 2 {
+		storeType, err = parseRestreamStoreTypeArg(parsedArgs[1])
+		if err != nil {
+			return parsedRestreamStoreAnnotation{}, err
+		}
+	}
+
+	return parsedRestreamStoreAnnotation{
+		StoreName: storeName,
+		StoreType: storeType,
+	}, nil
+}
+
+func splitRestreamAnnotationArgs(args string) ([]string, error) {
+	ret := []string{}
+	start := 0
+	var quote rune
+	escaped := false
+
+	for idx, r := range args {
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if r == '\\' && quote != '`' {
+				escaped = true
+				continue
+			}
+			if r == quote {
+				quote = 0
+			}
+			continue
+		}
+
+		switch r {
+		case '\'', '"', '`':
+			quote = r
+		case ',':
+			ret = append(ret, strings.TrimSpace(args[start:idx]))
+			start = idx + 1
+		}
+	}
+	if quote != 0 {
+		return nil, fmt.Errorf("unterminated quoted string")
+	}
+
+	ret = append(ret, strings.TrimSpace(args[start:]))
+	return ret, nil
+}
+
+func parseRestreamStoreTypeArg(arg string) (restreamStoreAnnotationType, error) {
+	storeType := strings.TrimSpace(arg)
+	if name, value, hasValue := strings.Cut(storeType, "="); hasValue {
+		switch strings.TrimSpace(name) {
+		case "storeType", "type", "StoreType":
+			storeType = strings.TrimSpace(value)
+		}
+	}
+	if unquoted, err := strconv.Unquote(storeType); err == nil {
+		storeType = unquoted
+	}
+	storeType = strings.TrimPrefix(storeType, "restream.")
+	storeType = strings.TrimPrefix(storeType, "StoreType")
+
+	switch restreamStoreAnnotationType(storeType) {
+	case restreamStoreTypeDeviceWithRelay:
+		return restreamStoreTypeDeviceWithRelay, nil
+	case restreamStoreTypeDeviceWithNoRelay:
+		return restreamStoreTypeDeviceWithNoRelay, nil
+	case restreamStoreTypeDeviceWithCloudImpl:
+		return restreamStoreTypeDeviceWithCloudImpl, nil
+	case restreamStoreTypeDeviceAndCloud:
+		return restreamStoreTypeDeviceAndCloud, nil
+	case restreamStoreTypeCloudOnly:
+		return restreamStoreTypeCloudOnly, nil
+	case restreamStoreTypeCloudImplOfDevice:
+		return restreamStoreTypeCloudImplOfDevice, nil
+	default:
+		return "", fmt.Errorf("unknown @restream.store type %q; expected DeviceWithRelay, DeviceWithNoRelay, DeviceWithCloudImpl, DeviceAndCloud, CloudImplOfDevice, or CloudOnly", arg)
+	}
 }
 
 type storeTypeDecl struct {
@@ -299,11 +415,11 @@ func (pt *ProjTracking) ensureStoreStateStructs() error {
 			}
 
 			for _, dec := range gd.Decorations().Start {
-				storeName, err := parseRestreamStoreAnnotation(dec)
+				storeAnnotation, err := parseRestreamStoreAnnotation(dec)
 				if err != nil {
 					return err
 				}
-				if storeName != "" {
+				if storeAnnotation.StoreName != "" {
 					storeDecls = append(storeDecls, storeTypeDecl{ft: ft, declIdx: idx, spec: s})
 					break
 				}

@@ -48,3 +48,5 @@ manager := server.NewDeviceManager(server.DeviceManagerConfig{
 ```
 
 For relay codegen, `GetMinimumAccessLevel` must have the exact signature `GetMinimumAccessLevel() restream.AccessLevel`, and its body must be a single `return` of a compile-time integer constant or a conversion of one, for example `return restream.AccessLevel(auth.AccessLevelAdmin)`. Stores without the optional method use `restream.AccessLevelPublic`.
+
+`NewRelayStores` includes only stores annotated as `@restream.store(Name)` or `@restream.store(Name, DeviceWithRelay)`. `DeviceWithCloudImpl` stores still stream full states and partials from the device but expect a custom cloud store implementation annotated as `CloudImplOfDevice`. `DeviceWithNoRelay`, `DeviceAndCloud`, `CloudImplOfDevice`, and `CloudOnly` stores are skipped by the device relay streamer.

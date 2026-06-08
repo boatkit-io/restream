@@ -175,12 +175,109 @@ func TestSendFullStateUsesStoreMinimumAccess(t *testing.T) {
 	}
 }
 
+func TestStreamerStoreTypesFilterRelayTraffic(t *testing.T) {
+	relayStore := newStreamerTypedRelayStore("RelayStore", restream.StoreTypeDeviceWithRelay)
+	noRelayStore := newStreamerTypedRelayStore("NoRelayStore", restream.StoreTypeDeviceWithNoRelay)
+	cloudImplStore := newStreamerTypedRelayStore("CloudImplStore", restream.StoreTypeDeviceWithCloudImpl)
+	deviceAndCloudStore := newStreamerTypedRelayStore("DeviceAndCloudStore", restream.StoreTypeDeviceAndCloud)
+	cloudImplOfDeviceStore := newStreamerTypedRelayStore("CloudImplOfDeviceStore", restream.StoreTypeCloudImplOfDevice)
+	cloudOnlyStore := newStreamerTypedRelayStore("CloudOnlyStore", restream.StoreTypeCloudOnly)
+	registry, err := restream.NewStoreRegistry([]restream.Store{
+		relayStore,
+		noRelayStore,
+		cloudImplStore,
+		deviceAndCloudStore,
+		cloudImplOfDeviceStore,
+		cloudOnlyStore,
+	})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+
+	done := make(chan struct{})
+	sendQueue := make(chan []byte, 4)
+	s := &Streamer{
+		sr:        registry,
+		conn:      &gws.Conn{},
+		sendQueue: sendQueue,
+		sendDone:  done,
+	}
+
+	if err := s.sendFullStates(); err != nil {
+		t.Fatalf("sendFullStates failed: %v", err)
+	}
+	fullStateStores := map[string]struct{}{}
+	for len(sendQueue) > 0 {
+		packetBytes := <-sendQueue
+		packet, err := protocol.DecodePacket(packetBytes)
+		if err != nil {
+			t.Fatalf("DecodePacket failed: %v", err)
+		}
+		storePacket, ok := packet.(*protocol.StoreStatePacket)
+		if !ok {
+			t.Fatalf("packet type = %T, want *protocol.StoreStatePacket", packet)
+		}
+		if storePacket.Kind() != protocol.KindFullState {
+			t.Fatalf("store packet kind = %v, want full state", storePacket.Kind())
+		}
+		fullStateStores[storePacket.StoreName] = struct{}{}
+	}
+	for _, unexpected := range []string{"NoRelayStore", "DeviceAndCloudStore", "CloudImplOfDeviceStore", "CloudOnlyStore"} {
+		if _, ok := fullStateStores[unexpected]; ok {
+			t.Fatalf("sendFullStates sent %s; want skipped", unexpected)
+		}
+	}
+	for _, expected := range []string{"RelayStore", "CloudImplStore"} {
+		if _, ok := fullStateStores[expected]; !ok {
+			t.Fatalf("sendFullStates skipped %s; got %+v", expected, fullStateStores)
+		}
+	}
+
+	s.partialCallback("NoRelayStore", nil, &streamerTestPartial{})
+	s.partialCallback("DeviceAndCloudStore", nil, &streamerTestPartial{})
+	s.partialCallback("CloudImplOfDeviceStore", nil, &streamerTestPartial{})
+	s.partialCallback("CloudOnlyStore", nil, &streamerTestPartial{})
+	if len(sendQueue) != 0 {
+		t.Fatalf("partialCallback queued %d packets for non-streaming stores", len(sendQueue))
+	}
+
+	s.partialCallback("CloudImplStore", nil, &streamerTestPartial{})
+	if len(sendQueue) != 1 {
+		t.Fatalf("partialCallback queued %d packets for streaming store, want 1", len(sendQueue))
+	}
+	packet, err := protocol.DecodePacket(<-sendQueue)
+	if err != nil {
+		t.Fatalf("DecodePacket failed: %v", err)
+	}
+	storePacket, ok := packet.(*protocol.StoreStatePacket)
+	if !ok {
+		t.Fatalf("packet type = %T, want *protocol.StoreStatePacket", packet)
+	}
+	if storePacket.StoreName != "CloudImplStore" || storePacket.Kind() != protocol.KindPartialState {
+		t.Fatalf("store packet = %+v, want partial state for CloudImplStore", storePacket)
+	}
+}
+
+func TestStreamerStoreTypesFilterRelayedSubscriptions(t *testing.T) {
+	noRelayStore := newStreamerTypedRelayStore("NoRelayStore", restream.StoreTypeDeviceWithNoRelay)
+	registry, err := restream.NewStoreRegistry([]restream.Store{noRelayStore})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	s := NewStreamer(registry, nil, nil, Config{})
+
+	if err := s.handleStoreSubscription(&protocol.StoreSubscriptionPacket{
+		StoreName: "NoRelayStore",
+		Key:       "values%&a",
+		Action:    protocol.StoreSubscribe,
+	}); err != nil {
+		t.Fatalf("handle subscribe failed: %v", err)
+	}
+	assertActiveRelayKeys(t, noRelayStore.RelayStore, nil)
+}
+
 func TestRelayedStoreSubscriptionsAreIdempotentAndCleanup(t *testing.T) {
-	store := restream.NewRelayStore[streamerTestState, *streamerTestState, *streamerTestPartial](
-		"TestStore",
-		&streamerTestState{},
-		restream.AccessLevelPublic,
-	)
+	store := newStreamerTypedRelayStore("TestStore", restream.StoreTypeDeviceWithRelay)
 	registry, err := restream.NewStoreRegistry([]restream.Store{store})
 	if err != nil {
 		t.Fatalf("NewStoreRegistry failed: %v", err)
@@ -198,32 +295,28 @@ func TestRelayedStoreSubscriptionsAreIdempotentAndCleanup(t *testing.T) {
 	if err := s.handleStoreSubscription(packet); err != nil {
 		t.Fatalf("handle duplicate subscribe failed: %v", err)
 	}
-	assertActiveRelayKeys(t, store, []string{"values%&a"})
+	assertActiveRelayKeys(t, store.RelayStore, []string{"values%&a"})
 
 	packet.Action = protocol.StoreUnsubscribe
 	if err := s.handleStoreSubscription(packet); err != nil {
 		t.Fatalf("handle final unsubscribe failed: %v", err)
 	}
-	assertActiveRelayKeys(t, store, nil)
+	assertActiveRelayKeys(t, store.RelayStore, nil)
 	if err := s.handleStoreSubscription(packet); err != nil {
 		t.Fatalf("handle duplicate unsubscribe failed: %v", err)
 	}
-	assertActiveRelayKeys(t, store, nil)
+	assertActiveRelayKeys(t, store.RelayStore, nil)
 
 	packet.Action = protocol.StoreSubscribe
 	if err := s.handleStoreSubscription(packet); err != nil {
 		t.Fatalf("handle resubscribe failed: %v", err)
 	}
 	s.clearRelaySubscriptions()
-	assertActiveRelayKeys(t, store, nil)
+	assertActiveRelayKeys(t, store.RelayStore, nil)
 }
 
 func TestRelayedWholeStoreSubscriptionUsesEmptyKey(t *testing.T) {
-	store := restream.NewRelayStore[streamerTestState, *streamerTestState, *streamerTestPartial](
-		"TestStore",
-		&streamerTestState{},
-		restream.AccessLevelPublic,
-	)
+	store := newStreamerTypedRelayStore("TestStore", restream.StoreTypeDeviceWithRelay)
 	registry, err := restream.NewStoreRegistry([]restream.Store{store})
 	if err != nil {
 		t.Fatalf("NewStoreRegistry failed: %v", err)
@@ -237,7 +330,7 @@ func TestRelayedWholeStoreSubscriptionUsesEmptyKey(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("handle whole-store subscribe failed: %v", err)
 	}
-	assertActiveRelayKeys(t, store, []string{""})
+	assertActiveRelayKeys(t, store.RelayStore, []string{""})
 
 	if err := s.handleStoreSubscription(&protocol.StoreSubscriptionPacket{
 		StoreName: "TestStore",
@@ -246,7 +339,7 @@ func TestRelayedWholeStoreSubscriptionUsesEmptyKey(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("handle whole-store unsubscribe failed: %v", err)
 	}
-	assertActiveRelayKeys(t, store, nil)
+	assertActiveRelayKeys(t, store.RelayStore, nil)
 }
 
 func assertActiveRelayKeys(
@@ -265,6 +358,26 @@ func assertActiveRelayKeys(
 			t.Fatalf("active keys = %#v, want %#v", actual, expected)
 		}
 	}
+}
+
+type streamerTypedRelayStore struct {
+	*restream.RelayStore[streamerTestState, *streamerTestState, *streamerTestPartial]
+	storeType restream.StoreType
+}
+
+func newStreamerTypedRelayStore(name string, storeType restream.StoreType) *streamerTypedRelayStore {
+	return &streamerTypedRelayStore{
+		RelayStore: restream.NewRelayStore[streamerTestState, *streamerTestState, *streamerTestPartial](
+			name,
+			&streamerTestState{},
+			restream.AccessLevelPublic,
+		),
+		storeType: storeType,
+	}
+}
+
+func (s *streamerTypedRelayStore) GetStoreType() restream.StoreType {
+	return s.storeType
 }
 
 type streamerTestState struct {

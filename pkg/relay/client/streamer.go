@@ -248,7 +248,11 @@ func (s *Streamer) sendFullStates() error {
 		return nil
 	}
 	for _, storeName := range s.sr.GetAllStoreNames() {
-		if !s.opts.StorePolicy.Allows(storeName) {
+		allowed, err := s.allowsRelayStoreTraffic(storeName)
+		if err != nil {
+			return err
+		}
+		if !allowed {
 			continue
 		}
 		if err := s.sendFullState(storeName); err != nil {
@@ -259,7 +263,11 @@ func (s *Streamer) sendFullStates() error {
 }
 
 func (s *Streamer) partialCallback(storeName string, _ [][]any, partial restream.Partial) {
-	if !s.isConnected() || !s.opts.StorePolicy.Allows(storeName) {
+	if !s.isConnected() {
+		return
+	}
+	allowed, err := s.allowsRelayStoreTraffic(storeName)
+	if err != nil || !allowed {
 		return
 	}
 
@@ -271,6 +279,16 @@ func (s *Streamer) partialCallback(storeName string, _ [][]any, partial restream
 	if err := s.sendPartial(storeName, partial); err != nil {
 		s.closeCurrentConnOnSendError(err)
 	}
+}
+
+func (s *Streamer) allowsRelayStoreTraffic(storeName string) (bool, error) {
+	if !s.opts.StorePolicy.Allows(storeName) {
+		return false, nil
+	}
+	if s.sr == nil {
+		return false, nil
+	}
+	return s.sr.StoreStreamsToRelay(storeName)
 }
 
 func (s *Streamer) gatherPartial(storeName string, partial restream.Partial, debounce time.Duration) {
@@ -410,7 +428,11 @@ func (s *Streamer) handleRPCCall(packet *protocol.RPCCallPacket) error {
 }
 
 func (s *Streamer) handleStoreSubscription(packet *protocol.StoreSubscriptionPacket) error {
-	if s.sr == nil || !s.opts.StorePolicy.Allows(packet.StoreName) {
+	allowed, err := s.allowsRelayStoreTraffic(packet.StoreName)
+	if err != nil {
+		return err
+	}
+	if !allowed {
 		return nil
 	}
 

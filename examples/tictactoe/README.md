@@ -97,7 +97,7 @@ func NewBoardStore(rpcd *restream.RPCDispatcher) (*BoardStore, error) {
 }
 ```
 
-Run codegen again. The `@restream.store(BoardStore)` annotation generates `BoardStoreName`, `GetName`, `GetStoreData`, and `SubscribeToField` into `internal/game/boardstore_rs.go`. It also keeps the `storeData` member shaped as `*restream.StoreData[BoardStoreState, *BoardStoreState, *BoardStoreStatePartial]`.
+Run codegen again. The `@restream.store(BoardStore)` annotation generates `BoardStoreName`, `GetName`, `GetStoreData`, `SubscribeToField`, and `GetStoreType` into `internal/game/boardstore_rs.go`. It also keeps the `storeData` member shaped as `*restream.StoreData[BoardStoreState, *BoardStoreState, *BoardStoreStatePartial]`.
 
 ```bash
 go tool github.com/boatkit-io/restream/cmd/codegen -project .

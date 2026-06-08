@@ -24,6 +24,7 @@ type StoreInfo struct {
 	Name              string
 	StoreData         StoreDataBase
 	Store             Store
+	StoreType         StoreType
 	MinAccessLevel    AccessLevel
 	SubAwareCallbacks SubscriptionAwareStore
 	KeySubCallbacks   KeySubscriptionAwareStore
@@ -72,6 +73,7 @@ func NewStoreRegistry(storeList []Store) (*StoreRegistry, error) {
 			Name:           s.GetName(),
 			Store:          s,
 			StoreData:      s.GetStoreData(),
+			StoreType:      StoreTypeForStore(s),
 			MinAccessLevel: StoreMinimumAccessLevel(s),
 		}
 
@@ -234,6 +236,24 @@ func (s *StoreRegistry) GetStoreMinimumAccessLevel(storeName string) (AccessLeve
 		return AccessLevelPublic, fmt.Errorf("no store found (%s) in GetStoreMinimumAccessLevel", storeName)
 	}
 	return si.MinAccessLevel, nil
+}
+
+// GetStoreType returns the configured store type for storeName.
+func (s *StoreRegistry) GetStoreType(storeName string) (StoreType, error) {
+	si, has := s.storeMap[storeName]
+	if !has {
+		return StoreTypeDeviceWithRelay, fmt.Errorf("no store found (%s) in GetStoreType", storeName)
+	}
+	return si.StoreType, nil
+}
+
+// StoreStreamsToRelay reports whether storeName should send full states, partials, and subscription lifecycles to a relay.
+func (s *StoreRegistry) StoreStreamsToRelay(storeName string) (bool, error) {
+	storeType, err := s.GetStoreType(storeName)
+	if err != nil {
+		return false, err
+	}
+	return StoreTypeStreamsToRelay(storeType), nil
 }
 
 func requireStoreAccess(si *StoreInfo, accessLevel AccessLevel) error {

@@ -26,6 +26,11 @@ func (s *BoardStore) SubscribeToField(field []any, callback any) {
 	s.storeData.SubscribeToField(field, callback)
 }
 
+// GetStoreType returns the ReStream store implementation type.
+func (s *BoardStore) GetStoreType() restream.StoreType {
+	return restream.StoreTypeDeviceWithRelay
+}
+
 // PlaceTokenRequest is a request object for the PlaceToken RPC call
 type PlaceTokenRequest struct { //nolint:revive
 	X int

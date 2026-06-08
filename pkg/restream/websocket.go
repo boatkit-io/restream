@@ -463,7 +463,7 @@ func (st *socketTracker) onRPCCall(params ...any) {
 		respBytes, handled, err := st.rpch(rpcMsg.MethodName, userAccessLevel, rpcMsg.Request.Bytes())
 		var errObj *RPCCallError
 		if err != nil {
-			st.log.Errorf("Error handling RPC call: %+v", err)
+			st.log.WithField("rpcName", rpcMsg.MethodName).Errorf("Error handling RPC call: %+v", err)
 
 			errObj = &RPCCallError{
 				Message: err.Error(),
