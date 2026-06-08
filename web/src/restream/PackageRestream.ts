@@ -21,6 +21,15 @@ export enum StoreSubscriptionAction {
     Unsubscribe = 1,
 }
 
+export enum StoreType {
+    DeviceWithRelay = 0,
+    DeviceWithNoRelay = 1,
+    DeviceWithCloudImpl = 2,
+    CloudOnly = 3,
+    CloudImplOfDevice = 4,
+    DeviceAndCloud = 5,
+}
+
 export const StoreUpdateFull = 0;
 
 export enum StoreUpdateMessageKind {
