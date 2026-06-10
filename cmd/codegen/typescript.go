@@ -4,6 +4,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"go/constant"
 	"go/token"
 	"go/types"
 	"os"
@@ -457,11 +458,7 @@ func (ft *FileTracking) createTSPerFileData() error {
 				continue
 			}
 
-			if len(vs.Names) != 1 || len(vs.Values) != 1 {
-				continue
-			}
-			bl, ok := vs.Values[0].(*dst.BasicLit)
-			if !ok {
+			if len(vs.Names) != 1 || len(vs.Values) != 1 || !tsConstExprCanEmit(vs.Values[0]) {
 				continue
 			}
 
@@ -470,12 +467,52 @@ func (ft *FileTracking) createTSPerFileData() error {
 			}
 
 			decName := vs.Names[0].Name
-			decStr := fmt.Sprintf("export const %s = %s;\n", decName, bl.Value)
+			decValue, ok := ft.tsConstValue(decName, vs.Values[0])
+			if !ok {
+				continue
+			}
+			decStr := fmt.Sprintf("export const %s = %s;\n", decName, decValue)
 			ft.tsGenEntries = append(ft.tsGenEntries, fdef{name: decName, defs: decStr, typ: fdefTypeEnum})
 		}
 	}
 
 	return nil
+}
+
+func tsConstExprCanEmit(expr dst.Expr) bool {
+	switch expr.(type) {
+	case *dst.BasicLit, *dst.Ident:
+		return true
+	default:
+		return false
+	}
+}
+
+func (ft *FileTracking) tsConstValue(name string, expr dst.Expr) (string, bool) {
+	if bl, ok := expr.(*dst.BasicLit); ok {
+		return bl.Value, true
+	}
+	if ft.fPackage == nil || ft.fPackage.Types == nil {
+		return "", false
+	}
+	obj := ft.fPackage.Types.Scope().Lookup(name)
+	ci, ok := obj.(*types.Const)
+	if !ok {
+		return "", false
+	}
+	switch ci.Val().Kind() {
+	case constant.Bool:
+		if constant.BoolVal(ci.Val()) {
+			return "true", true
+		}
+		return "false", true
+	case constant.String:
+		return strconv.Quote(constant.StringVal(ci.Val())), true
+	case constant.Int, constant.Float:
+		return ci.Val().ExactString(), true
+	default:
+		return "", false
+	}
 }
 
 func hasRestreamIgnoreAnnotation(gd *dst.GenDecl, vs *dst.ValueSpec) bool {

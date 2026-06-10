@@ -161,6 +161,12 @@ go 1.26.2
 const HiddenConst = "hidden"
 
 const VisibleConst = "visible"
+
+const BooleanConst = true
+
+const booleanAlias = false
+
+const BooleanAliasConst = booleanAlias
 `), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -188,6 +194,12 @@ const VisibleConst = "visible"
 	}
 	if !strings.Contains(generated, `export const VisibleConst = "visible";`) {
 		t.Fatalf("visible const was not generated:\n%s", generated)
+	}
+	if !strings.Contains(generated, `export const BooleanConst = true;`) {
+		t.Fatalf("boolean const was not generated:\n%s", generated)
+	}
+	if !strings.Contains(generated, `export const BooleanAliasConst = false;`) {
+		t.Fatalf("boolean alias const was not generated:\n%s", generated)
 	}
 }
 
