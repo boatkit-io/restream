@@ -14,6 +14,8 @@ export enum AccessLevel {
 
 export const AccessLevelPublic = 0;
 
+export const SerializationTypeInvalid = 0;
+
 export const SocketEventNameStoreUpdate = "storeupdate";
 
 export enum StoreSubscriptionAction {
@@ -29,6 +31,8 @@ export enum StoreType {
     CloudImplOfDevice = 4,
     DeviceAndCloud = 5,
 }
+
+export const StoreTypeDeviceWithRelay = 0;
 
 export const StoreUpdateFull = 0;
 
