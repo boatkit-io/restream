@@ -951,6 +951,10 @@ func (pt *ProjTracking) writeTSFile(filename string, entries []fdef, pkgImports 
 
 			progress := false
 			for i := 0; i < len(entriesFiltered); {
+				entriesFiltered[i].deps = lo.Filter(entriesFiltered[i].deps, func(dep string, _ int) bool {
+					_, ok := outputted[dep]
+					return !ok
+				})
 				if len(entriesFiltered[i].deps) == 0 {
 					// output!
 					outputted[entriesFiltered[i].name] = struct{}{}
@@ -960,10 +964,6 @@ func (pt *ProjTracking) writeTSFile(filename string, entries []fdef, pkgImports 
 					continue
 				}
 
-				entriesFiltered[i].deps = lo.Filter(entriesFiltered[i].deps, func(dep string, _ int) bool {
-					_, ok := outputted[dep]
-					return !ok
-				})
 				i++
 			}
 			if !progress && len(entriesFiltered) > 0 {

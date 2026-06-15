@@ -1236,6 +1236,52 @@ func TestWriteTSFileFiltersUnusedRuntimeImports(t *testing.T) {
 	}
 }
 
+func TestWriteTSFileOrdersTransitiveDependencies(t *testing.T) {
+	projectDir := t.TempDir()
+	pt := NewProjTracking(projectDir, &restreamConfig{
+		TSDir: "web/src/restream",
+	})
+
+	if err := pt.writeTSFile("PackageModel.ts", []fdef{
+		{
+			name: "ModelA",
+			defs: "export class ModelA {}\n",
+			typ:  fdefTypeOther,
+			deps: []string{"ModelB"},
+		},
+		{
+			name: "ModelB",
+			defs: "export class ModelB {}\n",
+			typ:  fdefTypeOther,
+			deps: []string{"ModelC"},
+		},
+		{
+			name: "ModelC",
+			defs: "export class ModelC {}\n",
+			typ:  fdefTypeOther,
+		},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := os.ReadFile(filepath.Join(projectDir, "web", "src", "restream", "PackageModel.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+
+	modelAIndex := strings.Index(got, "export class ModelA")
+	modelBIndex := strings.Index(got, "export class ModelB")
+	modelCIndex := strings.Index(got, "export class ModelC")
+	if modelAIndex == -1 || modelBIndex == -1 || modelCIndex == -1 {
+		t.Fatalf("generated TypeScript missing expected classes:\n%s", got)
+	}
+	if !(modelCIndex < modelBIndex && modelBIndex < modelAIndex) {
+		t.Fatalf("generated TypeScript order = C:%d B:%d A:%d, want C before B before A:\n%s",
+			modelCIndex, modelBIndex, modelAIndex, got)
+	}
+}
+
 func TestGenTSFieldInfoUsesPublicReadonlyMetadata(t *testing.T) {
 	got := genTSFieldInfo([]*restream.FieldInfo{
 		{
