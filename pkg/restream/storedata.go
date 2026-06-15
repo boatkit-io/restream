@@ -2,7 +2,9 @@ package restream
 
 import (
 	"fmt"
+	"log"
 	"reflect"
+	"time"
 
 	"github.com/boatkit-io/restream/pkg/binarystreams"
 	"github.com/boatkit-io/restream/pkg/smartmutex"
@@ -11,6 +13,8 @@ import (
 
 // typeAnyArrayOfAny is a cached reflection type for []any
 var typeAnyArrayOfAny = reflect.TypeFor[[]any]()
+
+const storeDataLockWarnAfter = 100 * time.Millisecond
 
 // PartialCallbackFunc is a reusable type for the callbacks for partial applications
 type PartialCallbackFunc = func(storeName string, fields [][]any, partial Partial)
@@ -92,7 +96,7 @@ func NewStoreData[S any, SP StoreDataPtrType[S], P Partial](store Store, state S
 func (d *StoreData[S, SP, PS]) GetSerializedFullState() ([]byte, error) {
 	var ret []byte
 	var retError error
-	d.ReadState(func(state SP) {
+	d.readState("GetSerializedFullState", func(state SP) {
 		w, b := binarystreams.NewMemoryWriter()
 		if err := state.Serialize(w, nil); err != nil {
 			retError = err
@@ -117,7 +121,7 @@ func (d *StoreData[S, SP, PS]) GetSerializedPartialForSubscriptionKey(key string
 	var ret []byte
 	var exists bool
 	var retErr error
-	d.ReadState(func(state SP) {
+	d.readState("GetSerializedPartialForSubscriptionKey", func(state SP) {
 		var partial Partial
 		if provider, ok := any(state).(StateFieldPartialProvider); ok {
 			partial, exists = provider.PartialForFields([][]any{fieldPath})
@@ -143,8 +147,19 @@ func (d *StoreData[S, SP, PS]) GetSerializedPartialForSubscriptionKey(key string
 
 // ReadState is a helper to read the current state under a lock, calling the callback with the state
 func (d *StoreData[S, SP, PS]) ReadState(cb func(SP)) {
+	d.readState("ReadState", cb)
+}
+
+func (d *StoreData[S, SP, PS]) readState(operation string, cb func(SP)) {
+	waitStart := time.Now()
 	d.stateMutex.RLock()
-	defer d.stateMutex.RUnlock()
+	waitDuration := time.Since(waitStart)
+	holdStart := time.Now()
+	defer func() {
+		holdDuration := time.Since(holdStart)
+		d.stateMutex.RUnlock()
+		d.logLockTiming(operation, "read", waitDuration, holdDuration)
+	}()
 	cb(d.state)
 }
 
@@ -191,8 +206,15 @@ func (d *StoreData[S, SP, PS]) getFieldValue(field []any) reflect.Value {
 func (d *StoreData[S, SP, PS]) ApplyPartial(partial PS) {
 	var fields [][]any
 	func() {
+		waitStart := time.Now()
 		d.stateMutex.Lock()
-		defer d.stateMutex.Unlock()
+		waitDuration := time.Since(waitStart)
+		holdStart := time.Now()
+		defer func() {
+			holdDuration := time.Since(holdStart)
+			d.stateMutex.Unlock()
+			d.logLockTiming("ApplyPartial", "write", waitDuration, holdDuration)
+		}()
 		fields = partial.ApplyTo(d.state)
 	}()
 	fields = ReduceFieldPaths(fields)
@@ -212,8 +234,15 @@ func (d *StoreData[S, SP, PS]) DecodeAndSetFullState(b []byte) error {
 	if err := iv.(Serializable).Deserialize(binarystreams.NewReaderFromBytes(b), nil); err != nil {
 		return err
 	}
+	waitStart := time.Now()
 	d.stateMutex.Lock()
-	defer d.stateMutex.Unlock()
+	waitDuration := time.Since(waitStart)
+	holdStart := time.Now()
+	defer func() {
+		holdDuration := time.Since(holdStart)
+		d.stateMutex.Unlock()
+		d.logLockTiming("DecodeAndSetFullState", "write", waitDuration, holdDuration)
+	}()
 	*d.state = *iv.(SP)
 	return nil
 }
@@ -228,6 +257,22 @@ func (d *StoreData[S, SP, PS]) DecodeAndApplyPartial(b []byte) error {
 	}
 	d.ApplyPartial(iv.(PS))
 	return nil
+}
+
+func (d *StoreData[S, SP, PS]) logLockTiming(operation string, lockType string, waitDuration time.Duration, holdDuration time.Duration) {
+	if waitDuration < storeDataLockWarnAfter && holdDuration < storeDataLockWarnAfter {
+		return
+	}
+
+	log.Printf(
+		"StoreData %s %s %s lock timing exceeded %s: wait=%s hold=%s",
+		d.name,
+		operation,
+		lockType,
+		storeDataLockWarnAfter,
+		waitDuration,
+		holdDuration,
+	)
 }
 
 // triggerSubs is an internal helper to break up triggering subscriptions from the field changes themselves

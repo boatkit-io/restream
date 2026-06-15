@@ -1,4 +1,4 @@
-// Package smartmutex implements a RWMutex but with timers to assist with deadlock detection
+// Package smartmutex implements an RWMutex with lock wait logging.
 package smartmutex
 
 import (
@@ -10,20 +10,20 @@ import (
 	"time"
 )
 
-// enableDeadlockDetection controls whether we will detect deadlocks and log them
-const enableDeadlockDetection = true
+// enableLockWaitLogging controls whether we will log long mutex waits.
+const enableLockWaitLogging = true
 
 // warnTimeout is the time limit for showing the warning
 const warnTimeout = 100 * time.Millisecond
 
-// SmartMutex is a wrapper around sync.RWMutex that will detect deadlocks and log them
+// SmartMutex is a wrapper around sync.RWMutex that logs long waits.
 type SmartMutex struct {
 	sync.RWMutex
 }
 
-// Lock locks the mutex, detecting deadlocks if enabled
+// Lock locks the mutex, logging long waits if enabled.
 func (m *SmartMutex) Lock() {
-	stop := m.startTimer()
+	stop := m.startTimer("write")
 	m.RWMutex.Lock()
 	stop()
 }
@@ -33,9 +33,9 @@ func (m *SmartMutex) Unlock() {
 	m.RWMutex.Unlock()
 }
 
-// RLock locks the mutex for reading, detecting deadlocks if enabled
+// RLock locks the mutex for reading, logging long waits if enabled.
 func (m *SmartMutex) RLock() {
-	stop := m.startTimer()
+	stop := m.startTimer("read")
 	m.RWMutex.RLock()
 	stop()
 }
@@ -45,9 +45,9 @@ func (m *SmartMutex) RUnlock() {
 	m.RWMutex.RUnlock()
 }
 
-// startTimer is a helper to start a timer that will detect deadlocks if enabled
-func (m *SmartMutex) startTimer() func() {
-	if !enableDeadlockDetection {
+// startTimer is a helper to start a timer that logs long waits if enabled.
+func (m *SmartMutex) startTimer(lockType string) func() {
+	if !enableLockWaitLogging {
 		return func() {}
 	}
 
@@ -62,7 +62,7 @@ func (m *SmartMutex) startTimer() func() {
 	go func() {
 		<-ctx.Done()
 		if !finishedHappily.Load() {
-			log.Printf("Deadlock detected -- Stack:\n%s\n", savedStack)
+			log.Printf("SmartMutex %s lock wait exceeded %s -- Stack:\n%s\n", lockType, warnTimeout, savedStack)
 		}
 	}()
 
