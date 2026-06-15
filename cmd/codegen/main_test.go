@@ -1276,7 +1276,7 @@ func TestWriteTSFileOrdersTransitiveDependencies(t *testing.T) {
 	if modelAIndex == -1 || modelBIndex == -1 || modelCIndex == -1 {
 		t.Fatalf("generated TypeScript missing expected classes:\n%s", got)
 	}
-	if !(modelCIndex < modelBIndex && modelBIndex < modelAIndex) {
+	if modelCIndex >= modelBIndex || modelBIndex >= modelAIndex {
 		t.Fatalf("generated TypeScript order = C:%d B:%d A:%d, want C before B before A:\n%s",
 			modelCIndex, modelBIndex, modelAIndex, got)
 	}

@@ -320,46 +320,6 @@ export class TestPrimitiveOptionalStatePartial {
     }
 }
 
-function reduceFieldPaths(fields: (string | number)[][]): (string | number)[][] {
-    if (fields.length < 2) {
-        return fields;
-    }
-
-    const ret: (string | number)[][] = [];
-    for (const field of fields) {
-        let suppressed = false;
-        for (let idx = 0; idx < ret.length;) {
-            const existing = ret[idx];
-            if (fieldPathHasPrefix(field, existing)) {
-                suppressed = true;
-                idx++;
-                continue;
-            }
-            if (fieldPathHasPrefix(existing, field)) {
-                ret.splice(idx, 1);
-                continue;
-            }
-            idx++;
-        }
-        if (!suppressed) {
-            ret.push(field);
-        }
-    }
-    return ret;
-}
-
-function fieldPathHasPrefix(field: (string | number)[], prefix: (string | number)[]): boolean {
-    if (prefix.length > field.length) {
-        return false;
-    }
-    for (let idx = 0; idx < prefix.length; idx++) {
-        if (field[idx] !== prefix[idx]) {
-            return false;
-        }
-    }
-    return true;
-}
-
 export class TestState {
     public mapPtrTest!: Map<number,TestMapData|undefined>|undefined;
     public baseField!: string;
@@ -491,6 +451,46 @@ export class TestStatePartial {
         if (this.baseStructPtr !== undefined) { let fs; [por.baseStructPtr,fs] = this.baseStructPtr.applyOnTop(por.baseStructPtr); for (const f of fs) { ret.push(["baseStructPtr",...f]); }}
         return reduceFieldPaths(ret);
     }
+}
+
+function reduceFieldPaths(fields: (string | number)[][]): (string | number)[][] {
+    if (fields.length < 2) {
+        return fields;
+    }
+
+    const ret: (string | number)[][] = [];
+    for (const field of fields) {
+        let suppressed = false;
+        for (let idx = 0; idx < ret.length;) {
+            const existing = ret[idx];
+            if (fieldPathHasPrefix(field, existing)) {
+                suppressed = true;
+                idx++;
+                continue;
+            }
+            if (fieldPathHasPrefix(existing, field)) {
+                ret.splice(idx, 1);
+                continue;
+            }
+            idx++;
+        }
+        if (!suppressed) {
+            ret.push(field);
+        }
+    }
+    return ret;
+}
+
+function fieldPathHasPrefix(field: (string | number)[], prefix: (string | number)[]): boolean {
+    if (prefix.length > field.length) {
+        return false;
+    }
+    for (let idx = 0; idx < prefix.length; idx++) {
+        if (field[idx] !== prefix[idx]) {
+            return false;
+        }
+    }
+    return true;
 }
 
 export class TestArrayState {
