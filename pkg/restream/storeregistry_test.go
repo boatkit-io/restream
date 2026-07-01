@@ -18,6 +18,11 @@ type registryTestStore struct {
 	storeEnded   int
 	keyStarted   []string
 	keyEnded     []string
+
+	onStoreStarted func()
+	onStoreEnded   func()
+	onKeyStarted   func(string)
+	onKeyEnded     func(string)
 }
 
 func newRegistryTestStore() *registryTestStore {
@@ -47,18 +52,30 @@ func (s *registryTestStore) SubscribeToField([]any, any) {
 
 func (s *registryTestStore) SubscriptionStarted() {
 	s.storeStarted++
+	if s.onStoreStarted != nil {
+		s.onStoreStarted()
+	}
 }
 
 func (s *registryTestStore) SubscriptionEnded() {
 	s.storeEnded++
+	if s.onStoreEnded != nil {
+		s.onStoreEnded()
+	}
 }
 
 func (s *registryTestStore) SubscriptionStartedForKey(key string) {
 	s.keyStarted = append(s.keyStarted, key)
+	if s.onKeyStarted != nil {
+		s.onKeyStarted(key)
+	}
 }
 
 func (s *registryTestStore) SubscriptionEndedForKey(key string) {
 	s.keyEnded = append(s.keyEnded, key)
+	if s.onKeyEnded != nil {
+		s.onKeyEnded(key)
+	}
 }
 
 type registryTestStoreData struct {
@@ -183,6 +200,36 @@ func TestStoreRegistryRefCountsWholeStoreSubscriptions(t *testing.T) {
 	assertEqual(t, false, hasWhole)
 	assertEqualSlices(t, []string{""}, store.keyEnded)
 	assertEqual(t, 1, store.storeEnded)
+}
+
+func TestStoreRegistrySubscriptionCallbacksRunOutsideSubscriptionMutex(t *testing.T) {
+	store := newRegistryTestStore()
+	registry, err := NewStoreRegistry([]Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+
+	assertSubscriptionMutexUnlocked := func(callbackName string) {
+		if !registry.subscriptionMutex.TryLock() {
+			t.Fatalf("%s ran while StoreRegistry subscription mutex was locked", callbackName)
+		}
+		registry.subscriptionMutex.Unlock()
+	}
+	store.onKeyStarted = func(string) {
+		assertSubscriptionMutexUnlocked("SubscriptionStartedForKey")
+	}
+	store.onStoreStarted = func() {
+		assertSubscriptionMutexUnlocked("SubscriptionStarted")
+	}
+	store.onKeyEnded = func(string) {
+		assertSubscriptionMutexUnlocked("SubscriptionEndedForKey")
+	}
+	store.onStoreEnded = func() {
+		assertSubscriptionMutexUnlocked("SubscriptionEnded")
+	}
+
+	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "values%&a", AccessLevelPublic))
+	mustNoError(t, registry.StopListeningToStoreKey(store.GetName(), "values%&a"))
 }
 
 func TestStoreRegistryConcurrentKeySubscriptionUpdates(t *testing.T) {

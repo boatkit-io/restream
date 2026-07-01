@@ -92,62 +92,156 @@ func NewStoreData[S any, SP StoreDataPtrType[S], P Partial](store Store, state S
 	}
 }
 
-// GetSerializedFullState returns the full state from a storedata after serializing it while under a read mutex before returning
-func (d *StoreData[S, SP, PS]) GetSerializedFullState() ([]byte, error) {
-	var ret []byte
+// GetFullStateSnapshot returns a full state snapshot from a StoreData.
+// Generated states are cloned under a read lock so callers can serialize after the lock is released.
+func (d *StoreData[S, SP, PS]) GetFullStateSnapshot() (Serializable, error) {
+	var ret Serializable
 	var retError error
-	d.readState("GetSerializedFullState", func(state SP) {
-		w, b := binarystreams.NewMemoryWriter()
-		if err := state.Serialize(w, nil); err != nil {
-			retError = err
-			return
-		}
-		if err := w.Flush(); err != nil {
-			retError = err
-			return
-		}
-		ret = b.Bytes()
-	})
+	waitStart := time.Now()
+	d.stateMutex.RLock()
+	waitDuration := time.Since(waitStart)
+	holdStart := time.Now()
+	defer func() {
+		holdDuration := time.Since(holdStart)
+		d.stateMutex.RUnlock()
+		d.logLockTiming("GetFullStateSnapshot", "read", waitDuration, holdDuration)
+	}()
+
+	cloned, hasSnapshot := cloneState[S, SP](d.state)
+	if hasSnapshot {
+		return SP(cloned), nil
+	}
+
+	var serialized []byte
+	serialized, retError = serializeState(d.state)
+	if retError != nil {
+		return nil, retError
+	}
+	ret = RawSerializable(serialized)
 	return ret, retError
 }
 
-// GetSerializedPartialForSubscriptionKey returns a serialized partial snapshot for a keyed subscription.
-func (d *StoreData[S, SP, PS]) GetSerializedPartialForSubscriptionKey(key string) ([]byte, bool, error) {
+// GetSerializedFullState returns the full state from a StoreData.
+// Generated states are cloned under a read lock and serialized after the lock is released.
+func (d *StoreData[S, SP, PS]) GetSerializedFullState() ([]byte, error) {
+	snapshot, err := d.GetFullStateSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	return SerializeToBytes(snapshot, nil)
+}
+
+// GetPartialSnapshotForSubscriptionKey returns an initial keyed partial snapshot for a keyed subscription.
+func (d *StoreData[S, SP, PS]) GetPartialSnapshotForSubscriptionKey(key string) (Serializable, bool, error) {
 	fieldPath := FieldPathFromSubscriptionKey(key)
 	if len(fieldPath) == 0 {
 		return nil, false, nil
 	}
 
-	var ret []byte
+	if snapshot, hasSnapshot := d.cloneStateSnapshot("GetPartialSnapshotForSubscriptionKey"); hasSnapshot {
+		return d.partialForFieldPath(snapshot, fieldPath)
+	}
+
+	var ret Serializable
 	var exists bool
 	var retErr error
-	d.readState("GetSerializedPartialForSubscriptionKey", func(state SP) {
-		var partial Partial
-		if provider, ok := any(state).(StateFieldPartialProvider); ok {
-			partial, exists = provider.PartialForFields([][]any{fieldPath})
-		} else {
-			var partialValue reflect.Value
-			partialValue, exists, retErr = partialForFieldPathReflect(
-				reflect.ValueOf(state).Elem(),
-				reflect.TypeFor[PS](),
-				fieldPath,
-			)
-			if retErr != nil || !exists {
-				return
-			}
-			partial = partialValue.Interface().(Partial)
-		}
-		if !exists {
-			return
-		}
-		ret, retErr = SerializeToBytes(partial, nil)
+	d.readState("GetPartialSnapshotForSubscriptionKey", func(state SP) {
+		ret, exists, retErr = d.serializedPartialForFieldPath(state, fieldPath)
 	})
+
 	return ret, exists, retErr
 }
 
-// ReadState is a helper to read the current state under a lock, calling the callback with the state
-func (d *StoreData[S, SP, PS]) ReadState(cb func(SP)) {
-	d.readState("ReadState", cb)
+// GetSerializedPartialForSubscriptionKey returns a serialized partial snapshot for a keyed subscription.
+func (d *StoreData[S, SP, PS]) GetSerializedPartialForSubscriptionKey(key string) ([]byte, bool, error) {
+	snapshot, exists, err := d.GetPartialSnapshotForSubscriptionKey(key)
+	if err != nil || !exists {
+		return nil, exists, err
+	}
+	ret, err := SerializeToBytes(snapshot, nil)
+	return ret, true, err
+}
+
+func (d *StoreData[S, SP, PS]) cloneStateSnapshot(operation string) (SP, bool) {
+	var ret SP
+	var hasSnapshot bool
+	waitStart := time.Now()
+	d.stateMutex.RLock()
+	waitDuration := time.Since(waitStart)
+	holdStart := time.Now()
+	defer func() {
+		holdDuration := time.Since(holdStart)
+		d.stateMutex.RUnlock()
+		d.logLockTiming(operation, "read", waitDuration, holdDuration)
+	}()
+
+	cloned, ok := cloneState[S, SP](d.state)
+	if !ok {
+		return ret, false
+	}
+	ret = SP(cloned)
+	hasSnapshot = true
+	return ret, hasSnapshot
+}
+
+func cloneState[S any, SP StoreDataPtrType[S]](state SP) (*S, bool) {
+	cloner, ok := any(state).(StateCloner[S])
+	if !ok {
+		return nil, false
+	}
+	return cloner.RestreamClone(), true
+}
+
+func serializeState[S any, SP StoreDataPtrType[S]](state SP) ([]byte, error) {
+	w, b := binarystreams.NewMemoryWriter()
+	if err := state.Serialize(w, nil); err != nil {
+		return nil, err
+	}
+	if err := w.Flush(); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+func (d *StoreData[S, SP, PS]) partialForFieldPath(state SP, fieldPath []any) (Partial, bool, error) {
+	var partial Partial
+	var exists bool
+	if provider, ok := any(state).(StateFieldPartialProvider); ok {
+		partial, exists = provider.PartialForFields([][]any{fieldPath})
+	} else {
+		partialValue, partialExists, err := partialForFieldPathReflect(
+			reflect.ValueOf(state).Elem(),
+			reflect.TypeFor[PS](),
+			fieldPath,
+		)
+		if err != nil || !partialExists {
+			return nil, partialExists, err
+		}
+		partial = partialValue.Interface().(Partial)
+		exists = true
+	}
+	if !exists {
+		return nil, false, nil
+	}
+	return partial, true, nil
+}
+
+func (d *StoreData[S, SP, PS]) serializedPartialForFieldPath(state SP, fieldPath []any) (Serializable, bool, error) {
+	partial, exists, err := d.partialForFieldPath(state, fieldPath)
+	if err != nil || !exists {
+		return nil, exists, err
+	}
+	ret, err := SerializeToBytes(partial, nil)
+	return RawSerializable(ret), true, err
+}
+
+// ReadState returns a cloned copy of the current state.
+func (d *StoreData[S, SP, PS]) ReadState() SP {
+	snapshot, hasSnapshot := d.cloneStateSnapshot("ReadState")
+	if !hasSnapshot {
+		panic(fmt.Sprintf("Store %s state type %T does not implement RestreamClone", d.name, d.state))
+	}
+	return snapshot
 }
 
 func (d *StoreData[S, SP, PS]) readState(operation string, cb func(SP)) {
@@ -217,7 +311,7 @@ func (d *StoreData[S, SP, PS]) ApplyPartial(partial PS) {
 		}()
 		fields = partial.ApplyTo(d.state)
 	}()
-	fields = ReduceFieldPaths(fields)
+	fields = reduceFieldPaths(fields)
 
 	d.partialCallbacks.Fire(d.name, fields, partial)
 

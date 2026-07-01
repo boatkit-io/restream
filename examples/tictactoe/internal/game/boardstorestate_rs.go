@@ -56,6 +56,27 @@ func (s *BoardStoreState) Deserialize(r *binarystreams.Reader, _ *restream.VarIn
 	return restream.DeserializeFielded(ri, BoardStoreStateFieldInfo, BoardStoreStateFieldMap, fieldPtrs)
 }
 
+// RestreamClone returns a deep copy of this BoardStoreState.
+func (s *BoardStoreState) RestreamClone() *BoardStoreState {
+	if s == nil {
+		return nil
+	}
+	ret := &BoardStoreState{}
+	if s.Board != nil {
+		ret.Board = make([][]string, len(s.Board))
+		for cloneIdx1, cloneValue1 := range s.Board {
+			var cloned1 []string
+			if cloneValue1 != nil {
+				cloned1 = make([]string, len(cloneValue1))
+				copy(cloned1, cloneValue1)
+			}
+			ret.Board[cloneIdx1] = cloned1
+		}
+	}
+	ret.XTurn = s.XTurn
+	return ret
+}
+
 // BoardStoreStatePartial is a partial struct for BoardStoreState
 type BoardStoreStatePartial struct {
 	Board *restream.PartialArray[[]string]
@@ -98,7 +119,7 @@ func (s *BoardStoreStatePartial) ApplyTo(por any) [][]any {
 		po.XTurn = *s.XTurn
 		ret = append(ret, []any{"XTurn"})
 	}
-	return restream.ReduceFieldPaths(ret)
+	return ret
 }
 
 // FilterToFields returns a new partial containing only changes matching the requested field paths
@@ -132,7 +153,6 @@ func (s *BoardStoreStatePartial) FilterToFields(fields [][]any) (restream.Partia
 
 // PartialForFields returns a snapshot partial containing the requested field paths
 func (s *BoardStoreState) PartialForFields(fields [][]any) (restream.Partial, bool) {
-	fields = restream.ReduceFieldPaths(fields)
 	ret := &BoardStoreStatePartial{}
 	included := false
 	if partial, ok := s.partialForFieldsBoard(restream.ChildFieldsForField(fields, "Board")); ok {
@@ -154,14 +174,31 @@ func (s *BoardStoreState) partialForFieldsBoard(fields [][]any) (*restream.Parti
 	included := false
 	for _, field := range fields {
 		if len(field) == 0 {
-			return ret.SetWhole(s.Board), true
+			var cloned [][]string
+			if s.Board != nil {
+				cloned = make([][]string, len(s.Board))
+				for cloneIdx0, cloneValue0 := range s.Board {
+					var cloned0 []string
+					if cloneValue0 != nil {
+						cloned0 = make([]string, len(cloneValue0))
+						copy(cloned0, cloneValue0)
+					}
+					cloned[cloneIdx0] = cloned0
+				}
+			}
+			return ret.SetWhole(cloned), true
 		}
 		index, ok := restream.FieldPathPartToIndex(field[0])
 		if !ok || index < 0 || index >= len(s.Board) {
 			continue
 		}
 		value := s.Board[index]
-		ret.Set(index, value)
+		var cloned []string
+		if value != nil {
+			cloned = make([]string, len(value))
+			copy(cloned, value)
+		}
+		ret.Set(index, cloned)
 		included = true
 	}
 	return ret, included
@@ -173,7 +210,8 @@ func (s *BoardStoreState) partialForFieldsXTurn(fields [][]any) (*bool, bool) {
 	}
 	for _, field := range fields {
 		if len(field) == 0 {
-			return restream.Ptr(s.XTurn), true
+			cloned := s.XTurn
+			return restream.Ptr(cloned), true
 		}
 	}
 	return nil, false

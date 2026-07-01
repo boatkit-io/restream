@@ -46,7 +46,7 @@ func (ft *FileTracking) createTSStructSerializers(si StructInfo, fields []*restr
 	classDef := ft.genTSClass(si, fields, false)
 	ft.tsGenEntries = append(ft.tsGenEntries, fdef{name: si.Name, defs: classDef, typ: fdefTypeOther, deps: lo.Keys(deps)})
 	if tsClassUsesFieldPathReducer(si, false) {
-		ft.tsGenEntries = append(ft.tsGenEntries, fdef{name: "reduceFieldPaths", defs: genTSReduceFieldPaths(), typ: fdefTypeOther})
+		ft.tsGenEntries = append(ft.tsGenEntries, fdef{name: "reduceFieldPaths", defs: genTSFieldPathReducer(), typ: fdefTypeOther})
 	}
 
 	if ft.shouldBuildPartial(si.Name) {
@@ -55,7 +55,7 @@ func (ft *FileTracking) createTSStructSerializers(si StructInfo, fields []*restr
 
 		partialClassDef := ft.genTSClass(sip, partialFields, true)
 		ft.tsGenEntries = append(ft.tsGenEntries, fdef{name: sip.Name, defs: partialClassDef, typ: fdefTypeOther, deps: lo.Keys(deps)})
-		ft.tsGenEntries = append(ft.tsGenEntries, fdef{name: "reduceFieldPaths", defs: genTSReduceFieldPaths(), typ: fdefTypeOther})
+		ft.tsGenEntries = append(ft.tsGenEntries, fdef{name: "reduceFieldPaths", defs: genTSFieldPathReducer(), typ: fdefTypeOther})
 	}
 
 	return nil
@@ -1236,7 +1236,7 @@ func genTSGenericClassSignature(si StructInfo) string {
 	return out
 }
 
-func genTSReduceFieldPaths() string {
+func genTSFieldPathReducer() string {
 	return `function reduceFieldPaths(fields: (string | number)[][]): (string | number)[][] {
     if (fields.length < 2) {
         return fields;

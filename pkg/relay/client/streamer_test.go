@@ -12,6 +12,15 @@ import (
 	gws "github.com/gorilla/websocket"
 )
 
+func mustBuildOutboundPacket(t *testing.T, packet outboundPacket) []byte {
+	t.Helper()
+	packetBytes, err := packet.buildBytes()
+	if err != nil {
+		t.Fatalf("build outbound packet failed: %v", err)
+	}
+	return packetBytes
+}
+
 func TestStorePolicyAllows(t *testing.T) {
 	policy := StorePolicy{
 		Include: map[string]struct{}{
@@ -78,8 +87,8 @@ func TestEnqueuePacketAfterDisconnectDoesNotPanic(t *testing.T) {
 
 func TestEnqueuePacketFullQueueDoesNotBlock(t *testing.T) {
 	done := make(chan struct{})
-	sendQueue := make(chan []byte, 1)
-	sendQueue <- []byte{1}
+	sendQueue := make(chan outboundPacket, 1)
+	sendQueue <- outboundPacket{bytes: []byte{1}}
 
 	var queueFullInfo SendQueueFullInfo
 	s := &Streamer{
@@ -108,7 +117,7 @@ func TestEnqueuePacketFullQueueDoesNotBlock(t *testing.T) {
 
 func TestSendEventWritesGenericEventPacket(t *testing.T) {
 	done := make(chan struct{})
-	sendQueue := make(chan []byte, 1)
+	sendQueue := make(chan outboundPacket, 1)
 
 	s := &Streamer{
 		conn:      &gws.Conn{},
@@ -120,7 +129,7 @@ func TestSendEventWritesGenericEventPacket(t *testing.T) {
 		t.Fatalf("SendEvent failed: %v", err)
 	}
 
-	packetBytes := <-sendQueue
+	packetBytes := mustBuildOutboundPacket(t, <-sendQueue)
 	packet, err := protocol.DecodePacket(packetBytes)
 	if err != nil {
 		t.Fatalf("DecodePacket failed: %v", err)
@@ -149,7 +158,7 @@ func TestSendFullStateUsesStoreMinimumAccess(t *testing.T) {
 	}
 
 	done := make(chan struct{})
-	sendQueue := make(chan []byte, 1)
+	sendQueue := make(chan outboundPacket, 1)
 	s := &Streamer{
 		sr:        registry,
 		conn:      &gws.Conn{},
@@ -161,7 +170,7 @@ func TestSendFullStateUsesStoreMinimumAccess(t *testing.T) {
 		t.Fatalf("sendFullState failed: %v", err)
 	}
 
-	packetBytes := <-sendQueue
+	packetBytes := mustBuildOutboundPacket(t, <-sendQueue)
 	packet, err := protocol.DecodePacket(packetBytes)
 	if err != nil {
 		t.Fatalf("DecodePacket failed: %v", err)
@@ -172,6 +181,82 @@ func TestSendFullStateUsesStoreMinimumAccess(t *testing.T) {
 	}
 	if storePacket.StoreName != "TestStore" || storePacket.Kind() != protocol.KindFullState {
 		t.Fatalf("store packet = %+v, want full state for TestStore", storePacket)
+	}
+}
+
+func TestSendFullStateDefersSerializationUntilOutboundPacketBuild(t *testing.T) {
+	serializeCount := 0
+	store := restream.NewRelayStore[streamerTestState, *streamerTestState, *streamerTestPartial](
+		"TestStore",
+		&streamerTestState{
+			onSerialize: func() {
+				serializeCount++
+			},
+		},
+		restream.AccessLevelPublic,
+	)
+	registry, err := restream.NewStoreRegistry([]restream.Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+
+	done := make(chan struct{})
+	sendQueue := make(chan outboundPacket, 1)
+	s := &Streamer{
+		sr:        registry,
+		conn:      &gws.Conn{},
+		sendQueue: sendQueue,
+		sendDone:  done,
+	}
+
+	if err := s.sendFullState("TestStore"); err != nil {
+		t.Fatalf("sendFullState failed: %v", err)
+	}
+	if serializeCount != 0 {
+		t.Fatalf("sendFullState serialized before enqueue: %d", serializeCount)
+	}
+
+	_ = mustBuildOutboundPacket(t, <-sendQueue)
+	if serializeCount != 1 {
+		t.Fatalf("outbound packet build serialized %d times, want 1", serializeCount)
+	}
+}
+
+func TestSendPartialDefersSerializationUntilOutboundPacketBuild(t *testing.T) {
+	serializeCount := 0
+	done := make(chan struct{})
+	sendQueue := make(chan outboundPacket, 1)
+	s := &Streamer{
+		conn:      &gws.Conn{},
+		sendQueue: sendQueue,
+		sendDone:  done,
+	}
+
+	if err := s.sendPartial("TestStore", &streamerTestPartial{
+		onSerialize: func() {
+			serializeCount++
+		},
+	}); err != nil {
+		t.Fatalf("sendPartial failed: %v", err)
+	}
+	if serializeCount != 0 {
+		t.Fatalf("sendPartial serialized before enqueue: %d", serializeCount)
+	}
+
+	packetBytes := mustBuildOutboundPacket(t, <-sendQueue)
+	if serializeCount != 1 {
+		t.Fatalf("outbound packet build serialized %d times, want 1", serializeCount)
+	}
+	packet, err := protocol.DecodePacket(packetBytes)
+	if err != nil {
+		t.Fatalf("DecodePacket failed: %v", err)
+	}
+	storePacket, ok := packet.(*protocol.StoreStatePacket)
+	if !ok {
+		t.Fatalf("packet type = %T, want *protocol.StoreStatePacket", packet)
+	}
+	if storePacket.StoreName != "TestStore" || storePacket.Kind() != protocol.KindPartialState {
+		t.Fatalf("store packet = %+v, want partial state for TestStore", storePacket)
 	}
 }
 
@@ -195,7 +280,7 @@ func TestStreamerStoreTypesFilterRelayTraffic(t *testing.T) {
 	}
 
 	done := make(chan struct{})
-	sendQueue := make(chan []byte, 4)
+	sendQueue := make(chan outboundPacket, 4)
 	s := &Streamer{
 		sr:        registry,
 		conn:      &gws.Conn{},
@@ -208,7 +293,7 @@ func TestStreamerStoreTypesFilterRelayTraffic(t *testing.T) {
 	}
 	fullStateStores := map[string]struct{}{}
 	for len(sendQueue) > 0 {
-		packetBytes := <-sendQueue
+		packetBytes := mustBuildOutboundPacket(t, <-sendQueue)
 		packet, err := protocol.DecodePacket(packetBytes)
 		if err != nil {
 			t.Fatalf("DecodePacket failed: %v", err)
@@ -245,7 +330,7 @@ func TestStreamerStoreTypesFilterRelayTraffic(t *testing.T) {
 	if len(sendQueue) != 1 {
 		t.Fatalf("partialCallback queued %d packets for streaming store, want 1", len(sendQueue))
 	}
-	packet, err := protocol.DecodePacket(<-sendQueue)
+	packet, err := protocol.DecodePacket(mustBuildOutboundPacket(t, <-sendQueue))
 	if err != nil {
 		t.Fatalf("DecodePacket failed: %v", err)
 	}
@@ -381,10 +466,22 @@ func (s *streamerTypedRelayStore) GetStoreType() restream.StoreType {
 }
 
 type streamerTestState struct {
-	Value string
+	Value       string
+	onSerialize func()
 }
 
-func (*streamerTestState) Serialize(*binarystreams.Writer, *restream.VarInfoStruct) error {
+func (s *streamerTestState) RestreamClone() *streamerTestState {
+	if s == nil {
+		return nil
+	}
+	clone := *s
+	return &clone
+}
+
+func (s *streamerTestState) Serialize(*binarystreams.Writer, *restream.VarInfoStruct) error {
+	if s.onSerialize != nil {
+		s.onSerialize()
+	}
 	return nil
 }
 
@@ -393,10 +490,14 @@ func (*streamerTestState) Deserialize(*binarystreams.Reader, *restream.VarInfoSt
 }
 
 type streamerTestPartial struct {
-	Value *string
+	Value       *string
+	onSerialize func()
 }
 
-func (*streamerTestPartial) Serialize(*binarystreams.Writer, *restream.VarInfoStruct) error {
+func (p *streamerTestPartial) Serialize(*binarystreams.Writer, *restream.VarInfoStruct) error {
+	if p.onSerialize != nil {
+		p.onSerialize()
+	}
 	return nil
 }
 

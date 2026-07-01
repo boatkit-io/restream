@@ -31,7 +31,7 @@ type Streamer struct {
 	opts Config
 
 	connMutex sync.RWMutex
-	sendQueue chan []byte
+	sendQueue chan outboundPacket
 	sendDone  chan struct{}
 	conn      *gws.Conn
 	shutdown  atomic.Bool
@@ -52,6 +52,23 @@ type Streamer struct {
 type relaySubscriptionKey struct {
 	storeName string
 	key       string
+}
+
+type outboundPacket struct {
+	description string
+	bytes       []byte
+	build       func() ([]byte, error)
+}
+
+func (p outboundPacket) buildBytes() ([]byte, error) {
+	if p.build != nil {
+		return p.build()
+	}
+	return p.bytes, nil
+}
+
+func (p outboundPacket) byteCount() int {
+	return len(p.bytes)
 }
 
 // NewStreamer creates a device-side relay streamer.
@@ -379,27 +396,27 @@ func (s *Streamer) sendFullState(storeName string) error {
 	if err != nil {
 		return err
 	}
-	sBytes, err := s.sr.GetSerializedFullState(storeName, accessLevel)
+	stateSnapshot, err := s.sr.GetFullStateSnapshot(storeName, accessLevel)
 	if err != nil {
 		return err
 	}
-	packetBytes, err := protocol.EncodePacket(protocol.NewFullStatePacket(storeName, sBytes))
-	if err != nil {
-		return err
-	}
-	return s.enqueuePacket("full state "+storeName, packetBytes)
+	return s.enqueuePacketBuilder("full state "+storeName, func() ([]byte, error) {
+		stateBytes, err := restream.SerializeToBytes(stateSnapshot, nil)
+		if err != nil {
+			return nil, err
+		}
+		return protocol.EncodePacket(protocol.NewFullStatePacket(storeName, stateBytes))
+	})
 }
 
 func (s *Streamer) sendPartial(storeName string, partial restream.Partial) error {
-	partialBytes, err := restream.SerializeToBytes(partial, nil)
-	if err != nil {
-		return err
-	}
-	packetBytes, err := protocol.EncodePacket(protocol.NewPartialStatePacket(storeName, partialBytes))
-	if err != nil {
-		return err
-	}
-	return s.enqueuePacket("partial state "+storeName, packetBytes)
+	return s.enqueuePacketBuilder("partial state "+storeName, func() ([]byte, error) {
+		partialBytes, err := restream.SerializeToBytes(partial, nil)
+		if err != nil {
+			return nil, err
+		}
+		return protocol.EncodePacket(protocol.NewPartialStatePacket(storeName, partialBytes))
+	})
 }
 
 func (s *Streamer) sendRPCResponse(rpcID uint32, resp []byte) error {
@@ -508,7 +525,7 @@ func (s *Streamer) isConnected() bool {
 }
 
 func (s *Streamer) startConn(conn *gws.Conn) {
-	sendQueue := make(chan []byte, s.opts.SendQueueSize)
+	sendQueue := make(chan outboundPacket, s.opts.SendQueueSize)
 	sendDone := make(chan struct{})
 
 	s.closeCurrentConn()
@@ -589,6 +606,20 @@ func (s *Streamer) closeCurrentConnOnSendError(err error) {
 }
 
 func (s *Streamer) enqueuePacket(packetDescription string, b []byte) error {
+	return s.enqueueOutboundPacket(outboundPacket{
+		description: packetDescription,
+		bytes:       b,
+	})
+}
+
+func (s *Streamer) enqueuePacketBuilder(packetDescription string, build func() ([]byte, error)) error {
+	return s.enqueueOutboundPacket(outboundPacket{
+		description: packetDescription,
+		build:       build,
+	})
+}
+
+func (s *Streamer) enqueueOutboundPacket(packet outboundPacket) error {
 	s.connMutex.RLock()
 	sendQueue := s.sendQueue
 	sendDone := s.sendDone
@@ -601,13 +632,13 @@ func (s *Streamer) enqueuePacket(packetDescription string, b []byte) error {
 	select {
 	case <-sendDone:
 		return ErrDisconnected
-	case sendQueue <- b:
+	case sendQueue <- packet:
 		return nil
 	default:
 		if s.opts.Callbacks.OnSendQueueFull != nil {
 			s.opts.Callbacks.OnSendQueueFull(SendQueueFullInfo{
-				PacketDescription: packetDescription,
-				Bytes:             len(b),
+				PacketDescription: packet.description,
+				Bytes:             packet.byteCount(),
 				QueueDepth:        len(sendQueue),
 				QueueCapacity:     cap(sendQueue),
 			})
@@ -616,17 +647,26 @@ func (s *Streamer) enqueuePacket(packetDescription string, b []byte) error {
 	}
 }
 
-func (s *Streamer) handleSendQueue(conn *gws.Conn, sendQueue <-chan []byte, sendDone <-chan struct{}) {
+func (s *Streamer) handleSendQueue(conn *gws.Conn, sendQueue <-chan outboundPacket, sendDone <-chan struct{}) {
 	go func() {
 		for {
 			select {
 			case <-sendDone:
 				return
-			case b := <-sendQueue:
+			case packet, ok := <-sendQueue:
+				if !ok {
+					return
+				}
 				select {
 				case <-sendDone:
 					return
 				default:
+				}
+
+				b, err := packet.buildBytes()
+				if err != nil {
+					s.closeConn(conn)
+					return
 				}
 
 				deadline := time.Now().Add(s.opts.WriteTimeout)

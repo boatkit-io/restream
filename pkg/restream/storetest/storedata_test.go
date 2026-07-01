@@ -115,6 +115,69 @@ func TestGeneratedPartialCanClearOptionalPrimitivePointer(t *testing.T) {
 	assert.Equal(t, [][]any{{"Primitive"}, {"Optional"}}, fields)
 }
 
+func TestGeneratedStateCloneDeepCopiesContainers(t *testing.T) {
+	original := &TestState{
+		MapPtrTest: map[uint8]*TestMapData{
+			5: {Number: 5, Data: []byte{1, 2}},
+		},
+		BaseField:     "base",
+		BaseStruct:    TestMapData{Number: 6, Data: []byte{3, 4}},
+		BaseStructPtr: &TestMapData{Number: 7, Data: []byte{5, 6}},
+	}
+
+	cloned := original.RestreamClone()
+
+	original.MapPtrTest[5].Number = 50
+	original.MapPtrTest[5].Data[0] = 9
+	original.MapPtrTest[6] = &TestMapData{Number: 60}
+	original.BaseStruct.Number = 70
+	original.BaseStruct.Data[0] = 8
+	original.BaseStructPtr.Number = 80
+	original.BaseStructPtr.Data[0] = 7
+
+	assert.Equal(t, uint(5), cloned.MapPtrTest[5].Number)
+	assert.Equal(t, []byte{1, 2}, cloned.MapPtrTest[5].Data)
+	assert.Nil(t, cloned.MapPtrTest[6])
+	assert.Equal(t, uint(6), cloned.BaseStruct.Number)
+	assert.Equal(t, []byte{3, 4}, cloned.BaseStruct.Data)
+	assert.Equal(t, uint(7), cloned.BaseStructPtr.Number)
+	assert.Equal(t, []byte{5, 6}, cloned.BaseStructPtr.Data)
+}
+
+func TestGeneratedPartialForFieldsClonesCapturedValues(t *testing.T) {
+	original := &TestState{
+		MapPtrTest: map[uint8]*TestMapData{
+			5: {Number: 5, Data: []byte{1, 2}},
+		},
+		BaseStruct:    TestMapData{Number: 6, Data: []byte{3, 4}},
+		BaseStructPtr: &TestMapData{Number: 7, Data: []byte{5, 6}},
+	}
+
+	partialRaw, exists := original.PartialForFields([][]any{
+		{"MapPtrTest", uint8(5)},
+		{"BaseStruct"},
+		{"BaseStructPtr"},
+	})
+	assert.True(t, exists)
+
+	original.MapPtrTest[5].Number = 50
+	original.MapPtrTest[5].Data[0] = 9
+	original.BaseStruct.Number = 60
+	original.BaseStruct.Data[0] = 8
+	original.BaseStructPtr.Number = 70
+	original.BaseStructPtr.Data[0] = 7
+
+	var target TestState
+	partialRaw.(*TestStatePartial).ApplyTo(&target)
+
+	assert.Equal(t, uint(5), target.MapPtrTest[5].Number)
+	assert.Equal(t, []byte{1, 2}, target.MapPtrTest[5].Data)
+	assert.Equal(t, uint(6), target.BaseStruct.Number)
+	assert.Equal(t, []byte{3, 4}, target.BaseStruct.Data)
+	assert.Equal(t, uint(7), target.BaseStructPtr.Number)
+	assert.Equal(t, []byte{5, 6}, target.BaseStructPtr.Data)
+}
+
 func TestGeneratedPartialFilterToFields(t *testing.T) {
 	mapValueFive := &TestMapData{Number: 5}
 	mapValueSix := &TestMapData{Number: 6}

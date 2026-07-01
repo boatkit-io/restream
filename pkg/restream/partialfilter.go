@@ -52,47 +52,97 @@ func ChildFieldsForField(fields [][]any, fieldName string) [][]any {
 	return ret
 }
 
-// ReduceFieldPaths removes redundant child paths when an ancestor path is already present.
-func ReduceFieldPaths(fields [][]any) [][]any {
+// reduceFieldPaths removes redundant child paths when an ancestor path is already present.
+func reduceFieldPaths(fields [][]any) [][]any {
 	if len(fields) < 2 {
 		return fields
 	}
 
-	ret := make([][]any, 0, len(fields))
+	root := &fieldPathReduceNode{}
 	for _, field := range fields {
-		suppressed := false
-		writeIdx := 0
-		for _, existing := range ret {
-			switch {
-			case fieldPathHasPrefix(field, existing):
-				suppressed = true
-				ret[writeIdx] = existing
-				writeIdx++
-			case fieldPathHasPrefix(existing, field):
-				continue
-			default:
-				ret[writeIdx] = existing
-				writeIdx++
-			}
-		}
-		ret = ret[:writeIdx]
-		if !suppressed {
-			ret = append(ret, field)
-		}
+		root.add(field)
 	}
+
+	ret := make([][]any, 0, len(fields))
+	root.collect(nil, &ret)
 	return ret
 }
 
-func fieldPathHasPrefix(field []any, prefix []any) bool {
-	if len(prefix) > len(field) {
-		return false
+type fieldPathReduceNode struct {
+	terminal bool
+	children []*fieldPathReduceChild
+	childMap map[any]*fieldPathReduceNode
+}
+
+type fieldPathReduceChild struct {
+	part any
+	node *fieldPathReduceNode
+}
+
+func (n *fieldPathReduceNode) add(field []any) {
+	if n.terminal {
+		return
 	}
-	for idx := range prefix {
-		if !reflect.DeepEqual(field[idx], prefix[idx]) {
-			return false
+	if len(field) == 0 {
+		n.terminal = true
+		n.children = nil
+		n.childMap = nil
+		return
+	}
+
+	child := n.child(field[0])
+	child.add(field[1:])
+}
+
+func (n *fieldPathReduceNode) child(part any) *fieldPathReduceNode {
+	if isComparableFieldPathPart(part) {
+		if n.childMap != nil {
+			if child := n.childMap[part]; child != nil {
+				return child
+			}
+		} else {
+			n.childMap = map[any]*fieldPathReduceNode{}
+			for _, child := range n.children {
+				if isComparableFieldPathPart(child.part) {
+					n.childMap[child.part] = child.node
+				}
+			}
+		}
+
+		child := &fieldPathReduceNode{}
+		n.childMap[part] = child
+		n.children = append(n.children, &fieldPathReduceChild{part: part, node: child})
+		return child
+	}
+
+	for _, child := range n.children {
+		if reflect.DeepEqual(child.part, part) {
+			return child.node
 		}
 	}
-	return true
+
+	child := &fieldPathReduceNode{}
+	n.children = append(n.children, &fieldPathReduceChild{part: part, node: child})
+	return child
+}
+
+func isComparableFieldPathPart(part any) bool {
+	if part == nil {
+		return true
+	}
+	return reflect.TypeOf(part).Comparable()
+}
+
+func (n *fieldPathReduceNode) collect(prefix []any, ret *[][]any) {
+	if n.terminal {
+		field := append([]any{}, prefix...)
+		*ret = append(*ret, field)
+		return
+	}
+
+	for _, child := range n.children {
+		child.node.collect(append(prefix, child.part), ret)
+	}
 }
 
 // SubscriptionKeyFromFieldPath converts a server-side Go partial field path into the matching client ReSub key.

@@ -35,6 +35,17 @@ func (s *LatLong) Deserialize(r *binarystreams.Reader, _ *VarInfoStruct) error {
 	return nil
 }
 
+// RestreamClone returns a deep copy of this LatLong.
+func (s *LatLong) RestreamClone() *LatLong {
+	if s == nil {
+		return nil
+	}
+	ret := &LatLong{}
+	ret.Lat = s.Lat
+	ret.Long = s.Long
+	return ret
+}
+
 // callRequest is a request object for the call RPC call
 type callRequest struct { //nolint:revive
 	Test int

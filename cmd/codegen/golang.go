@@ -24,9 +24,19 @@ func (ft *FileTracking) createGoStructSerializers(si StructInfo, fields []*restr
 	// Calculate main struct serialization/deserialization functions
 	if si.Fielded {
 		outSerialization := createGolangStructFieldedSerializers(si, fields)
+		outClone, err := ft.createGolangStructCloner(si, fields)
+		if err != nil {
+			return err
+		}
+		outSerialization += outClone
 		ft.goGenEntries = append(ft.goGenEntries, fdef{name: si.Name, defs: outSerialization})
 	} else {
 		outSerialization := createGolangStructNonFieldedSerializers(si, fields, true)
+		outClone, err := ft.createGolangStructCloner(si, fields)
+		if err != nil {
+			return err
+		}
+		outSerialization += outClone
 		ft.goGenEntries = append(ft.goGenEntries, fdef{name: si.Name, defs: outSerialization})
 	}
 
@@ -61,7 +71,7 @@ func (ft *FileTracking) createGoStructSerializers(si StructInfo, fields []*restr
 		outPartial += "}\n" + "\n"
 
 		outPartial += "// ApplyTo applies this partial to the full version of the struct\n"
-		outPartial += fmt.Sprintf("func (s *%sPartial) ApplyTo(por any) ([][]any) {\n", si.Name)
+		outPartial += fmt.Sprintf("func (s *%sPartial) ApplyTo(por any) [][]any {\n", si.Name)
 		outPartial += fmt.Sprintf("    po, ok := por.(*%s)\n", si.Name)
 		outPartial += "    if !ok {\n"
 		outPartial += fmt.Sprintf("        pop := por.(**%s)\n", si.Name)
@@ -102,7 +112,7 @@ func (ft *FileTracking) createGoStructSerializers(si StructInfo, fields []*restr
 			}
 			outPartial += "    }\n"
 		}
-		outPartial += "    return restream.ReduceFieldPaths(ret)\n"
+		outPartial += "    return ret\n"
 		outPartial += "}\n"
 
 		outPartial += "\n"
@@ -155,7 +165,6 @@ func (ft *FileTracking) createGolangPartialForFields(
 	out := "\n"
 	out += "// PartialForFields returns a snapshot partial containing the requested field paths\n"
 	out += fmt.Sprintf("func (s *%s) PartialForFields(fields [][]any) (restream.Partial, bool) {\n", si.Name)
-	out += "    fields = restream.ReduceFieldPaths(fields)\n"
 	out += fmt.Sprintf("    ret := &%sPartial{}\n", si.Name)
 	out += "    included := false\n"
 	for _, pfi := range partialFields {
@@ -197,10 +206,19 @@ func (ft *FileTracking) createGolangDirectPartialForFields(
 	pfi *restream.FieldInfo,
 ) string {
 	retType := ft.getGolangTypeName(pfi.VarInfo)
+	valueType := ft.getGolangTypeName(fi.VarInfo)
 	out := fmt.Sprintf("func (s *%s) partialForFields%s(fields [][]any) (%s, bool) {\n", si.Name, fi.Name, retType)
 	out += "    if len(fields) == 0 { return nil, false }\n"
 	out += "    for _, field := range fields {\n"
-	out += fmt.Sprintf("        if len(field) == 0 { return restream.Ptr(s.%s), true }\n", fi.Name)
+	out += "        if len(field) == 0 {\n"
+	if expr, ok := ft.golangSimpleCloneExpr(fi.VarInfo, fmt.Sprintf("s.%s", fi.Name)); ok {
+		out += fmt.Sprintf("            cloned := %s\n", expr)
+	} else {
+		out += fmt.Sprintf("            var cloned %s\n", valueType)
+		out += ft.mustGolangCloneAssign(fi.VarInfo, fmt.Sprintf("s.%s", fi.Name), "cloned", "            ", 0)
+	}
+	out += "            return restream.Ptr(cloned), true\n"
+	out += "        }\n"
 	out += "    }\n"
 	out += "    return nil, false\n"
 	out += "}\n\n"
@@ -223,10 +241,19 @@ func (ft *FileTracking) createGolangPartialValueForFields(
 	out += fmt.Sprintf("    ret := &restream.PartialValue[%s, %s]{}\n", valueType, partialType)
 	out += "    included := false\n"
 	out += "    for _, field := range fields {\n"
-	out += fmt.Sprintf("        if len(field) == 0 { return ret.SetWhole(restream.Ptr(s.%s)), true }\n", fi.Name)
+	out += "        if len(field) == 0 {\n"
+	if expr, ok := ft.golangSimpleCloneExpr(fi.VarInfo, fmt.Sprintf("s.%s", fi.Name)); ok {
+		out += fmt.Sprintf("            cloned := %s\n", expr)
+	} else {
+		out += fmt.Sprintf("            var cloned %s\n", ft.getGolangTypeName(fi.VarInfo))
+		out += ft.mustGolangCloneAssign(fi.VarInfo, fmt.Sprintf("s.%s", fi.Name), "cloned", "            ", 0)
+	}
+	out += "            return ret.SetWhole(restream.Ptr(cloned)), true\n"
+	out += "        }\n"
 	if fieldIsPointer {
 		out += fmt.Sprintf("        if s.%s == nil {\n", fi.Name)
-		out += fmt.Sprintf("            ret.SetWhole(restream.Ptr(s.%s))\n", fi.Name)
+		out += fmt.Sprintf("            var cloned %s\n", ft.getGolangTypeName(fi.VarInfo))
+		out += "            ret.SetWhole(restream.Ptr(cloned))\n"
 		out += "            included = true\n"
 		out += "            continue\n"
 		out += "        }\n"
@@ -262,7 +289,11 @@ func (ft *FileTracking) createGolangMapPartialForFields(
 	out += fmt.Sprintf("    ret := %s\n", constructor)
 	out += "    included := false\n"
 	out += "    for _, field := range fields {\n"
-	out += fmt.Sprintf("        if len(field) == 0 { return ret.SetWhole(s.%s), true }\n", fi.Name)
+	out += "        if len(field) == 0 {\n"
+	out += fmt.Sprintf("            var cloned %s\n", ft.getGolangTypeName(fi.VarInfo))
+	out += ft.mustGolangCloneAssign(fi.VarInfo, fmt.Sprintf("s.%s", fi.Name), "cloned", "            ", 0)
+	out += "            return ret.SetWhole(cloned), true\n"
+	out += "        }\n"
 	out += fmt.Sprintf("        key, ok := restream.FieldPathPartToKey[%s](field[0])\n", keyType)
 	out += "        if !ok { continue }\n"
 	out += fmt.Sprintf("        value, exists := s.%s[key]\n", fi.Name)
@@ -274,13 +305,20 @@ func (ft *FileTracking) createGolangMapPartialForFields(
 	if valueSupportsPartials {
 		partialType := ft.getGolangTypeName(partialStruct.GenericTypes[2])
 		out += "        if len(field) == 1 {\n"
-		out += "            ret.Set(key, value)\n"
+		if expr, ok := ft.golangSimpleCloneExpr(mapInfo.ElemType, "value"); ok {
+			out += fmt.Sprintf("            ret.Set(key, %s)\n", expr)
+		} else {
+			out += fmt.Sprintf("            var cloned %s\n", ft.getGolangTypeName(mapInfo.ElemType))
+			out += ft.mustGolangCloneAssign(mapInfo.ElemType, "value", "cloned", "            ", 0)
+			out += "            ret.Set(key, cloned)\n"
+		}
 		out += "            included = true\n"
 		out += "            continue\n"
 		out += "        }\n"
 		if valueIsPointer {
 			out += "        if value == nil {\n"
-			out += "            ret.Set(key, value)\n"
+			out += fmt.Sprintf("            var cloned %s\n", ft.getGolangTypeName(mapInfo.ElemType))
+			out += "            ret.Set(key, cloned)\n"
 			out += "            included = true\n"
 			out += "            continue\n"
 			out += "        }\n"
@@ -293,7 +331,13 @@ func (ft *FileTracking) createGolangMapPartialForFields(
 		out += "            included = true\n"
 		out += "        }\n"
 	} else {
-		out += "        ret.Set(key, value)\n"
+		if expr, ok := ft.golangSimpleCloneExpr(mapInfo.ElemType, "value"); ok {
+			out += fmt.Sprintf("        ret.Set(key, %s)\n", expr)
+		} else {
+			out += fmt.Sprintf("        var cloned %s\n", ft.getGolangTypeName(mapInfo.ElemType))
+			out += ft.mustGolangCloneAssign(mapInfo.ElemType, "value", "cloned", "        ", 0)
+			out += "        ret.Set(key, cloned)\n"
+		}
 		out += "        included = true\n"
 	}
 	out += "    }\n"
@@ -319,20 +363,31 @@ func (ft *FileTracking) createGolangArrayPartialForFields(
 	out += fmt.Sprintf("    ret := %s\n", constructor)
 	out += "    included := false\n"
 	out += "    for _, field := range fields {\n"
-	out += fmt.Sprintf("        if len(field) == 0 { return ret.SetWhole(s.%s), true }\n", fi.Name)
+	out += "        if len(field) == 0 {\n"
+	out += fmt.Sprintf("            var cloned %s\n", ft.getGolangTypeName(fi.VarInfo))
+	out += ft.mustGolangCloneAssign(fi.VarInfo, fmt.Sprintf("s.%s", fi.Name), "cloned", "            ", 0)
+	out += "            return ret.SetWhole(cloned), true\n"
+	out += "        }\n"
 	out += "        index, ok := restream.FieldPathPartToIndex(field[0])\n"
 	out += fmt.Sprintf("        if !ok || index < 0 || index >= len(s.%s) { continue }\n", fi.Name)
 	out += fmt.Sprintf("        value := s.%s[index]\n", fi.Name)
 	if valueSupportsPartials {
 		partialType := ft.getGolangTypeName(partialStruct.GenericTypes[1])
 		out += "        if len(field) == 1 {\n"
-		out += "            ret.Set(index, value)\n"
+		if expr, ok := ft.golangSimpleCloneExpr(arrayInfo.ElemType, "value"); ok {
+			out += fmt.Sprintf("            ret.Set(index, %s)\n", expr)
+		} else {
+			out += fmt.Sprintf("            var cloned %s\n", ft.getGolangTypeName(arrayInfo.ElemType))
+			out += ft.mustGolangCloneAssign(arrayInfo.ElemType, "value", "cloned", "            ", 0)
+			out += "            ret.Set(index, cloned)\n"
+		}
 		out += "            included = true\n"
 		out += "            continue\n"
 		out += "        }\n"
 		if valueIsPointer {
 			out += "        if value == nil {\n"
-			out += "            ret.Set(index, value)\n"
+			out += fmt.Sprintf("            var cloned %s\n", ft.getGolangTypeName(arrayInfo.ElemType))
+			out += "            ret.Set(index, cloned)\n"
 			out += "            included = true\n"
 			out += "            continue\n"
 			out += "        }\n"
@@ -345,7 +400,13 @@ func (ft *FileTracking) createGolangArrayPartialForFields(
 		out += "            included = true\n"
 		out += "        }\n"
 	} else {
-		out += "        ret.Set(index, value)\n"
+		if expr, ok := ft.golangSimpleCloneExpr(arrayInfo.ElemType, "value"); ok {
+			out += fmt.Sprintf("        ret.Set(index, %s)\n", expr)
+		} else {
+			out += fmt.Sprintf("        var cloned %s\n", ft.getGolangTypeName(arrayInfo.ElemType))
+			out += ft.mustGolangCloneAssign(arrayInfo.ElemType, "value", "cloned", "        ", 0)
+			out += "        ret.Set(index, cloned)\n"
+		}
 		out += "        included = true\n"
 	}
 	out += "    }\n"
@@ -390,6 +451,169 @@ func mustPartialStructInfo(vi restream.VarInfo) *restream.VarInfoStruct {
 func isPointerVarInfo(vi restream.VarInfo) bool {
 	_, ok := vi.(*restream.VarInfoPointer)
 	return ok
+}
+
+func (ft *FileTracking) createGolangStructCloner(si StructInfo, fields []*restream.FieldInfo) (string, error) {
+	if si.GenericParams != nil {
+		return "", nil
+	}
+
+	typeName := si.GolangNameWithParams()
+	out := "\n"
+	out += fmt.Sprintf("// RestreamClone returns a deep copy of this %s.\n", si.Name)
+	out += fmt.Sprintf("func (s *%s) RestreamClone() *%s {\n", typeName, typeName)
+	out += "    if s == nil { return nil }\n"
+	out += fmt.Sprintf("    ret := &%s{}\n", typeName)
+	for idx, fi := range fields {
+		assignment, err := ft.golangCloneAssign(fi.VarInfo, "s."+fi.Name, "ret."+fi.Name, "    ", idx+1)
+		if err != nil {
+			return "", errors.Wrapf(err, "building clone for %s.%s", si.Name, fi.Name)
+		}
+		out += assignment
+	}
+	out += "    return ret\n"
+	out += "}\n\n"
+	return out, nil
+}
+
+func (ft *FileTracking) golangCloneAssign(
+	vi restream.VarInfo,
+	src string,
+	dst string,
+	indent string,
+	depth int,
+) (string, error) {
+	switch vit := vi.(type) {
+	case *restream.VarInfoPrimitive:
+		return fmt.Sprintf("%s%s = %s\n", indent, dst, src), nil
+	case *restream.VarInfoArray:
+		elemType := ft.getGolangTypeName(vit.ElemType)
+		idxName := fmt.Sprintf("cloneIdx%d", depth)
+		valueName := fmt.Sprintf("cloneValue%d", depth)
+		clonedName := fmt.Sprintf("cloned%d", depth)
+		out := fmt.Sprintf("%sif %s != nil {\n", indent, src)
+		out += fmt.Sprintf("%s    %s = make(%s, len(%s))\n", indent, dst, ft.getGolangTypeName(vit), src)
+		if expr, ok := ft.golangSimpleCloneExpr(vit.ElemType, valueName); ok {
+			if expr == valueName {
+				out += fmt.Sprintf("%s    copy(%s, %s)\n", indent, dst, src)
+			} else {
+				out += fmt.Sprintf("%s    for %s, %s := range %s {\n", indent, idxName, valueName, src)
+				out += fmt.Sprintf("%s        %s[%s] = %s\n", indent, dst, idxName, expr)
+				out += fmt.Sprintf("%s    }\n", indent)
+			}
+		} else {
+			out += fmt.Sprintf("%s    for %s, %s := range %s {\n", indent, idxName, valueName, src)
+			out += fmt.Sprintf("%s        var %s %s\n", indent, clonedName, elemType)
+			assignment, err := ft.golangCloneAssign(vit.ElemType, valueName, clonedName, indent+"        ", depth+1)
+			if err != nil {
+				return "", err
+			}
+			out += assignment
+			out += fmt.Sprintf("%s        %s[%s] = %s\n", indent, dst, idxName, clonedName)
+			out += fmt.Sprintf("%s    }\n", indent)
+		}
+		out += fmt.Sprintf("%s}\n", indent)
+		return out, nil
+	case *restream.VarInfoMap:
+		keyName := fmt.Sprintf("cloneKey%d", depth)
+		valueName := fmt.Sprintf("cloneValue%d", depth)
+		out := fmt.Sprintf("%sif %s != nil {\n", indent, src)
+		out += fmt.Sprintf("%s    %s = make(%s, len(%s))\n", indent, dst, ft.getGolangTypeName(vit), src)
+		out += fmt.Sprintf("%s    for %s, %s := range %s {\n", indent, keyName, valueName, src)
+		if vit.ElemType == nil {
+			out += fmt.Sprintf("%s        %s[%s] = %s\n", indent, dst, keyName, valueName)
+		} else {
+			elemType := ft.getGolangTypeName(vit.ElemType)
+			clonedName := fmt.Sprintf("cloned%d", depth)
+			if expr, ok := ft.golangSimpleCloneExpr(vit.ElemType, valueName); ok {
+				out += fmt.Sprintf("%s        %s[%s] = %s\n", indent, dst, keyName, expr)
+			} else {
+				out += fmt.Sprintf("%s        var %s %s\n", indent, clonedName, elemType)
+				assignment, err := ft.golangCloneAssign(vit.ElemType, valueName, clonedName, indent+"        ", depth+1)
+				if err != nil {
+					return "", err
+				}
+				out += assignment
+				out += fmt.Sprintf("%s        %s[%s] = %s\n", indent, dst, keyName, clonedName)
+			}
+		}
+		out += fmt.Sprintf("%s    }\n", indent)
+		out += fmt.Sprintf("%s}\n", indent)
+		return out, nil
+	case *restream.VarInfoPointer:
+		elemType := ft.getGolangTypeName(vit.SubType)
+		clonedName := fmt.Sprintf("cloned%d", depth)
+		out := fmt.Sprintf("%sif %s != nil {\n", indent, src)
+		if expr, ok := ft.golangSimpleCloneExpr(vit.SubType, fmt.Sprintf("(*%s)", src)); ok {
+			out += fmt.Sprintf("%s    %s := %s\n", indent, clonedName, expr)
+		} else {
+			out += fmt.Sprintf("%s    var %s %s\n", indent, clonedName, elemType)
+			assignment, err := ft.golangCloneAssign(vit.SubType, fmt.Sprintf("(*%s)", src), clonedName, indent+"    ", depth+1)
+			if err != nil {
+				return "", err
+			}
+			out += assignment
+		}
+		out += fmt.Sprintf("%s    %s = &%s\n", indent, dst, clonedName)
+		out += fmt.Sprintf("%s}\n", indent)
+		return out, nil
+	case *restream.VarInfoStruct:
+		if vit.FieldList != nil {
+			out := fmt.Sprintf("%s%s = %s{}\n", indent, dst, ft.getGolangTypeName(vit))
+			for _, field := range vit.FieldList {
+				assignment, err := ft.golangCloneAssign(field.VarInfo, src+"."+field.Name, dst+"."+field.Name, indent, depth+1)
+				if err != nil {
+					return "", err
+				}
+				out += assignment
+			}
+			return out, nil
+		}
+		clonedName := fmt.Sprintf("cloned%d", depth)
+		sourceName := fmt.Sprintf("cloneSource%d", depth)
+		inputName := fmt.Sprintf("cloneInput%d", depth)
+		typeName := ft.getGolangTypeName(vit)
+		out := fmt.Sprintf("%s%s := %s\n", indent, inputName, src)
+		out += fmt.Sprintf("%sif %s, ok := any(&%s).(interface{ RestreamClone() *%s }); ok {\n", indent, sourceName, inputName, typeName)
+		out += fmt.Sprintf("%s    %s := %s.RestreamClone()\n", indent, clonedName, sourceName)
+		out += fmt.Sprintf("%s    if %s != nil {\n", indent, clonedName)
+		out += fmt.Sprintf("%s        %s = *%s\n", indent, dst, clonedName)
+		out += fmt.Sprintf("%s    }\n", indent)
+		out += fmt.Sprintf("%s} else {\n", indent)
+		out += fmt.Sprintf("%s    %s = %s\n", indent, dst, inputName)
+		out += fmt.Sprintf("%s}\n", indent)
+		return out, nil
+	case *restream.VarInfoDynamic:
+		return fmt.Sprintf("%s%s = %sCloneDynamicValue(%s)\n", indent, dst, ft.golangRestreamQualifier(), src), nil
+	case *restream.VarInfoGenericParam:
+		return "", fmt.Errorf("generic fields cannot be generated as deep clones")
+	default:
+		return "", fmt.Errorf("unhandled clone type %T", vi)
+	}
+}
+
+func (ft *FileTracking) golangRestreamQualifier() string {
+	if ft.fPackage != nil && ft.fPackage.PkgPath == "github.com/boatkit-io/restream/pkg/restream" {
+		return ""
+	}
+	return "restream."
+}
+
+func (ft *FileTracking) golangSimpleCloneExpr(vi restream.VarInfo, src string) (string, bool) {
+	switch vi.(type) {
+	case *restream.VarInfoPrimitive:
+		return src, true
+	default:
+		return "", false
+	}
+}
+
+func (ft *FileTracking) mustGolangCloneAssign(vi restream.VarInfo, src string, dst string, indent string, depth int) string {
+	out, err := ft.golangCloneAssign(vi, src, dst, indent, depth)
+	if err != nil {
+		panic(err)
+	}
+	return out
 }
 
 // createGolangStructFieldedSerializers is a reusable helper to write out the serializer/deserializer functions for a fielded struct

@@ -1,6 +1,8 @@
 package restream
 
 import (
+	"errors"
+
 	"github.com/boatkit-io/restream/pkg/binarystreams"
 )
 
@@ -15,7 +17,30 @@ type SerializableGeneric interface {
 	GetTypeArgs() []VarInfo
 }
 
+// StateCloner is implemented by generated state structs that can make a deep copy of themselves.
+type StateCloner[S any] interface {
+	RestreamClone() *S
+}
+
+// RawSerializable wraps bytes that have already been serialized so callers can pass them through APIs that accept
+// Serializable snapshots.
+type RawSerializable []byte
+
+var _ Serializable = RawSerializable(nil)
+
+// Serialize writes the pre-serialized bytes directly to the destination stream.
+func (r RawSerializable) Serialize(w *binarystreams.Writer, _ *VarInfoStruct) error {
+	return w.WriteBytes([]byte(r))
+}
+
+// Deserialize is unsupported because RawSerializable only represents an outbound byte payload.
+func (RawSerializable) Deserialize(*binarystreams.Reader, *VarInfoStruct) error {
+	return errors.New("RawSerializable cannot be deserialized")
+}
+
 // Partial is an interface that can be implemented by a type to allow it to be partially applied to a whole struct.
+// ApplyTo mutates the target and returns raw changed field paths. Callers that notify subscriptions should reduce those
+// paths after mutation.
 type Partial interface {
 	Serializable
 	MergeOntoPartial(any)

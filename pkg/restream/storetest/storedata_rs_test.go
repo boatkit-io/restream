@@ -56,6 +56,33 @@ func (s *TestA) Deserialize(r *binarystreams.Reader, _ *restream.VarInfoStruct) 
 	return restream.DeserializeFielded(ri, TestAFieldInfo, TestAFieldMap, fieldPtrs)
 }
 
+// RestreamClone returns a deep copy of this TestA.
+func (s *TestA) RestreamClone() *TestA {
+	if s == nil {
+		return nil
+	}
+	ret := &TestA{}
+	cloneInput1 := s.A
+	if cloneSource1, ok := any(&cloneInput1).(interface{ RestreamClone() *TestB }); ok {
+		cloned1 := cloneSource1.RestreamClone()
+		if cloned1 != nil {
+			ret.A = *cloned1
+		}
+	} else {
+		ret.A = cloneInput1
+	}
+	cloneInput2 := s.B
+	if cloneSource2, ok := any(&cloneInput2).(interface{ RestreamClone() *TestB }); ok {
+		cloned2 := cloneSource2.RestreamClone()
+		if cloned2 != nil {
+			ret.B = *cloned2
+		}
+	} else {
+		ret.B = cloneInput2
+	}
+	return ret
+}
+
 // TestAPartial is a partial struct for TestA
 type TestAPartial struct {
 	A *restream.PartialValue[TestB, *TestBPartial]
@@ -104,7 +131,7 @@ func (s *TestAPartial) ApplyTo(por any) [][]any {
 			ret = append(ret, append(append([]any{}, "B"), f...))
 		}
 	}
-	return restream.ReduceFieldPaths(ret)
+	return ret
 }
 
 // FilterToFields returns a new partial containing only changes matching the requested field paths
@@ -141,7 +168,6 @@ func (s *TestAPartial) FilterToFields(fields [][]any) (restream.Partial, bool) {
 
 // PartialForFields returns a snapshot partial containing the requested field paths
 func (s *TestA) PartialForFields(fields [][]any) (restream.Partial, bool) {
-	fields = restream.ReduceFieldPaths(fields)
 	ret := &TestAPartial{}
 	included := false
 	if partial, ok := s.partialForFieldsA(restream.ChildFieldsForField(fields, "A")); ok {
@@ -163,7 +189,17 @@ func (s *TestA) partialForFieldsA(fields [][]any) (*restream.PartialValue[TestB,
 	included := false
 	for _, field := range fields {
 		if len(field) == 0 {
-			return ret.SetWhole(restream.Ptr(s.A)), true
+			var cloned TestB
+			cloneInput0 := s.A
+			if cloneSource0, ok := any(&cloneInput0).(interface{ RestreamClone() *TestB }); ok {
+				cloned0 := cloneSource0.RestreamClone()
+				if cloned0 != nil {
+					cloned = *cloned0
+				}
+			} else {
+				cloned = cloneInput0
+			}
+			return ret.SetWhole(restream.Ptr(cloned)), true
 		}
 		partial, ok := (&s.A).PartialForFields([][]any{field})
 		if ok {
@@ -182,7 +218,17 @@ func (s *TestA) partialForFieldsB(fields [][]any) (*restream.PartialValue[TestB,
 	included := false
 	for _, field := range fields {
 		if len(field) == 0 {
-			return ret.SetWhole(restream.Ptr(s.B)), true
+			var cloned TestB
+			cloneInput0 := s.B
+			if cloneSource0, ok := any(&cloneInput0).(interface{ RestreamClone() *TestB }); ok {
+				cloned0 := cloneSource0.RestreamClone()
+				if cloned0 != nil {
+					cloned = *cloned0
+				}
+			} else {
+				cloned = cloneInput0
+			}
+			return ret.SetWhole(restream.Ptr(cloned)), true
 		}
 		partial, ok := (&s.B).PartialForFields([][]any{field})
 		if ok {
@@ -295,6 +341,55 @@ func (s *TestArrayState) Deserialize(r *binarystreams.Reader, _ *restream.VarInf
 	return restream.DeserializeFielded(ri, TestArrayStateFieldInfo, TestArrayStateFieldMap, fieldPtrs)
 }
 
+// RestreamClone returns a deep copy of this TestArrayState.
+func (s *TestArrayState) RestreamClone() *TestArrayState {
+	if s == nil {
+		return nil
+	}
+	ret := &TestArrayState{}
+	if s.Numbers != nil {
+		ret.Numbers = make([]uint, len(s.Numbers))
+		copy(ret.Numbers, s.Numbers)
+	}
+	if s.Items != nil {
+		ret.Items = make([]TestMapData, len(s.Items))
+		for cloneIdx2, cloneValue2 := range s.Items {
+			var cloned2 TestMapData
+			cloneInput3 := cloneValue2
+			if cloneSource3, ok := any(&cloneInput3).(interface{ RestreamClone() *TestMapData }); ok {
+				cloned3 := cloneSource3.RestreamClone()
+				if cloned3 != nil {
+					cloned2 = *cloned3
+				}
+			} else {
+				cloned2 = cloneInput3
+			}
+			ret.Items[cloneIdx2] = cloned2
+		}
+	}
+	if s.PtrItems != nil {
+		ret.PtrItems = make([]*TestMapData, len(s.PtrItems))
+		for cloneIdx3, cloneValue3 := range s.PtrItems {
+			var cloned3 *TestMapData
+			if cloneValue3 != nil {
+				var cloned4 TestMapData
+				cloneInput5 := (*cloneValue3)
+				if cloneSource5, ok := any(&cloneInput5).(interface{ RestreamClone() *TestMapData }); ok {
+					cloned5 := cloneSource5.RestreamClone()
+					if cloned5 != nil {
+						cloned4 = *cloned5
+					}
+				} else {
+					cloned4 = cloneInput5
+				}
+				cloned3 = &cloned4
+			}
+			ret.PtrItems[cloneIdx3] = cloned3
+		}
+	}
+	return ret
+}
+
 // TestArrayStatePartial is a partial struct for TestArrayState
 type TestArrayStatePartial struct {
 	Numbers  *restream.PartialArray[uint]
@@ -357,7 +452,7 @@ func (s *TestArrayStatePartial) ApplyTo(por any) [][]any {
 			ret = append(ret, append(append([]any{}, "PtrItems"), f...))
 		}
 	}
-	return restream.ReduceFieldPaths(ret)
+	return ret
 }
 
 // FilterToFields returns a new partial containing only changes matching the requested field paths
@@ -404,7 +499,6 @@ func (s *TestArrayStatePartial) FilterToFields(fields [][]any) (restream.Partial
 
 // PartialForFields returns a snapshot partial containing the requested field paths
 func (s *TestArrayState) PartialForFields(fields [][]any) (restream.Partial, bool) {
-	fields = restream.ReduceFieldPaths(fields)
 	ret := &TestArrayStatePartial{}
 	included := false
 	if partial, ok := s.partialForFieldsNumbers(restream.ChildFieldsForField(fields, "Numbers")); ok {
@@ -430,7 +524,12 @@ func (s *TestArrayState) partialForFieldsNumbers(fields [][]any) (*restream.Part
 	included := false
 	for _, field := range fields {
 		if len(field) == 0 {
-			return ret.SetWhole(s.Numbers), true
+			var cloned []uint
+			if s.Numbers != nil {
+				cloned = make([]uint, len(s.Numbers))
+				copy(cloned, s.Numbers)
+			}
+			return ret.SetWhole(cloned), true
 		}
 		index, ok := restream.FieldPathPartToIndex(field[0])
 		if !ok || index < 0 || index >= len(s.Numbers) {
@@ -451,7 +550,24 @@ func (s *TestArrayState) partialForFieldsItems(fields [][]any) (*restream.Partia
 	included := false
 	for _, field := range fields {
 		if len(field) == 0 {
-			return ret.SetWhole(s.Items), true
+			var cloned []TestMapData
+			if s.Items != nil {
+				cloned = make([]TestMapData, len(s.Items))
+				for cloneIdx0, cloneValue0 := range s.Items {
+					var cloned0 TestMapData
+					cloneInput1 := cloneValue0
+					if cloneSource1, ok := any(&cloneInput1).(interface{ RestreamClone() *TestMapData }); ok {
+						cloned1 := cloneSource1.RestreamClone()
+						if cloned1 != nil {
+							cloned0 = *cloned1
+						}
+					} else {
+						cloned0 = cloneInput1
+					}
+					cloned[cloneIdx0] = cloned0
+				}
+			}
+			return ret.SetWhole(cloned), true
 		}
 		index, ok := restream.FieldPathPartToIndex(field[0])
 		if !ok || index < 0 || index >= len(s.Items) {
@@ -459,7 +575,17 @@ func (s *TestArrayState) partialForFieldsItems(fields [][]any) (*restream.Partia
 		}
 		value := s.Items[index]
 		if len(field) == 1 {
-			ret.Set(index, value)
+			var cloned TestMapData
+			cloneInput0 := value
+			if cloneSource0, ok := any(&cloneInput0).(interface{ RestreamClone() *TestMapData }); ok {
+				cloned0 := cloneSource0.RestreamClone()
+				if cloned0 != nil {
+					cloned = *cloned0
+				}
+			} else {
+				cloned = cloneInput0
+			}
+			ret.Set(index, cloned)
 			included = true
 			continue
 		}
@@ -480,7 +606,28 @@ func (s *TestArrayState) partialForFieldsPtrItems(fields [][]any) (*restream.Par
 	included := false
 	for _, field := range fields {
 		if len(field) == 0 {
-			return ret.SetWhole(s.PtrItems), true
+			var cloned []*TestMapData
+			if s.PtrItems != nil {
+				cloned = make([]*TestMapData, len(s.PtrItems))
+				for cloneIdx0, cloneValue0 := range s.PtrItems {
+					var cloned0 *TestMapData
+					if cloneValue0 != nil {
+						var cloned1 TestMapData
+						cloneInput2 := (*cloneValue0)
+						if cloneSource2, ok := any(&cloneInput2).(interface{ RestreamClone() *TestMapData }); ok {
+							cloned2 := cloneSource2.RestreamClone()
+							if cloned2 != nil {
+								cloned1 = *cloned2
+							}
+						} else {
+							cloned1 = cloneInput2
+						}
+						cloned0 = &cloned1
+					}
+					cloned[cloneIdx0] = cloned0
+				}
+			}
+			return ret.SetWhole(cloned), true
 		}
 		index, ok := restream.FieldPathPartToIndex(field[0])
 		if !ok || index < 0 || index >= len(s.PtrItems) {
@@ -488,12 +635,27 @@ func (s *TestArrayState) partialForFieldsPtrItems(fields [][]any) (*restream.Par
 		}
 		value := s.PtrItems[index]
 		if len(field) == 1 {
-			ret.Set(index, value)
+			var cloned *TestMapData
+			if value != nil {
+				var cloned0 TestMapData
+				cloneInput1 := (*value)
+				if cloneSource1, ok := any(&cloneInput1).(interface{ RestreamClone() *TestMapData }); ok {
+					cloned1 := cloneSource1.RestreamClone()
+					if cloned1 != nil {
+						cloned0 = *cloned1
+					}
+				} else {
+					cloned0 = cloneInput1
+				}
+				cloned = &cloned0
+			}
+			ret.Set(index, cloned)
 			included = true
 			continue
 		}
 		if value == nil {
-			ret.Set(index, value)
+			var cloned *TestMapData
+			ret.Set(index, cloned)
 			included = true
 			continue
 		}
@@ -608,6 +770,33 @@ func (s *TestB) Deserialize(r *binarystreams.Reader, _ *restream.VarInfoStruct) 
 	return restream.DeserializeFielded(ri, TestBFieldInfo, TestBFieldMap, fieldPtrs)
 }
 
+// RestreamClone returns a deep copy of this TestB.
+func (s *TestB) RestreamClone() *TestB {
+	if s == nil {
+		return nil
+	}
+	ret := &TestB{}
+	cloneInput1 := s.A
+	if cloneSource1, ok := any(&cloneInput1).(interface{ RestreamClone() *TestC }); ok {
+		cloned1 := cloneSource1.RestreamClone()
+		if cloned1 != nil {
+			ret.A = *cloned1
+		}
+	} else {
+		ret.A = cloneInput1
+	}
+	cloneInput2 := s.B
+	if cloneSource2, ok := any(&cloneInput2).(interface{ RestreamClone() *TestC }); ok {
+		cloned2 := cloneSource2.RestreamClone()
+		if cloned2 != nil {
+			ret.B = *cloned2
+		}
+	} else {
+		ret.B = cloneInput2
+	}
+	return ret
+}
+
 // TestBPartial is a partial struct for TestB
 type TestBPartial struct {
 	A *restream.PartialValue[TestC, *TestCPartial]
@@ -656,7 +845,7 @@ func (s *TestBPartial) ApplyTo(por any) [][]any {
 			ret = append(ret, append(append([]any{}, "B"), f...))
 		}
 	}
-	return restream.ReduceFieldPaths(ret)
+	return ret
 }
 
 // FilterToFields returns a new partial containing only changes matching the requested field paths
@@ -693,7 +882,6 @@ func (s *TestBPartial) FilterToFields(fields [][]any) (restream.Partial, bool) {
 
 // PartialForFields returns a snapshot partial containing the requested field paths
 func (s *TestB) PartialForFields(fields [][]any) (restream.Partial, bool) {
-	fields = restream.ReduceFieldPaths(fields)
 	ret := &TestBPartial{}
 	included := false
 	if partial, ok := s.partialForFieldsA(restream.ChildFieldsForField(fields, "A")); ok {
@@ -715,7 +903,17 @@ func (s *TestB) partialForFieldsA(fields [][]any) (*restream.PartialValue[TestC,
 	included := false
 	for _, field := range fields {
 		if len(field) == 0 {
-			return ret.SetWhole(restream.Ptr(s.A)), true
+			var cloned TestC
+			cloneInput0 := s.A
+			if cloneSource0, ok := any(&cloneInput0).(interface{ RestreamClone() *TestC }); ok {
+				cloned0 := cloneSource0.RestreamClone()
+				if cloned0 != nil {
+					cloned = *cloned0
+				}
+			} else {
+				cloned = cloneInput0
+			}
+			return ret.SetWhole(restream.Ptr(cloned)), true
 		}
 		partial, ok := (&s.A).PartialForFields([][]any{field})
 		if ok {
@@ -734,7 +932,17 @@ func (s *TestB) partialForFieldsB(fields [][]any) (*restream.PartialValue[TestC,
 	included := false
 	for _, field := range fields {
 		if len(field) == 0 {
-			return ret.SetWhole(restream.Ptr(s.B)), true
+			var cloned TestC
+			cloneInput0 := s.B
+			if cloneSource0, ok := any(&cloneInput0).(interface{ RestreamClone() *TestC }); ok {
+				cloned0 := cloneSource0.RestreamClone()
+				if cloned0 != nil {
+					cloned = *cloned0
+				}
+			} else {
+				cloned = cloneInput0
+			}
+			return ret.SetWhole(restream.Ptr(cloned)), true
 		}
 		partial, ok := (&s.B).PartialForFields([][]any{field})
 		if ok {
@@ -841,6 +1049,17 @@ func (s *TestC) Deserialize(r *binarystreams.Reader, _ *restream.VarInfoStruct) 
 	return restream.DeserializeFielded(ri, TestCFieldInfo, TestCFieldMap, fieldPtrs)
 }
 
+// RestreamClone returns a deep copy of this TestC.
+func (s *TestC) RestreamClone() *TestC {
+	if s == nil {
+		return nil
+	}
+	ret := &TestC{}
+	ret.A = s.A
+	ret.B = s.B
+	return ret
+}
+
 // TestCPartial is a partial struct for TestC
 type TestCPartial struct {
 	A *int
@@ -877,7 +1096,7 @@ func (s *TestCPartial) ApplyTo(por any) [][]any {
 		po.B = *s.B
 		ret = append(ret, []any{"B"})
 	}
-	return restream.ReduceFieldPaths(ret)
+	return ret
 }
 
 // FilterToFields returns a new partial containing only changes matching the requested field paths
@@ -908,7 +1127,6 @@ func (s *TestCPartial) FilterToFields(fields [][]any) (restream.Partial, bool) {
 
 // PartialForFields returns a snapshot partial containing the requested field paths
 func (s *TestC) PartialForFields(fields [][]any) (restream.Partial, bool) {
-	fields = restream.ReduceFieldPaths(fields)
 	ret := &TestCPartial{}
 	included := false
 	if partial, ok := s.partialForFieldsA(restream.ChildFieldsForField(fields, "A")); ok {
@@ -928,7 +1146,8 @@ func (s *TestC) partialForFieldsA(fields [][]any) (*int, bool) {
 	}
 	for _, field := range fields {
 		if len(field) == 0 {
-			return restream.Ptr(s.A), true
+			cloned := s.A
+			return restream.Ptr(cloned), true
 		}
 	}
 	return nil, false
@@ -940,7 +1159,8 @@ func (s *TestC) partialForFieldsB(fields [][]any) (*int, bool) {
 	}
 	for _, field := range fields {
 		if len(field) == 0 {
-			return restream.Ptr(s.B), true
+			cloned := s.B
+			return restream.Ptr(cloned), true
 		}
 	}
 	return nil, false
@@ -1042,6 +1262,20 @@ func (s *TestMapData) Deserialize(r *binarystreams.Reader, _ *restream.VarInfoSt
 	return restream.DeserializeFielded(ri, TestMapDataFieldInfo, TestMapDataFieldMap, fieldPtrs)
 }
 
+// RestreamClone returns a deep copy of this TestMapData.
+func (s *TestMapData) RestreamClone() *TestMapData {
+	if s == nil {
+		return nil
+	}
+	ret := &TestMapData{}
+	ret.Number = s.Number
+	if s.Data != nil {
+		ret.Data = make([]byte, len(s.Data))
+		copy(ret.Data, s.Data)
+	}
+	return ret
+}
+
 // TestMapDataPartial is a partial struct for TestMapData
 type TestMapDataPartial struct {
 	Number *uint
@@ -1084,7 +1318,7 @@ func (s *TestMapDataPartial) ApplyTo(por any) [][]any {
 			ret = append(ret, append(append([]any{}, "Data"), f...))
 		}
 	}
-	return restream.ReduceFieldPaths(ret)
+	return ret
 }
 
 // FilterToFields returns a new partial containing only changes matching the requested field paths
@@ -1118,7 +1352,6 @@ func (s *TestMapDataPartial) FilterToFields(fields [][]any) (restream.Partial, b
 
 // PartialForFields returns a snapshot partial containing the requested field paths
 func (s *TestMapData) PartialForFields(fields [][]any) (restream.Partial, bool) {
-	fields = restream.ReduceFieldPaths(fields)
 	ret := &TestMapDataPartial{}
 	included := false
 	if partial, ok := s.partialForFieldsNumber(restream.ChildFieldsForField(fields, "Number")); ok {
@@ -1138,7 +1371,8 @@ func (s *TestMapData) partialForFieldsNumber(fields [][]any) (*uint, bool) {
 	}
 	for _, field := range fields {
 		if len(field) == 0 {
-			return restream.Ptr(s.Number), true
+			cloned := s.Number
+			return restream.Ptr(cloned), true
 		}
 	}
 	return nil, false
@@ -1152,7 +1386,12 @@ func (s *TestMapData) partialForFieldsData(fields [][]any) (*restream.PartialArr
 	included := false
 	for _, field := range fields {
 		if len(field) == 0 {
-			return ret.SetWhole(s.Data), true
+			var cloned []byte
+			if s.Data != nil {
+				cloned = make([]byte, len(s.Data))
+				copy(cloned, s.Data)
+			}
+			return ret.SetWhole(cloned), true
 		}
 		index, ok := restream.FieldPathPartToIndex(field[0])
 		if !ok || index < 0 || index >= len(s.Data) {
@@ -1261,6 +1500,20 @@ func (s *TestPrimitiveOptionalState) Deserialize(r *binarystreams.Reader, _ *res
 	return restream.DeserializeFielded(ri, TestPrimitiveOptionalStateFieldInfo, TestPrimitiveOptionalStateFieldMap, fieldPtrs)
 }
 
+// RestreamClone returns a deep copy of this TestPrimitiveOptionalState.
+func (s *TestPrimitiveOptionalState) RestreamClone() *TestPrimitiveOptionalState {
+	if s == nil {
+		return nil
+	}
+	ret := &TestPrimitiveOptionalState{}
+	ret.Primitive = s.Primitive
+	if s.Optional != nil {
+		cloned2 := (*s.Optional)
+		ret.Optional = &cloned2
+	}
+	return ret
+}
+
 // TestPrimitiveOptionalStatePartial is a partial struct for TestPrimitiveOptionalState
 type TestPrimitiveOptionalStatePartial struct {
 	Primitive *uint32
@@ -1297,7 +1550,7 @@ func (s *TestPrimitiveOptionalStatePartial) ApplyTo(por any) [][]any {
 		po.Optional = *s.Optional
 		ret = append(ret, []any{"Optional"})
 	}
-	return restream.ReduceFieldPaths(ret)
+	return ret
 }
 
 // FilterToFields returns a new partial containing only changes matching the requested field paths
@@ -1328,7 +1581,6 @@ func (s *TestPrimitiveOptionalStatePartial) FilterToFields(fields [][]any) (rest
 
 // PartialForFields returns a snapshot partial containing the requested field paths
 func (s *TestPrimitiveOptionalState) PartialForFields(fields [][]any) (restream.Partial, bool) {
-	fields = restream.ReduceFieldPaths(fields)
 	ret := &TestPrimitiveOptionalStatePartial{}
 	included := false
 	if partial, ok := s.partialForFieldsPrimitive(restream.ChildFieldsForField(fields, "Primitive")); ok {
@@ -1348,7 +1600,8 @@ func (s *TestPrimitiveOptionalState) partialForFieldsPrimitive(fields [][]any) (
 	}
 	for _, field := range fields {
 		if len(field) == 0 {
-			return restream.Ptr(s.Primitive), true
+			cloned := s.Primitive
+			return restream.Ptr(cloned), true
 		}
 	}
 	return nil, false
@@ -1360,7 +1613,12 @@ func (s *TestPrimitiveOptionalState) partialForFieldsOptional(fields [][]any) (*
 	}
 	for _, field := range fields {
 		if len(field) == 0 {
-			return restream.Ptr(s.Optional), true
+			var cloned *uint32
+			if s.Optional != nil {
+				cloned0 := (*s.Optional)
+				cloned = &cloned0
+			}
+			return restream.Ptr(cloned), true
 		}
 	}
 	return nil, false
@@ -1474,6 +1732,58 @@ func (s *TestState) Deserialize(r *binarystreams.Reader, _ *restream.VarInfoStru
 	return restream.DeserializeFielded(ri, TestStateFieldInfo, TestStateFieldMap, fieldPtrs)
 }
 
+// RestreamClone returns a deep copy of this TestState.
+func (s *TestState) RestreamClone() *TestState {
+	if s == nil {
+		return nil
+	}
+	ret := &TestState{}
+	if s.MapPtrTest != nil {
+		ret.MapPtrTest = make(map[uint8]*TestMapData, len(s.MapPtrTest))
+		for cloneKey1, cloneValue1 := range s.MapPtrTest {
+			var cloned1 *TestMapData
+			if cloneValue1 != nil {
+				var cloned2 TestMapData
+				cloneInput3 := (*cloneValue1)
+				if cloneSource3, ok := any(&cloneInput3).(interface{ RestreamClone() *TestMapData }); ok {
+					cloned3 := cloneSource3.RestreamClone()
+					if cloned3 != nil {
+						cloned2 = *cloned3
+					}
+				} else {
+					cloned2 = cloneInput3
+				}
+				cloned1 = &cloned2
+			}
+			ret.MapPtrTest[cloneKey1] = cloned1
+		}
+	}
+	ret.BaseField = s.BaseField
+	cloneInput3 := s.BaseStruct
+	if cloneSource3, ok := any(&cloneInput3).(interface{ RestreamClone() *TestMapData }); ok {
+		cloned3 := cloneSource3.RestreamClone()
+		if cloned3 != nil {
+			ret.BaseStruct = *cloned3
+		}
+	} else {
+		ret.BaseStruct = cloneInput3
+	}
+	if s.BaseStructPtr != nil {
+		var cloned4 TestMapData
+		cloneInput5 := (*s.BaseStructPtr)
+		if cloneSource5, ok := any(&cloneInput5).(interface{ RestreamClone() *TestMapData }); ok {
+			cloned5 := cloneSource5.RestreamClone()
+			if cloned5 != nil {
+				cloned4 = *cloned5
+			}
+		} else {
+			cloned4 = cloneInput5
+		}
+		ret.BaseStructPtr = &cloned4
+	}
+	return ret
+}
+
 // TestStatePartial is a partial struct for TestState
 type TestStatePartial struct {
 	MapPtrTest    *restream.PartialModMap[uint8, *TestMapData, *TestMapDataPartial]
@@ -1544,7 +1854,7 @@ func (s *TestStatePartial) ApplyTo(por any) [][]any {
 			ret = append(ret, append(append([]any{}, "BaseStructPtr"), f...))
 		}
 	}
-	return restream.ReduceFieldPaths(ret)
+	return ret
 }
 
 // FilterToFields returns a new partial containing only changes matching the requested field paths
@@ -1598,7 +1908,6 @@ func (s *TestStatePartial) FilterToFields(fields [][]any) (restream.Partial, boo
 
 // PartialForFields returns a snapshot partial containing the requested field paths
 func (s *TestState) PartialForFields(fields [][]any) (restream.Partial, bool) {
-	fields = restream.ReduceFieldPaths(fields)
 	ret := &TestStatePartial{}
 	included := false
 	if partial, ok := s.partialForFieldsMapPtrTest(restream.ChildFieldsForField(fields, "MapPtrTest")); ok {
@@ -1628,7 +1937,28 @@ func (s *TestState) partialForFieldsMapPtrTest(fields [][]any) (*restream.Partia
 	included := false
 	for _, field := range fields {
 		if len(field) == 0 {
-			return ret.SetWhole(s.MapPtrTest), true
+			var cloned map[uint8]*TestMapData
+			if s.MapPtrTest != nil {
+				cloned = make(map[uint8]*TestMapData, len(s.MapPtrTest))
+				for cloneKey0, cloneValue0 := range s.MapPtrTest {
+					var cloned0 *TestMapData
+					if cloneValue0 != nil {
+						var cloned1 TestMapData
+						cloneInput2 := (*cloneValue0)
+						if cloneSource2, ok := any(&cloneInput2).(interface{ RestreamClone() *TestMapData }); ok {
+							cloned2 := cloneSource2.RestreamClone()
+							if cloned2 != nil {
+								cloned1 = *cloned2
+							}
+						} else {
+							cloned1 = cloneInput2
+						}
+						cloned0 = &cloned1
+					}
+					cloned[cloneKey0] = cloned0
+				}
+			}
+			return ret.SetWhole(cloned), true
 		}
 		key, ok := restream.FieldPathPartToKey[uint8](field[0])
 		if !ok {
@@ -1641,12 +1971,27 @@ func (s *TestState) partialForFieldsMapPtrTest(fields [][]any) (*restream.Partia
 			continue
 		}
 		if len(field) == 1 {
-			ret.Set(key, value)
+			var cloned *TestMapData
+			if value != nil {
+				var cloned0 TestMapData
+				cloneInput1 := (*value)
+				if cloneSource1, ok := any(&cloneInput1).(interface{ RestreamClone() *TestMapData }); ok {
+					cloned1 := cloneSource1.RestreamClone()
+					if cloned1 != nil {
+						cloned0 = *cloned1
+					}
+				} else {
+					cloned0 = cloneInput1
+				}
+				cloned = &cloned0
+			}
+			ret.Set(key, cloned)
 			included = true
 			continue
 		}
 		if value == nil {
-			ret.Set(key, value)
+			var cloned *TestMapData
+			ret.Set(key, cloned)
 			included = true
 			continue
 		}
@@ -1665,7 +2010,8 @@ func (s *TestState) partialForFieldsBaseField(fields [][]any) (*string, bool) {
 	}
 	for _, field := range fields {
 		if len(field) == 0 {
-			return restream.Ptr(s.BaseField), true
+			cloned := s.BaseField
+			return restream.Ptr(cloned), true
 		}
 	}
 	return nil, false
@@ -1679,7 +2025,17 @@ func (s *TestState) partialForFieldsBaseStruct(fields [][]any) (*restream.Partia
 	included := false
 	for _, field := range fields {
 		if len(field) == 0 {
-			return ret.SetWhole(restream.Ptr(s.BaseStruct)), true
+			var cloned TestMapData
+			cloneInput0 := s.BaseStruct
+			if cloneSource0, ok := any(&cloneInput0).(interface{ RestreamClone() *TestMapData }); ok {
+				cloned0 := cloneSource0.RestreamClone()
+				if cloned0 != nil {
+					cloned = *cloned0
+				}
+			} else {
+				cloned = cloneInput0
+			}
+			return ret.SetWhole(restream.Ptr(cloned)), true
 		}
 		partial, ok := (&s.BaseStruct).PartialForFields([][]any{field})
 		if ok {
@@ -1698,10 +2054,25 @@ func (s *TestState) partialForFieldsBaseStructPtr(fields [][]any) (*restream.Par
 	included := false
 	for _, field := range fields {
 		if len(field) == 0 {
-			return ret.SetWhole(restream.Ptr(s.BaseStructPtr)), true
+			var cloned *TestMapData
+			if s.BaseStructPtr != nil {
+				var cloned0 TestMapData
+				cloneInput1 := (*s.BaseStructPtr)
+				if cloneSource1, ok := any(&cloneInput1).(interface{ RestreamClone() *TestMapData }); ok {
+					cloned1 := cloneSource1.RestreamClone()
+					if cloned1 != nil {
+						cloned0 = *cloned1
+					}
+				} else {
+					cloned0 = cloneInput1
+				}
+				cloned = &cloned0
+			}
+			return ret.SetWhole(restream.Ptr(cloned)), true
 		}
 		if s.BaseStructPtr == nil {
-			ret.SetWhole(restream.Ptr(s.BaseStructPtr))
+			var cloned *TestMapData
+			ret.SetWhole(restream.Ptr(cloned))
 			included = true
 			continue
 		}

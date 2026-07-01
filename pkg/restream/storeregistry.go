@@ -13,8 +13,9 @@ import (
 // connected web clients, since it all happens by strings over the wire -- so it needs to be able to look up a
 // Store/StoreData by name.
 type StoreRegistry struct {
-	storeMap          map[string]*StoreInfo
-	subscriptionMutex sync.Mutex
+	storeMap                  map[string]*StoreInfo
+	subscriptionMutex         sync.Mutex
+	subscriptionCallbackMutex sync.Mutex
 
 	partialApplyCallbacks subscribableevent.Event[PartialCallbackFunc]
 }
@@ -57,6 +58,14 @@ func (e *InsufficientStoreAccessError) Unwrap() error {
 
 type subscriptionKeyStoreData interface {
 	GetSerializedPartialForSubscriptionKey(key string) ([]byte, bool, error)
+}
+
+type fullStateSnapshotStoreData interface {
+	GetFullStateSnapshot() (Serializable, error)
+}
+
+type subscriptionKeySnapshotStoreData interface {
+	GetPartialSnapshotForSubscriptionKey(key string) (Serializable, bool, error)
 }
 
 // NewStoreRegistry brings up a StoreRegistry, holding an explicit list of Stores/StoreDatas (this list may not grow
@@ -125,32 +134,65 @@ func (s *StoreRegistry) IsStoreValid(storeName string) bool {
 	return has
 }
 
-// GetSerializedFullState returns a pre-serialized full state object for a store.
-func (s *StoreRegistry) GetSerializedFullState(storeName string, accessLevel AccessLevel) ([]byte, error) {
+// GetFullStateSnapshot returns a serializable full-state snapshot for a store.
+func (s *StoreRegistry) GetFullStateSnapshot(storeName string, accessLevel AccessLevel) (Serializable, error) {
 	si, has := s.storeMap[storeName]
 	if !has {
-		return nil, fmt.Errorf("no store found (%s) in GetSerializedFullState", storeName)
+		return nil, fmt.Errorf("no store found (%s) in GetFullStateSnapshot", storeName)
 	}
 	if err := requireStoreAccess(si, accessLevel); err != nil {
 		return nil, err
 	}
 
-	return si.StoreData.GetSerializedFullState()
+	if provider, ok := si.StoreData.(fullStateSnapshotStoreData); ok {
+		return provider.GetFullStateSnapshot()
+	}
+	stateBytes, err := si.StoreData.GetSerializedFullState()
+	if err != nil {
+		return nil, err
+	}
+	return RawSerializable(stateBytes), nil
 }
 
-// GetSerializedPartialForSubscriptionKey returns an initial keyed partial for a store, when the store supports it.
-func (s *StoreRegistry) GetSerializedPartialForSubscriptionKey(storeName string, key string, accessLevel AccessLevel) ([]byte, bool, error) {
+// GetSerializedFullState returns a pre-serialized full state object for a store.
+func (s *StoreRegistry) GetSerializedFullState(storeName string, accessLevel AccessLevel) ([]byte, error) {
+	snapshot, err := s.GetFullStateSnapshot(storeName, accessLevel)
+	if err != nil {
+		return nil, err
+	}
+	return SerializeToBytes(snapshot, nil)
+}
+
+// GetPartialSnapshotForSubscriptionKey returns an initial keyed partial snapshot for a store, when the store supports it.
+func (s *StoreRegistry) GetPartialSnapshotForSubscriptionKey(storeName string, key string, accessLevel AccessLevel) (Serializable, bool, error) {
 	si, has := s.storeMap[storeName]
 	if !has {
-		return nil, false, fmt.Errorf("no store found (%s) in GetSerializedPartialForSubscriptionKey", storeName)
+		return nil, false, fmt.Errorf("no store found (%s) in GetPartialSnapshotForSubscriptionKey", storeName)
 	}
 	if err := requireStoreAccess(si, accessLevel); err != nil {
 		return nil, false, err
 	}
+	if provider, ok := si.StoreData.(subscriptionKeySnapshotStoreData); ok {
+		return provider.GetPartialSnapshotForSubscriptionKey(key)
+	}
 	if provider, ok := si.StoreData.(subscriptionKeyStoreData); ok {
-		return provider.GetSerializedPartialForSubscriptionKey(key)
+		partialBytes, exists, err := provider.GetSerializedPartialForSubscriptionKey(key)
+		if err != nil || !exists {
+			return nil, exists, err
+		}
+		return RawSerializable(partialBytes), true, nil
 	}
 	return nil, false, nil
+}
+
+// GetSerializedPartialForSubscriptionKey returns an initial keyed partial for a store, when the store supports it.
+func (s *StoreRegistry) GetSerializedPartialForSubscriptionKey(storeName string, key string, accessLevel AccessLevel) ([]byte, bool, error) {
+	snapshot, exists, err := s.GetPartialSnapshotForSubscriptionKey(storeName, key, accessLevel)
+	if err != nil || !exists {
+		return nil, exists, err
+	}
+	ret, err := SerializeToBytes(snapshot, nil)
+	return ret, true, err
 }
 
 // ListeningToStore is a callback to indicate that someone has subscribed to the store
@@ -161,26 +203,41 @@ func (s *StoreRegistry) ListeningToStore(storeName string, accessLevel AccessLev
 // ListeningToStoreKey is a callback to indicate that someone has subscribed to a store key.
 func (s *StoreRegistry) ListeningToStoreKey(storeName string, key string, accessLevel AccessLevel) error {
 	s.subscriptionMutex.Lock()
-	defer s.subscriptionMutex.Unlock()
 
 	si, has := s.storeMap[storeName]
 	if !has {
+		s.subscriptionMutex.Unlock()
 		return fmt.Errorf("no store found (%s) in ListeningToStoreKey", storeName)
 	}
 	if err := requireStoreAccess(si, accessLevel); err != nil {
+		s.subscriptionMutex.Unlock()
 		return err
 	}
 
+	var keySubCallbacks KeySubscriptionAwareStore
+	var subAwareCallbacks SubscriptionAwareStore
 	si.ActiveSubCount++
 	if si.ActiveKeySubCount == nil {
 		si.ActiveKeySubCount = map[string]int{}
 	}
 	si.ActiveKeySubCount[key]++
 	if si.ActiveKeySubCount[key] == 1 && si.KeySubCallbacks != nil {
-		si.KeySubCallbacks.SubscriptionStartedForKey(key)
+		keySubCallbacks = si.KeySubCallbacks
 	}
 	if si.ActiveSubCount == 1 && si.SubAwareCallbacks != nil {
-		si.SubAwareCallbacks.SubscriptionStarted()
+		subAwareCallbacks = si.SubAwareCallbacks
+	}
+	s.subscriptionMutex.Unlock()
+
+	if keySubCallbacks != nil || subAwareCallbacks != nil {
+		s.subscriptionCallbackMutex.Lock()
+		defer s.subscriptionCallbackMutex.Unlock()
+		if keySubCallbacks != nil {
+			keySubCallbacks.SubscriptionStartedForKey(key)
+		}
+		if subAwareCallbacks != nil {
+			subAwareCallbacks.SubscriptionStarted()
+		}
 	}
 	return nil
 }
@@ -193,29 +250,46 @@ func (s *StoreRegistry) StopListeningToStore(storeName string) error {
 // StopListeningToStoreKey is a callback to indicate that someone has unsubscribed from a store key.
 func (s *StoreRegistry) StopListeningToStoreKey(storeName string, key string) error {
 	s.subscriptionMutex.Lock()
-	defer s.subscriptionMutex.Unlock()
 
 	si, has := s.storeMap[storeName]
 	if !has {
+		s.subscriptionMutex.Unlock()
 		return fmt.Errorf("no store found (%s) in StopListeningToStoreKey", storeName)
 	}
 
 	if si.ActiveSubCount == 0 {
+		s.subscriptionMutex.Unlock()
 		return fmt.Errorf("active sub count 0 in StopListeningToStoreKey for %s", storeName)
 	}
 	if si.ActiveKeySubCount[key] == 0 {
+		s.subscriptionMutex.Unlock()
 		return fmt.Errorf("active key sub count 0 in StopListeningToStoreKey for %s/%s", storeName, key)
 	}
+
+	var keySubCallbacks KeySubscriptionAwareStore
+	var subAwareCallbacks SubscriptionAwareStore
 	si.ActiveSubCount--
 	si.ActiveKeySubCount[key]--
 	if si.ActiveKeySubCount[key] == 0 {
 		delete(si.ActiveKeySubCount, key)
 		if si.KeySubCallbacks != nil {
-			si.KeySubCallbacks.SubscriptionEndedForKey(key)
+			keySubCallbacks = si.KeySubCallbacks
 		}
 	}
 	if si.ActiveSubCount == 0 && si.SubAwareCallbacks != nil {
-		si.SubAwareCallbacks.SubscriptionEnded()
+		subAwareCallbacks = si.SubAwareCallbacks
+	}
+	s.subscriptionMutex.Unlock()
+
+	if keySubCallbacks != nil || subAwareCallbacks != nil {
+		s.subscriptionCallbackMutex.Lock()
+		defer s.subscriptionCallbackMutex.Unlock()
+		if keySubCallbacks != nil {
+			keySubCallbacks.SubscriptionEndedForKey(key)
+		}
+		if subAwareCallbacks != nil {
+			subAwareCallbacks.SubscriptionEnded()
+		}
 	}
 	return nil
 }

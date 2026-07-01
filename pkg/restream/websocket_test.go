@@ -3,10 +3,20 @@ package restream
 import (
 	"io"
 	"testing"
+	"time"
 
 	"github.com/boatkit-io/restream/pkg/binarystreams"
 	"github.com/sirupsen/logrus"
 )
+
+func resolveEmitMessage(t *testing.T, msg emitMessage) emitMessage {
+	t.Helper()
+	resolved, err := msg.resolve()
+	if err != nil {
+		t.Fatalf("resolve emit message failed: %v", err)
+	}
+	return resolved
+}
 
 type viewerSocketTestState struct {
 	Values map[string]int
@@ -39,6 +49,22 @@ var viewerSocketTestStateFieldInfo = []FieldInfo{
 var viewerSocketTestStateFieldMap = map[byte]*FieldInfo{
 	1: &viewerSocketTestStateFieldInfo[0],
 	2: &viewerSocketTestStateFieldInfo[1],
+}
+
+func (s *viewerSocketTestState) RestreamClone() *viewerSocketTestState {
+	if s == nil {
+		return nil
+	}
+	clone := &viewerSocketTestState{
+		Other: s.Other,
+	}
+	if s.Values != nil {
+		clone.Values = make(map[string]int, len(s.Values))
+		for key, value := range s.Values {
+			clone.Values[key] = value
+		}
+	}
+	return clone
 }
 
 func (s *viewerSocketTestState) Serialize(w *binarystreams.Writer, _ *VarInfoStruct) error {
@@ -344,7 +370,7 @@ func TestViewerSocketKeyedCatchupUsesRelayStorePartial(t *testing.T) {
 		Key:       "values%&" + sourceKey,
 	})
 
-	emitted := <-socket.emitQueue
+	emitted := resolveEmitMessage(t, <-socket.emitQueue)
 	if emitted.Name != SocketEventNameStoreUpdate {
 		t.Fatalf("expected %s event, got %s", SocketEventNameStoreUpdate, emitted.Name)
 	}
@@ -421,7 +447,7 @@ func TestViewerSocketEmitsEventDispatcherMessages(t *testing.T) {
 
 	socket.EventCallback("call", []byte{1, 2, 3})
 
-	emitted := <-socket.emitQueue
+	emitted := resolveEmitMessage(t, <-socket.emitQueue)
 	if emitted.Name != SocketEventNameEvent {
 		t.Fatalf("expected %s event, got %s", SocketEventNameEvent, emitted.Name)
 	}
@@ -437,7 +463,92 @@ func TestViewerSocketEmitsEventDispatcherMessages(t *testing.T) {
 	}
 }
 
+func TestViewerSocketEmitMessageDoesNotBlockWhenQueueIsFull(t *testing.T) {
+	socket := &socketTracker{
+		emitQueue: make(chan emitMessage, 1),
+	}
+	socket.emitQueue <- emitMessage{Name: "existing"}
+
+	done := make(chan struct{})
+	go func() {
+		socket.emitMessage(SocketEventNameEvent, EventMessage{})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("emitMessage blocked on a full emit queue")
+	}
+}
+
+func TestViewerSocketPartialCallbackDefersSerializationUntilEmitMessageResolve(t *testing.T) {
+	serializeCount := 0
+	socket := &socketTracker{
+		emitQueue: make(chan emitMessage, 1),
+		storeSubscriptions: map[string]map[string]int{
+			viewerSocketTestStoreName: {
+				"": 1,
+			},
+		},
+	}
+
+	socket.PartialCallback(
+		viewerSocketTestStoreName,
+		[][]any{{"Other"}},
+		&viewerSocketSerializeCountingPartial{
+			onSerialize: func() {
+				serializeCount++
+			},
+		},
+	)
+
+	if serializeCount != 0 {
+		t.Fatalf("PartialCallback serialized before enqueue: %d", serializeCount)
+	}
+	emitted := <-socket.emitQueue
+	if serializeCount != 0 {
+		t.Fatalf("queued emit serialized before resolve: %d", serializeCount)
+	}
+	resolved := resolveEmitMessage(t, emitted)
+	if serializeCount != 1 {
+		t.Fatalf("emit resolve serialized %d times, want 1", serializeCount)
+	}
+	if resolved.Name != SocketEventNameStoreUpdate {
+		t.Fatalf("expected %s event, got %s", SocketEventNameStoreUpdate, resolved.Name)
+	}
+	update, ok := resolved.Message.(StoreUpdatePartialMessage)
+	if !ok {
+		t.Fatalf("expected partial store update, got %T", resolved.Message)
+	}
+	if update.Kind != StoreUpdatePartial || update.StoreName != viewerSocketTestStoreName {
+		t.Fatalf("expected partial update for %s, got %#v", viewerSocketTestStoreName, update.StoreUpdateMessage)
+	}
+}
+
 const viewerSocketTestStoreName = "test-store"
+
+type viewerSocketSerializeCountingPartial struct {
+	onSerialize func()
+}
+
+func (p *viewerSocketSerializeCountingPartial) Serialize(*binarystreams.Writer, *VarInfoStruct) error {
+	if p.onSerialize != nil {
+		p.onSerialize()
+	}
+	return nil
+}
+
+func (*viewerSocketSerializeCountingPartial) Deserialize(*binarystreams.Reader, *VarInfoStruct) error {
+	return nil
+}
+
+func (*viewerSocketSerializeCountingPartial) MergeOntoPartial(any) {
+}
+
+func (*viewerSocketSerializeCountingPartial) ApplyTo(any) [][]any {
+	return [][]any{{"Other"}}
+}
 
 func TestViewerSocketDisconnectCleanupIsIdempotent(_ *testing.T) {
 	socket := &socketTracker{

@@ -30,12 +30,9 @@ func NewBoardStore(rpcd *restream.RPCDispatcher) (*BoardStore, error) {
 		partial := &BoardStoreStatePartial{
 			Board: restream.NewPartialArray[[]string](),
 		}
-		var newRow []string
-		var xTurn bool
-		s.storeData.ReadState(func(state *BoardStoreState) {
-			newRow = append([]string{}, state.Board[y]...)
-			xTurn = state.XTurn
-		})
+		state := s.storeData.ReadState()
+		newRow := append([]string{}, state.Board[y]...)
+		xTurn := state.XTurn
 		if newRow[x] != "" {
 			return errors.New("cell already occupied")
 		}

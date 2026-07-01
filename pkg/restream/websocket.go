@@ -110,6 +110,14 @@ const (
 type emitMessage struct {
 	Name    string
 	Message any
+	Build   func() (emitMessage, error)
+}
+
+func (m emitMessage) resolve() (emitMessage, error) {
+	if m.Build == nil {
+		return m, nil
+	}
+	return m.Build()
 }
 
 type AccessLookupFunc func() (AccessLevel, error)
@@ -234,9 +242,19 @@ func (st *socketTracker) handleEmitQueue() {
 			if st.conn == nil {
 				return
 			}
-			err := st.conn.Emit(msg.Name, msg.Message)
+			msg, err := msg.resolve()
 			if err != nil {
-				st.log.Warnf("Error emitting message: %+v", err)
+				if st.log != nil {
+					st.log.Warnf("Error building emit message: %+v", err)
+				}
+				st.disconnect()
+				return
+			}
+			err = st.conn.Emit(msg.Name, msg.Message)
+			if err != nil {
+				if st.log != nil {
+					st.log.Warnf("Error emitting message: %+v", err)
+				}
 				st.disconnect()
 				return
 			}
@@ -246,13 +264,38 @@ func (st *socketTracker) handleEmitQueue() {
 
 // emitMessage adds a single message to emit to the emit queue
 func (st *socketTracker) emitMessage(name string, arg any) {
+	st.queueEmitMessage(emitMessage{Name: name, Message: arg})
+}
+
+func (st *socketTracker) emitDeferredMessage(name string, build func() (any, error)) {
+	st.queueEmitMessage(emitMessage{
+		Name: name,
+		Build: func() (emitMessage, error) {
+			msg, err := build()
+			if err != nil {
+				return emitMessage{}, err
+			}
+			return emitMessage{Name: name, Message: msg}, nil
+		},
+	})
+}
+
+func (st *socketTracker) queueEmitMessage(msg emitMessage) {
 	st.emitQueueMutex.RLock()
 	if st.emitQueue == nil {
 		st.emitQueueMutex.RUnlock()
 		return
 	}
-	st.emitQueue <- emitMessage{Name: name, Message: arg}
-	st.emitQueueMutex.RUnlock()
+	select {
+	case st.emitQueue <- msg:
+		st.emitQueueMutex.RUnlock()
+	default:
+		st.emitQueueMutex.RUnlock()
+		if st.log != nil {
+			st.log.Warnf("Disconnecting websocket client with full emit queue while sending %s", msg.Name)
+		}
+		st.disconnect()
+	}
 }
 
 func (st *socketTracker) disconnect() {
@@ -385,44 +428,59 @@ func (st *socketTracker) onStoreSubscription(params ...any) {
 
 func (st *socketTracker) emitSubscriptionCatchup(storeName string, key string, accessLevel AccessLevel) error {
 	if key != "" {
-		pBytes, exists, err := st.sr.GetSerializedPartialForSubscriptionKey(storeName, key, accessLevel)
+		partialSnapshot, exists, err := st.sr.GetPartialSnapshotForSubscriptionKey(storeName, key, accessLevel)
 		if err != nil {
 			return err
 		}
 		if exists {
-			st.emitPartialStoreUpdate(storeName, pBytes)
+			st.emitPartialStoreUpdateSnapshot(storeName, partialSnapshot)
 			return nil
 		}
 	}
 
-	sBytes, err := st.sr.GetSerializedFullState(storeName, accessLevel)
+	stateSnapshot, err := st.sr.GetFullStateSnapshot(storeName, accessLevel)
 	if err != nil {
 		return err
 	}
 
-	m := StoreUpdateFullMessage{
-		StoreUpdateMessage: StoreUpdateMessage{
-			Time:      time.Now().UnixMilli(),
-			Kind:      StoreUpdateFull,
-			StoreName: storeName,
-		},
-		State: socketTypes.NewBytesBuffer(sBytes),
-	}
-	st.emitMessage(SocketEventNameStoreUpdate, m)
+	st.emitFullStoreUpdateSnapshot(storeName, stateSnapshot)
 	return nil
 }
 
-func (st *socketTracker) emitPartialStoreUpdate(storeName string, partialBytes []byte) {
-	m := StoreUpdatePartialMessage{
-		StoreUpdateMessage: StoreUpdateMessage{
-			Time:      time.Now().UnixMilli(),
-			Kind:      StoreUpdatePartial,
-			StoreName: storeName,
-		},
-		Partial: socketTypes.NewBytesBuffer(partialBytes),
+func (st *socketTracker) emitFullStoreUpdateSnapshot(storeName string, state Serializable) {
+	update := StoreUpdateMessage{
+		Time:      time.Now().UnixMilli(),
+		Kind:      StoreUpdateFull,
+		StoreName: storeName,
 	}
+	st.emitDeferredMessage(SocketEventNameStoreUpdate, func() (any, error) {
+		stateBytes, err := SerializeToBytes(state, nil)
+		if err != nil {
+			return nil, err
+		}
+		return StoreUpdateFullMessage{
+			StoreUpdateMessage: update,
+			State:              socketTypes.NewBytesBuffer(stateBytes),
+		}, nil
+	})
+}
 
-	st.emitMessage(SocketEventNameStoreUpdate, m)
+func (st *socketTracker) emitPartialStoreUpdateSnapshot(storeName string, partial Serializable) {
+	update := StoreUpdateMessage{
+		Time:      time.Now().UnixMilli(),
+		Kind:      StoreUpdatePartial,
+		StoreName: storeName,
+	}
+	st.emitDeferredMessage(SocketEventNameStoreUpdate, func() (any, error) {
+		partialBytes, err := SerializeToBytes(partial, nil)
+		if err != nil {
+			return nil, err
+		}
+		return StoreUpdatePartialMessage{
+			StoreUpdateMessage: update,
+			Partial:            socketTypes.NewBytesBuffer(partialBytes),
+		}, nil
+	})
 }
 
 // EventCallback is registered with the EventDispatcher to relay server-side events to the websocket client.
@@ -507,33 +565,20 @@ func (st *socketTracker) PartialCallback(storeName string, fields [][]any, parti
 		}
 	}
 
-	b, err := SerializeToBytes(filteredPartial, nil)
-	if err != nil {
-		st.log.Warnf("Error serializing store state: %+v", err)
-		st.disconnect()
-		return
-	}
-
-	st.emitPartialStoreUpdate(storeName, b)
+	st.emitPartialStoreUpdateSnapshot(storeName, filteredPartial)
 }
 
 func (st *socketTracker) partialForSubscriptions(storeName string, fields [][]any, partial Partial) (Partial, bool) {
 	st.subscriptionMutex.RLock()
 	keySubs, exists := st.storeSubscriptions[storeName]
 	hasWholeSub := exists && keySubs[""] > 0
-	matchingFields := [][]any{}
+	subscriptionKeys := []string{}
 	if exists && !hasWholeSub {
 		for key, subCount := range keySubs {
 			if key == "" || subCount == 0 {
 				continue
 			}
-			subscribedField := FieldPathFromSubscriptionKey(key)
-			for _, field := range fields {
-				if FieldPathAffectsSubscription(field, subscribedField) {
-					matchingFields = append(matchingFields, subscribedField)
-					break
-				}
-			}
+			subscriptionKeys = append(subscriptionKeys, key)
 		}
 	}
 	st.subscriptionMutex.RUnlock()
@@ -543,6 +588,16 @@ func (st *socketTracker) partialForSubscriptions(storeName string, fields [][]an
 		return nil, false
 	}
 	if !hasWholeSub {
+		matchingFields := [][]any{}
+		for _, key := range subscriptionKeys {
+			subscribedField := FieldPathFromSubscriptionKey(key)
+			for _, field := range fields {
+				if FieldPathAffectsSubscription(field, subscribedField) {
+					matchingFields = append(matchingFields, subscribedField)
+					break
+				}
+			}
+		}
 		if len(matchingFields) == 0 {
 			return nil, false
 		}

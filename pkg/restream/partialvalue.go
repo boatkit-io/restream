@@ -51,9 +51,7 @@ func (p *PartialValue[V, P]) ApplyTo(por any) [][]any {
 	}
 	if p.partial != nil {
 		reti := (*p.partial).ApplyTo(por)
-		if p.whole == nil {
-			ret = reti
-		}
+		ret = append(ret, reti...)
 	}
 	return ret
 }
