@@ -33,7 +33,7 @@ func DeserializeFielded(r *binarystreams.Reader, _ []FieldInfo, fieldMap map[byt
 			return err
 		}
 		if err := DeserializeValue(fieldPtrs[fi.FieldIdx], nr, fi.VarInfo); err != nil {
-			return err
+			return fmt.Errorf("deserialize field %q (fieldID=%d): %w", fi.Name, fieldID, err)
 		}
 	}
 	return nil

@@ -221,7 +221,7 @@ func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials C
 
 		packet, err := protocol.DecodePacket(message)
 		if err != nil {
-			return err
+			return fmt.Errorf("decode relay packet from server (%d bytes): %w", len(message), err)
 		}
 
 		switch packet := packet.(type) {
@@ -232,26 +232,30 @@ func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials C
 			s.startConn(conn)
 			s.onConnected(packet)
 			if err := s.sendFullStates(); err != nil {
-				return err
+				return fmt.Errorf("handle relay connected packet: send full states: %w", err)
 			}
 		case *protocol.RPCCallPacket:
 			if err := s.handleRPCCall(packet); err != nil {
-				return err
+				return fmt.Errorf("handle relay RPC call packet %q (%d bytes): %w",
+					packet.MethodName, len(packet.Request), err)
 			}
 		case *protocol.StoreSubscriptionPacket:
 			if err := s.handleStoreSubscription(packet); err != nil {
-				return err
+				return fmt.Errorf("handle relay store subscription packet action %d for store %q key %q: %w",
+					packet.Action, packet.StoreName, packet.Key, err)
 			}
 		case *protocol.CustomPacket:
 			if s.opts.Callbacks.OnCustomPacket != nil {
 				if err := s.opts.Callbacks.OnCustomPacket(packet); err != nil {
-					return err
+					return fmt.Errorf("handle relay custom packet %q (%d bytes): %w",
+						packet.Name, len(packet.Payload), err)
 				}
 			}
 		case *protocol.RawPacket:
 			if s.opts.Callbacks.OnRawPacket != nil {
 				if err := s.opts.Callbacks.OnRawPacket(packet); err != nil {
-					return err
+					return fmt.Errorf("handle relay raw packet kind %d (%d bytes): %w",
+						packet.PacketKind, len(packet.Payload), err)
 				}
 			}
 		default:

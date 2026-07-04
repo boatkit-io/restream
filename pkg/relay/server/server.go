@@ -159,7 +159,7 @@ func (s *Server) readPackets(c *Connection, device *Device) error {
 
 		packet, err := protocol.DecodePacket(message)
 		if err != nil {
-			return err
+			return fmt.Errorf("decode relay packet (%d bytes): %w", len(message), err)
 		}
 
 		switch packet := packet.(type) {
@@ -167,32 +167,37 @@ func (s *Server) readPackets(c *Connection, device *Device) error {
 			switch packet.Kind() {
 			case protocol.KindFullState:
 				if err := device.HandleFullState(c, packet.StoreName, packet.Data); err != nil {
-					return err
+					return fmt.Errorf("handle relay full state packet for store %q (%d bytes): %w",
+						packet.StoreName, len(packet.Data), err)
 				}
 			case protocol.KindPartialState:
 				if err := device.HandlePartialState(c, packet.StoreName, packet.Data); err != nil {
-					return err
+					return fmt.Errorf("handle relay partial state packet for store %q (%d bytes): %w",
+						packet.StoreName, len(packet.Data), err)
 				}
 			default:
 				return fmt.Errorf("unhandled store packet type %d", packet.Kind())
 			}
 		case *protocol.EventPacket:
 			if err := device.HandleEvent(c, packet.EventName, packet.Data); err != nil {
-				return err
+				return fmt.Errorf("handle relay event packet %q (%d bytes): %w", packet.EventName, len(packet.Data), err)
 			}
 		case *protocol.RPCCallPacket:
-			return fmt.Errorf("device sent RPCCall packet")
+			return fmt.Errorf("device sent unexpected relay RPC call packet %q (%d bytes)",
+				packet.MethodName, len(packet.Request))
 		case *protocol.RPCResponsePacket:
 			if err := device.HandleRPCResponse(c, packet.RPCID, packet.Response); err != nil {
-				return err
+				return fmt.Errorf("handle relay RPC response packet id %d (%d bytes): %w",
+					packet.RPCID, len(packet.Response), err)
 			}
 		case *protocol.CustomPacket:
 			if err := device.HandleCustomPacket(c, packet); err != nil {
-				return err
+				return fmt.Errorf("handle relay custom packet %q (%d bytes): %w", packet.Name, len(packet.Payload), err)
 			}
 		case *protocol.RawPacket:
 			if err := device.HandleRawPacket(c, packet); err != nil {
-				return err
+				return fmt.Errorf("handle relay raw packet kind %d (%d bytes): %w",
+					packet.PacketKind, len(packet.Payload), err)
 			}
 		default:
 			return fmt.Errorf("unhandled packet type %T", packet)

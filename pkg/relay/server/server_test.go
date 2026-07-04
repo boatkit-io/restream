@@ -178,6 +178,49 @@ func TestConnectionSendRPCWritesCallPacket(t *testing.T) {
 	}
 }
 
+func TestServerReadPacketsWrapsStorePacketError(t *testing.T) {
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	device := NewDevice("device-1", nil, DeviceManagerConfig{
+		FullStateHandler: func(*Device, *Connection, string, []byte) error {
+			return errors.New(`deserialize field "Enabled" (fieldID=4): unhandled deserialized bool val in DeserializeBool: 4`)
+		},
+	})
+	relayServer := &Server{}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- relayServer.readPackets(NewConnection(serverConn), device)
+	}()
+
+	fullStateBytes, err := protocol.EncodePacket(protocol.NewFullStatePacket("Security", []byte{3, 1, 1, 4}))
+	if err != nil {
+		t.Fatalf("Encode full state failed: %v", err)
+	}
+	if err := clientConn.WriteMessage(gws.BinaryMessage, fullStateBytes); err != nil {
+		t.Fatalf("Write full state failed: %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("readPackets error = nil, want packet context error")
+		}
+		for _, want := range []string{
+			`handle relay full state packet for store "Security"`,
+			"4 bytes",
+			"fieldID=4",
+			"DeserializeBool: 4",
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("readPackets error = %q, missing %q", err, want)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("readPackets did not return")
+	}
+}
+
 func TestConnectionSendStoreSubscriptionWritesPacket(t *testing.T) {
 	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
 	defer cleanup()

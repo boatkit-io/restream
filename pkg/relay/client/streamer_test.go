@@ -3,8 +3,11 @@ package client
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/boatkit-io/restream/pkg/binarystreams"
 	"github.com/boatkit-io/restream/pkg/relay/protocol"
@@ -74,6 +77,65 @@ func TestRunRequiresEndpoint(t *testing.T) {
 	err := s.Run(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "endpoint") {
 		t.Fatalf("Run error = %v, want endpoint error", err)
+	}
+}
+
+func TestHandleConnWrapsRelayRPCPacketError(t *testing.T) {
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	s := NewStreamer(nil, func(string, restream.AccessLevel, []byte) ([]byte, bool, error) {
+		return nil, true, errors.New(`deserialize field "Enabled" (fieldID=4): unhandled deserialized bool val in DeserializeBool: 4`)
+	}, nil, Config{})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.handleConn(context.Background(), clientConn, Credentials{
+			DeviceID: "device-1",
+			AuthType: "shared-key",
+			AuthData: []byte("secret"),
+		})
+	}()
+
+	if _, _, err := serverConn.ReadMessage(); err != nil {
+		t.Fatalf("Read hello failed: %v", err)
+	}
+	connectedBytes, err := protocol.EncodePacket(&protocol.ConnectedPacket{ProtocolVersion: protocol.CurrentVersion})
+	if err != nil {
+		t.Fatalf("Encode connected failed: %v", err)
+	}
+	if err := serverConn.WriteMessage(gws.BinaryMessage, connectedBytes); err != nil {
+		t.Fatalf("Write connected failed: %v", err)
+	}
+	rpcBytes, err := protocol.EncodePacket(&protocol.RPCCallPacket{
+		RPCID:       12,
+		MethodName:  "Security.SetEnabled",
+		AccessLevel: byte(restream.AccessLevelPublic),
+		Request:     []byte{4},
+	})
+	if err != nil {
+		t.Fatalf("Encode RPC call failed: %v", err)
+	}
+	if err := serverConn.WriteMessage(gws.BinaryMessage, rpcBytes); err != nil {
+		t.Fatalf("Write RPC call failed: %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("handleConn error = nil, want packet context error")
+		}
+		for _, want := range []string{
+			`handle relay RPC call packet "Security.SetEnabled"`,
+			"1 bytes",
+			"fieldID=4",
+			"DeserializeBool: 4",
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("handleConn error = %q, missing %q", err, want)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("handleConn did not return")
 	}
 }
 
@@ -510,4 +572,50 @@ func (*streamerTestPartial) MergeOntoPartial(any) {
 
 func (*streamerTestPartial) ApplyTo(any) [][]any {
 	return nil
+}
+
+func newTestWebsocketPair(t *testing.T) (*gws.Conn, *gws.Conn, func()) {
+	t.Helper()
+
+	serverConnCh := make(chan *gws.Conn, 1)
+	serverErrCh := make(chan error, 1)
+	upgrader := gws.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErrCh <- err
+			return
+		}
+		serverConnCh <- conn
+	}))
+
+	clientURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	clientConn, resp, err := gws.DefaultDialer.Dial(clientURL, nil)
+	if resp != nil && resp.Body != nil {
+		resp.Body.Close() //nolint:errcheck // Why: Response body is only for handshake diagnostics.
+	}
+	if err != nil {
+		server.Close()
+		t.Fatalf("Dial test websocket failed: %v", err)
+	}
+
+	var serverConn *gws.Conn
+	select {
+	case serverConn = <-serverConnCh:
+	case err := <-serverErrCh:
+		clientConn.Close() //nolint:errcheck
+		server.Close()
+		t.Fatalf("Upgrade test websocket failed: %v", err)
+	case <-time.After(time.Second):
+		clientConn.Close() //nolint:errcheck
+		server.Close()
+		t.Fatal("timed out waiting for test websocket upgrade")
+	}
+
+	cleanup := func() {
+		serverConn.Close() //nolint:errcheck
+		clientConn.Close() //nolint:errcheck
+		server.Close()
+	}
+	return serverConn, clientConn, cleanup
 }
