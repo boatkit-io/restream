@@ -1,3 +1,4 @@
 inputDirs:
   - internal/game
 tsDir: web/src/restream
+goRelayStoresDir: internal/relaystores

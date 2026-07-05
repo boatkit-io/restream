@@ -10,15 +10,17 @@ import (
 
 // restreamConfig holds config for restream's codegen
 type restreamConfig struct {
-	InputDirs           []string   `yaml:"inputDirs"`
-	TSDir               string     `yaml:"tsDir"`
-	TSImports           []tsImport `yaml:"tsImports"`
-	TSRuntimeImportMode string     `yaml:"tsRuntimeImportMode"`
-	TSRuntimeImportPath string     `yaml:"tsRuntimeImportPath"`
-	GoImports           []string   `yaml:"goImports"`
-	AdditionalEnums     []string   `yaml:"additionalEnums"`
-	BuildSerializers    []string   `yaml:"buildSerializers"`
-	GoExtraFile         string     `yaml:"goExtraFile"`
+	InputDirs            []string   `yaml:"inputDirs"`
+	TSDir                string     `yaml:"tsDir"`
+	TSImports            []tsImport `yaml:"tsImports"`
+	TSRuntimeImportMode  string     `yaml:"tsRuntimeImportMode"`
+	TSRuntimeImportPath  string     `yaml:"tsRuntimeImportPath"`
+	GoImports            []string   `yaml:"goImports"`
+	AdditionalEnums      []string   `yaml:"additionalEnums"`
+	BuildSerializers     []string   `yaml:"buildSerializers"`
+	GoExtraFile          string     `yaml:"goExtraFile"`
+	GoRelayStoresDir     string     `yaml:"goRelayStoresDir"`
+	GoRelayStoresPackage string     `yaml:"goRelayStoresPackage"`
 }
 
 // tsImport is a struct for holding a list of typescripts imports for a given path

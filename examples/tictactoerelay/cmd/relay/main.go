@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/boatkit-io/restream/examples/tictactoerelay/internal/game"
+	"github.com/boatkit-io/restream/examples/tictactoerelay/internal/relaystores"
 	"github.com/boatkit-io/restream/pkg/relay/protocol"
 	relayserver "github.com/boatkit-io/restream/pkg/relay/server"
 	"github.com/boatkit-io/restream/pkg/restream"
@@ -27,7 +28,7 @@ func main() {
 
 	manager := relayserver.NewDeviceManager(relayserver.DeviceManagerConfig{
 		Stores: func(_ string) ([]restream.Store, error) {
-			return game.NewRelayStores(), nil
+			return relaystores.NewRelayStores(), nil
 		},
 		ConfigureDevice: func(device *relayserver.Device) error {
 			game.RegisterServerTimeEvent(device.EventDispatcher)

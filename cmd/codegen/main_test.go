@@ -823,6 +823,95 @@ func (*BoardStoreStatePartial) ApplyTo(any) [][]any { return nil }
 	}
 }
 
+func TestRelayStoreFactoryCanBeGeneratedToConfiguredPackage(t *testing.T) {
+	repoRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	projectDir := t.TempDir()
+	storeImplsDir := filepath.Join(projectDir, "internal", "storeimpls")
+	storeStatesDir := filepath.Join(projectDir, "internal", "storestates")
+	relayStoresDir := filepath.Join(projectDir, "internal", "relaystores")
+	for _, dir := range []string{storeImplsDir, storeStatesDir, relayStoresDir} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/relayconfig
+
+go 1.26.3
+
+require github.com/boatkit-io/restream v0.0.0
+
+replace github.com/boatkit-io/restream => `+repoRoot+`
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(storeImplsDir, "boardstore.go"), []byte(`package storeimpls
+
+import (
+	"example.com/relayconfig/internal/storestates"
+	"github.com/boatkit-io/restream/pkg/restream"
+)
+
+// @restream.store(BoardStore)
+type BoardStore struct {
+	storeData *restream.StoreData[storestates.BoardStoreState, *storestates.BoardStoreState, *storestates.BoardStoreStatePartial]
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(storeStatesDir, "boardstorestate.go"), []byte(`package storestates
+
+type BoardStoreState struct {
+	Value string
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	pt := NewProjTracking(projectDir, &restreamConfig{
+		InputDirs:        []string{"internal/storeimpls", "internal/storestates"},
+		GoRelayStoresDir: "internal/relaystores",
+	})
+	if err := pt.parseProject(); err != nil {
+		t.Fatal(err)
+	}
+	for _, ft := range pt.files {
+		if err := ft.Run(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := pt.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(filepath.Join(storeImplsDir, "relaystores_rs.go")); !os.IsNotExist(err) {
+		t.Fatalf("store implementation package relaystores_rs.go err = %v, want not exist", err)
+	}
+
+	relayOut, err := os.ReadFile(filepath.Join(relayStoresDir, "relaystores_rs.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	relayGenerated := string(relayOut)
+	for _, expected := range []string{
+		"package relaystores",
+		`"example.com/relayconfig/internal/storestates"`,
+		`BoardStoreName = "BoardStore"`,
+		"restream.NewRelayStore[storestates.BoardStoreState, *storestates.BoardStoreState, *storestates.BoardStoreStatePartial]",
+		"BoardStoreName",
+	} {
+		if !strings.Contains(relayGenerated, expected) {
+			t.Fatalf("configured relay store output missing expected %q:\n%s", expected, relayGenerated)
+		}
+	}
+}
+
 func TestStoreAnnotationPreservesCorrectStoreDataFormatting(t *testing.T) {
 	repoRoot, err := filepath.Abs("../..")
 	if err != nil {

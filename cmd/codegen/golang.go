@@ -854,9 +854,10 @@ func (ft *FileTracking) createGoStoreMethods(si StructInfo, storeName string, st
 }
 
 type relayStorePackage struct {
-	packageName string
-	packageDir  string
-	stores      []relayStoreFactory
+	packageName                string
+	packageDir                 string
+	generateStoreNameConstants bool
+	stores                     []relayStoreFactory
 }
 
 type relayStoreFactory struct {
@@ -874,6 +875,12 @@ func (pt *ProjTracking) addRelayStoreFactory(
 	minimumAccessLevel string,
 ) {
 	pkg := pt.relayStorePackageForFile(ft)
+	if pkg.generateStoreNameConstants && stateRef.Qualifier == "" {
+		stateRef.Qualifier = ft.f.Name.Name
+		if stateRef.PackagePath == "" && ft.fPackage != nil {
+			stateRef.PackagePath = ft.fPackage.PkgPath
+		}
+	}
 
 	store := relayStoreFactory{
 		storeTypeName:      si.Name,
@@ -890,6 +897,24 @@ func (pt *ProjTracking) addRelayStoreFactory(
 }
 
 func (pt *ProjTracking) relayStorePackageForFile(ft *FileTracking) *relayStorePackage {
+	if pt.config.GoRelayStoresDir != "" {
+		key := "configured:" + pt.config.GoRelayStoresDir
+		pkg := pt.relayStores[key]
+		if pkg == nil {
+			pkgName := pt.config.GoRelayStoresPackage
+			if pkgName == "" {
+				pkgName = path.Base(pt.config.GoRelayStoresDir)
+			}
+			pkg = &relayStorePackage{
+				packageName:                pkgName,
+				packageDir:                 pt.resolveProjectPath(pt.config.GoRelayStoresDir),
+				generateStoreNameConstants: true,
+			}
+			pt.relayStores[key] = pkg
+		}
+		return pkg
+	}
+
 	key := ft.fPackage.PkgPath
 	if key == "" {
 		key = path.Dir(ft.inFile)
@@ -921,12 +946,26 @@ func (p *relayStorePackage) relayStoreFactoryDef() fdef {
 		return strings.Compare(a.storeTypeName, b.storeTypeName)
 	})
 
-	out := "// NewRelayStores creates relay stores for all generated ReStream stores in this package.\n"
+	imports := map[string]struct{}{}
+	out := ""
+	if p.generateStoreNameConstants && len(p.stores) > 0 {
+		out += "const (\n"
+		for _, store := range p.stores {
+			out += fmt.Sprintf("    // %sName is the restream store name for %s.\n", store.storeTypeName, store.storeTypeName)
+			out += fmt.Sprintf("    %sName = %q\n", store.storeTypeName, store.storeName)
+		}
+		out += ")\n\n"
+	}
+
+	out += "// NewRelayStores creates relay stores for all generated ReStream stores in this package.\n"
 	out += "func NewRelayStores() []restream.Store {\n"
 	out += "    return []restream.Store{\n"
 	for _, store := range p.stores {
 		stateType := store.stateRef.typeExpr()
 		partialType := store.stateRef.partialTypeExpr()
+		if store.stateRef.Qualifier != "" && store.stateRef.PackagePath != "" {
+			imports[store.stateRef.PackagePath] = struct{}{}
+		}
 		out += fmt.Sprintf("        restream.NewRelayStore[%s, *%s, *%s](\n", stateType, stateType, partialType)
 		out += fmt.Sprintf("            %sName,\n", store.storeTypeName)
 		out += fmt.Sprintf("            &%s{},\n", stateType)
@@ -936,7 +975,7 @@ func (p *relayStorePackage) relayStoreFactoryDef() fdef {
 	out += "    }\n"
 	out += "}\n"
 
-	return fdef{name: "NewRelayStores", defs: out}
+	return fdef{name: "NewRelayStores", defs: out, deps: lo.Keys(imports)}
 }
 
 // writeGoStructs writes out the golang generated structures
@@ -978,7 +1017,13 @@ func (pt *ProjTracking) writeGoFile(outPath, packageName string, entries []fdef)
 		fc += "    \"github.com/boatkit-io/restream/pkg/restream\"\n"
 	}
 
-	for _, imp := range pt.config.GoImports {
+	goImports := append([]string{}, pt.config.GoImports...)
+	for _, entry := range entries {
+		goImports = append(goImports, entry.deps...)
+	}
+	goImports = lo.Uniq(goImports)
+	slices.Sort(goImports)
+	for _, imp := range goImports {
 		fc += fmt.Sprintf("    \"%s\"\n", imp)
 	}
 
