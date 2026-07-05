@@ -8,7 +8,6 @@ import (
 	"go/types"
 	"path"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -138,18 +137,11 @@ func (ft *FileTracking) parseStructDecls() error { //nolint:gocyclo,funlen
 
 			if len(st.Fields.List) > 0 {
 				// Get the highest field count off the struct, if it exists
-				maxFieldNum := byte(0)
 				dec := st.Fields.List[0].Decorations()
 				decAll := dec.Start.All()
-				if len(decAll) > 0 {
-					res := regexp.MustCompile(`// MAXFIELD\((\d+)\)`).FindAllStringSubmatch(decAll[0], 1)
-					if len(res) == 1 && len(res[0]) == 2 {
-						tc, err := strconv.ParseUint(res[0][1], 10, 8)
-						if err != nil {
-							return err
-						}
-						maxFieldNum = byte(tc)
-					}
+				maxFieldNum, err := maxFieldForStruct(st)
+				if err != nil {
+					return err
 				}
 
 				// provision fieldids for all fields
@@ -168,6 +160,9 @@ func (ft *FileTracking) parseStructDecls() error { //nolint:gocyclo,funlen
 							Kind:  token.STRING,
 							Value: tagStr,
 						}
+					}
+					if ti.FieldID > maxFieldNum {
+						maxFieldNum = ti.FieldID
 					}
 				}
 

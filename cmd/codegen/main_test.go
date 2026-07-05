@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1461,4 +1462,161 @@ func TestWriteTSPackageFilesDoesNotOverwriteNonTestPackage(t *testing.T) {
 	if !strings.Contains(string(testOut), "export class LatLong") {
 		t.Fatalf("test package output missing expected entry:\n%s", string(testOut))
 	}
+}
+
+func TestFieldedStructGitCompatibilityRejectsReusedPreviousFieldID(t *testing.T) {
+	projectDir, serverDir := setupFieldCompatibilityGitProject(t)
+	sourcePath := filepath.Join(serverDir, "model.go")
+
+	if err := os.WriteFile(sourcePath, []byte(`package main
+
+// @restream.fields
+type Model struct {
+	// MAXFIELD(2)
+	Name    string `+"`restream:\",fID=1\"`"+`
+	Enabled bool   `+"`restream:\",fID=2\"`"+`
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runFieldCompatibilityCodegenProject(projectDir)
+	if err == nil {
+		t.Fatal("expected reused previous field ID to fail")
+	}
+	if !strings.Contains(err.Error(), "added field Enabled with fID=2") {
+		t.Fatalf("unexpected error for reused field ID: %v", err)
+	}
+}
+
+func TestFieldedStructGitCompatibilityAllowsNewFieldAbovePreviousMax(t *testing.T) {
+	projectDir, serverDir := setupFieldCompatibilityGitProject(t)
+	sourcePath := filepath.Join(serverDir, "model.go")
+
+	if err := os.WriteFile(sourcePath, []byte(`package main
+
+// @restream.fields
+type Model struct {
+	// MAXFIELD(2)
+	Name    string `+"`restream:\",fID=1\"`"+`
+	Count   int    `+"`restream:\",fID=2\"`"+`
+	Enabled bool   `+"`restream:\",fID=3\"`"+`
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runFieldCompatibilityCodegenProject(projectDir); err != nil {
+		t.Fatal(err)
+	}
+
+	sourceOut, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(sourceOut), "// MAXFIELD(3)") {
+		t.Fatalf("source MAXFIELD was not advanced for manually assigned fID:\n%s", string(sourceOut))
+	}
+}
+
+func TestFieldedStructGitCompatibilityRejectsChangedExistingFieldID(t *testing.T) {
+	projectDir, serverDir := setupFieldCompatibilityGitProject(t)
+	sourcePath := filepath.Join(serverDir, "model.go")
+
+	if err := os.WriteFile(sourcePath, []byte(`package main
+
+// @restream.fields
+type Model struct {
+	// MAXFIELD(3)
+	Name  string `+"`restream:\",fID=3\"`"+`
+	Count int    `+"`restream:\",fID=2\"`"+`
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runFieldCompatibilityCodegenProject(projectDir)
+	if err == nil {
+		t.Fatal("expected changed existing field ID to fail")
+	}
+	if !strings.Contains(err.Error(), "changed field Name fID from 1 to 3") {
+		t.Fatalf("unexpected error for changed field ID: %v", err)
+	}
+}
+
+func setupFieldCompatibilityGitProject(t *testing.T) (string, string) {
+	t.Helper()
+	requireGit(t)
+
+	repoRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	projectDir := t.TempDir()
+	serverDir := filepath.Join(projectDir, "cmd", "server")
+	if err := os.MkdirAll(serverDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/fieldcompat
+
+go 1.26.3
+
+require github.com/boatkit-io/restream v0.0.0
+
+replace github.com/boatkit-io/restream => `+repoRoot+`
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(serverDir, "model.go"), []byte(`package main
+
+// @restream.fields
+type Model struct {
+	// MAXFIELD(2)
+	Name  string `+"`restream:\",fID=1\"`"+`
+	Count int    `+"`restream:\",fID=2\"`"+`
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	runGit(t, projectDir, "init")
+	runGit(t, projectDir, "add", ".")
+	runGit(t, projectDir, "-c", "user.name=Codegen Test", "-c", "user.email=codegen@example.com", "commit", "-m", "baseline")
+
+	return projectDir, serverDir
+}
+
+func requireGit(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not available")
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	fullArgs := append([]string{"-C", dir}, args...)
+	cmd := exec.Command("git", fullArgs...) //nolint:gosec
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, string(out))
+	}
+}
+
+func runFieldCompatibilityCodegenProject(projectDir string) error {
+	pt := NewProjTracking(projectDir, &restreamConfig{
+		InputDirs: []string{"cmd/server"},
+	})
+	if err := pt.parseProject(); err != nil {
+		return err
+	}
+	for _, ft := range pt.files {
+		if err := ft.Run(); err != nil {
+			return err
+		}
+	}
+	return nil
 }

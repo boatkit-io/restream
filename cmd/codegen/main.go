@@ -533,6 +533,10 @@ func (ft *FileTracking) Run() error {
 		return err
 	}
 
+	if err := ft.validateFieldedStructGitCompatibility(); err != nil {
+		return err
+	}
+
 	if len(ft.goGenEntries) > 0 {
 		if err := ft.writeGoStructs(); err != nil {
 			return err
