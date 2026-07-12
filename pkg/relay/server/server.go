@@ -94,6 +94,10 @@ func (s *Server) AcceptConn(ctx context.Context, conn *gws.Conn) (retErr error) 
 		closeConnectionForReturn(c, retErr)
 	}()
 
+	if err := device.sendRelayFullStates(c); err != nil {
+		return err
+	}
+
 	if err := device.sendActiveStoreSubscriptions(c); err != nil {
 		return err
 	}
@@ -273,6 +277,26 @@ func (c *Connection) SendRPC(rpcID uint32, name string, accessLevel restream.Acc
 		AccessLevel: byte(accessLevel),
 		Request:     binaryData,
 	})
+	if err != nil {
+		return err
+	}
+
+	return c.sendPacket(packetBytes)
+}
+
+// SendFullState sends a full store state packet to the connected device.
+func (c *Connection) SendFullState(storeName string, state []byte) error {
+	packetBytes, err := protocol.EncodePacket(protocol.NewFullStatePacket(storeName, state))
+	if err != nil {
+		return err
+	}
+
+	return c.sendPacket(packetBytes)
+}
+
+// SendPartialState sends a partial store state packet to the connected device.
+func (c *Connection) SendPartialState(storeName string, partial []byte) error {
+	packetBytes, err := protocol.EncodePacket(protocol.NewPartialStatePacket(storeName, partial))
 	if err != nil {
 		return err
 	}

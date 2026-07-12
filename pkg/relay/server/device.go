@@ -6,12 +6,14 @@ import (
 
 	"github.com/boatkit-io/restream/pkg/relay/protocol"
 	"github.com/boatkit-io/restream/pkg/restream"
+	"github.com/boatkit-io/tugboat/pkg/subscribableevent"
 	gws "github.com/gorilla/websocket"
 )
 
 const (
 	duplicateRelayConnectionReason          = "replaced by a newer relay connection for this device"
 	storeSubscriptionForwardingFailedReason = "store subscription forwarding failed; reconnect required"
+	relayStateForwardingFailedReason        = "relay state forwarding failed; reconnect required"
 )
 
 // Device stores aggregated relay data for one device.
@@ -23,6 +25,9 @@ type Device struct {
 	config DeviceManagerConfig
 
 	relaySubscriptionStores []relaySubscriptionStore
+	relayForwardMutex       sync.Mutex
+	relayForwardSubID       subscribableevent.SubscriptionId
+	relayForwardConn        *Connection
 
 	connMutex sync.RWMutex
 	conn      *Connection
@@ -67,6 +72,8 @@ func (d *Device) DeviceConnected(conn *Connection) {
 	d.conn = conn
 	d.connMutex.Unlock()
 
+	d.startRelayStateForwarding(conn)
+
 	if previous != nil {
 		previous.CloseWithReason(gws.ClosePolicyViolation, duplicateRelayConnectionReason) //nolint:errcheck // Why: Closing stale connection best-effort.
 		d.closePendingRPCsForConn(previous)
@@ -85,6 +92,10 @@ func (d *Device) DeviceDisconnected(conn *Connection) {
 		d.conn = nil
 	}
 	d.connMutex.Unlock()
+
+	if wasCurrent {
+		d.stopRelayStateForwarding(conn)
+	}
 
 	if wasCurrent && d.config.OnDeviceDisconnected != nil {
 		d.config.OnDeviceDisconnected(d, conn)
@@ -128,6 +139,94 @@ func (d *Device) sendActiveStoreSubscriptions(conn *Connection) error {
 	return nil
 }
 
+func (d *Device) sendRelayFullStates(conn *Connection) error {
+	if d.StoreRegistry == nil {
+		return nil
+	}
+	for _, storeName := range d.StoreRegistry.GetAllStoreNames() {
+		allowed, err := d.StoreRegistry.StoreStreamsFromRelay(storeName)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			continue
+		}
+		accessLevel, err := d.StoreRegistry.GetStoreMinimumAccessLevel(storeName)
+		if err != nil {
+			return err
+		}
+		stateSnapshot, err := d.StoreRegistry.GetFullStateSnapshot(storeName, accessLevel)
+		if err != nil {
+			return err
+		}
+		stateBytes, err := restream.SerializeToBytes(stateSnapshot, nil)
+		if err != nil {
+			return err
+		}
+		if err := conn.SendFullState(storeName, stateBytes); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *Device) startRelayStateForwarding(conn *Connection) {
+	if d.StoreRegistry == nil {
+		return
+	}
+
+	d.stopRelayStateForwarding(nil)
+
+	subID := d.StoreRegistry.SubscribeToPartialApplies(func(storeName string, _ [][]any, partial restream.Partial) {
+		d.forwardRelayPartial(conn, storeName, partial)
+	})
+
+	d.relayForwardMutex.Lock()
+	d.relayForwardSubID = subID
+	d.relayForwardConn = conn
+	d.relayForwardMutex.Unlock()
+}
+
+func (d *Device) stopRelayStateForwarding(conn *Connection) {
+	d.relayForwardMutex.Lock()
+	if conn != nil && d.relayForwardConn != conn {
+		d.relayForwardMutex.Unlock()
+		return
+	}
+	subID := d.relayForwardSubID
+	shouldUnsubscribe := d.relayForwardConn != nil
+	d.relayForwardSubID = 0
+	d.relayForwardConn = nil
+	d.relayForwardMutex.Unlock()
+
+	if shouldUnsubscribe && d.StoreRegistry != nil {
+		d.StoreRegistry.UnsubscribeFromPartialApplies(subID) //nolint:errcheck // Why: Cleanup is best effort on connection churn.
+	}
+}
+
+func (d *Device) forwardRelayPartial(conn *Connection, storeName string, partial restream.Partial) {
+	allowed, err := d.StoreRegistry.StoreStreamsFromRelay(storeName)
+	if err != nil || !allowed {
+		return
+	}
+
+	d.connMutex.RLock()
+	currentConn := d.conn
+	d.connMutex.RUnlock()
+	if currentConn != conn {
+		return
+	}
+
+	partialBytes, err := restream.SerializeToBytes(partial, nil)
+	if err != nil {
+		conn.CloseWithReason(gws.CloseGoingAway, relayStateForwardingFailedReason) //nolint:errcheck // Why: Closing forces reconnect and state replay.
+		return
+	}
+	if err := conn.SendPartialState(storeName, partialBytes); err != nil {
+		conn.CloseWithReason(gws.CloseGoingAway, relayStateForwardingFailedReason) //nolint:errcheck // Why: Closing forces reconnect and state replay.
+	}
+}
+
 // HandleFullState handles a full store state packet from the connected device.
 func (d *Device) HandleFullState(conn *Connection, storeName string, data []byte) error {
 	if d.config.FullStateHandler != nil {
@@ -140,6 +239,13 @@ func (d *Device) HandleFullState(conn *Connection, storeName string, data []byte
 func (d *Device) ApplyFullState(storeName string, data []byte) error {
 	if !d.StoreRegistry.IsStoreValid(storeName) {
 		return d.handleUnknownStore(storeName)
+	}
+	allowed, err := d.StoreRegistry.StoreAcceptsDeviceRelayUpdates(storeName)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return nil
 	}
 	return d.StoreRegistry.SetFullStateToStore(storeName, data)
 }
@@ -156,6 +262,13 @@ func (d *Device) HandlePartialState(conn *Connection, storeName string, data []b
 func (d *Device) ApplyPartialState(storeName string, data []byte) error {
 	if !d.StoreRegistry.IsStoreValid(storeName) {
 		return d.handleUnknownStore(storeName)
+	}
+	allowed, err := d.StoreRegistry.StoreAcceptsDeviceRelayUpdates(storeName)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return nil
 	}
 	return d.StoreRegistry.ApplyPartialToStore(storeName, data)
 }

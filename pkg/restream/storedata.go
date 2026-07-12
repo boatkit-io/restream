@@ -1,6 +1,7 @@
 package restream
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"reflect"
@@ -15,6 +16,10 @@ import (
 var typeAnyArrayOfAny = reflect.TypeFor[[]any]()
 
 const storeDataLockWarnAfter = 100 * time.Millisecond
+
+// ErrCloudSourceStoreMutation is raised when local code attempts to mutate a device store
+// whose source of truth is the cloud relay.
+var ErrCloudSourceStoreMutation = errors.New("cloud-source stores can only be updated from the relay")
 
 // PartialCallbackFunc is a reusable type for the callbacks for partial applications
 type PartialCallbackFunc = func(storeName string, fields [][]any, partial Partial)
@@ -55,6 +60,8 @@ type StoreData[S any, SP StoreDataPtrType[S], P Partial] struct {
 	partialCallbacks subscribableevent.Event[PartialCallbackFunc]
 
 	subscriptions *fieldSubTier
+
+	localApplyErr error
 }
 
 // AddCallback implements StoreDataBase.
@@ -82,6 +89,11 @@ func NewStoreData[S any, SP StoreDataPtrType[S], P Partial](store Store, state S
 		panic(fmt.Sprintf("Store %s passed non-pointer-to-struct state structure", name))
 	}
 
+	var localApplyErr error
+	if StoreTypeForStore(store) == StoreTypeDeviceWithCloudSource {
+		localApplyErr = ErrCloudSourceStoreMutation
+	}
+
 	return &StoreData[S, SP, P]{
 		name:         name,
 		state:        state,
@@ -89,6 +101,7 @@ func NewStoreData[S any, SP StoreDataPtrType[S], P Partial](store Store, state S
 
 		partialCallbacks: subscribableevent.NewEvent[PartialCallbackFunc](),
 		subscriptions:    newFieldSubTier(nil),
+		localApplyErr:    localApplyErr,
 	}
 }
 
@@ -298,6 +311,13 @@ func (d *StoreData[S, SP, PS]) getFieldValue(field []any) reflect.Value {
 // ApplyPartial is the only allowed way to mutate store state -- build a partial with whatever needs changing, and then
 // apply it.  It will end up applied to store state and send to all subscribers.
 func (d *StoreData[S, SP, PS]) ApplyPartial(partial PS) {
+	if d.localApplyErr != nil {
+		panic(d.localApplyErr)
+	}
+	d.applyPartial(partial)
+}
+
+func (d *StoreData[S, SP, PS]) applyPartial(partial PS) {
 	var fields [][]any
 	func() {
 		waitStart := time.Now()
@@ -349,7 +369,7 @@ func (d *StoreData[S, SP, PS]) DecodeAndApplyPartial(b []byte) error {
 	if err := iv.(Serializable).Deserialize(binarystreams.NewReaderFromBytes(b), nil); err != nil {
 		return err
 	}
-	d.ApplyPartial(iv.(PS))
+	d.applyPartial(iv.(PS))
 	return nil
 }
 

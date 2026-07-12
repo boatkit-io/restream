@@ -100,7 +100,14 @@ stores := game.NewRelayStores()
 
 The method must have the exact signature `GetMinimumAccessLevel() restream.AccessLevel`. For relay codegen, its body must be a single `return` of a compile-time integer constant, or a conversion of one, such as `return AccessLevelAdmin` when the constant is untyped or already a `restream.AccessLevel`, or `return restream.AccessLevel(auth.AccessLevelAdmin)` when the application constant uses a different named integer type. Codegen resolves the constant value through Go type information and emits `restream.AccessLevel(<value>)`, so generated relay code does not import the package that defined the constant. If there is no method, codegen uses `restream.AccessLevelPublic`. Custom relay stores can still call `restream.NewRelayStore` directly.
 
-Generated stores can also declare their relay topology with an optional second `@restream.store` argument: `DeviceWithRelay` (default), `DeviceWithNoRelay`, `DeviceWithCloudImpl`, `DeviceAndCloud`, `CloudImplOfDevice`, or `CloudOnly`. `DeviceWithRelay` generates a relay store and streams full states, partials, and relayed subscription lifecycle messages from the device. `DeviceWithCloudImpl` marks the device-side half of a custom cloud implementation: it streams device state but does not generate a relay store. `DeviceAndCloud` marks a single implementation that can run independently on both device and cloud, so it is skipped by relay store generation and device relay streaming. `CloudImplOfDevice` marks the cloud-side half of a custom implementation and is skipped by both relay store generation and device relay streaming. `DeviceWithNoRelay` and `CloudOnly` also do not generate relay stores and are skipped by the device relay streamer.
+Generated stores can also declare their relay topology with an optional second `@restream.store` argument:
+* `DeviceWithRelay` (default) generates a relay store and streams full states, partials, and relayed subscription lifecycle messages from the device.
+* `DeviceWithCloudImpl` marks the device-side half of a custom cloud implementation: it streams device state but does not generate a relay store.
+* `DeviceAndCloud` marks a single implementation that can run independently on both device and cloud, so it is skipped by relay store generation and device relay streaming.
+* `CloudImplOfDevice` marks the cloud-side half of a custom implementation and is skipped by both relay store generation and device relay streaming.
+* `DeviceWithCloudSource` marks a device-side store whose source of truth is the cloud; codegen creates a `CloudSourceForDevice` store that streams cloud state down to the device.
+
+Note: `DeviceWithNoRelay` and `CloudOnly` also do not generate relay stores and are skipped by the device relay streamer.
 
 ## Annotations
 

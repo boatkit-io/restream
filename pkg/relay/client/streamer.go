@@ -244,6 +244,11 @@ func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials C
 				return fmt.Errorf("handle relay store subscription packet action %d for store %q key %q: %w",
 					packet.Action, packet.StoreName, packet.Key, err)
 			}
+		case *protocol.StoreStatePacket:
+			if err := s.handleStoreState(packet); err != nil {
+				return fmt.Errorf("handle relay store state packet for store %q (%d bytes): %w",
+					packet.StoreName, len(packet.Data), err)
+			}
 		case *protocol.CustomPacket:
 			if s.opts.Callbacks.OnCustomPacket != nil {
 				if err := s.opts.Callbacks.OnCustomPacket(packet); err != nil {
@@ -310,6 +315,32 @@ func (s *Streamer) allowsRelayStoreTraffic(storeName string) (bool, error) {
 		return false, nil
 	}
 	return s.sr.StoreStreamsToRelay(storeName)
+}
+
+func (s *Streamer) allowsRelayStoreInbound(storeName string) (bool, error) {
+	if !s.opts.StorePolicy.Allows(storeName) {
+		return false, nil
+	}
+	if s.sr == nil {
+		return false, nil
+	}
+	return s.sr.StoreReceivesFromRelay(storeName)
+}
+
+func (s *Streamer) handleStoreState(packet *protocol.StoreStatePacket) error {
+	allowed, err := s.allowsRelayStoreInbound(packet.StoreName)
+	if err != nil || !allowed {
+		return err
+	}
+
+	switch packet.Kind() {
+	case protocol.KindFullState:
+		return s.sr.SetFullStateToStore(packet.StoreName, packet.Data)
+	case protocol.KindPartialState:
+		return s.sr.ApplyPartialToStore(packet.StoreName, packet.Data)
+	default:
+		return fmt.Errorf("unhandled store packet type %d", packet.Kind())
+	}
 }
 
 func (s *Streamer) gatherPartial(storeName string, partial restream.Partial, debounce time.Duration) {

@@ -435,14 +435,20 @@ type DeviceNoRelayState struct{}
 // @restream.partials
 type DeviceCloudImplState struct{}
 
-// @restream.partials
-type DeviceAndCloudState struct{}
+	// @restream.partials
+	type DeviceAndCloudState struct{}
 
-// @restream.partials
-type CloudImplOfDeviceState struct{}
+	// @restream.partials
+	type DeviceCloudSourceState struct{}
 
-// @restream.partials
-type CloudOnlyState struct{}
+	// @restream.partials
+	type CloudImplOfDeviceState struct{}
+
+	// @restream.partials
+	type CloudSourceForDeviceState struct{}
+
+	// @restream.partials
+	type CloudOnlyState struct{}
 
 // @restream.store(RelayStore, DeviceWithRelay)
 type DeviceRelay struct {
@@ -459,19 +465,29 @@ type DeviceCloudImpl struct {
 	storeData *restream.StoreData[DeviceCloudImplState, *DeviceCloudImplState, *DeviceCloudImplStatePartial]
 }
 
-// @restream.store(DeviceAndCloudStore, DeviceAndCloud)
-type DeviceAndCloud struct {
-	storeData *restream.StoreData[DeviceAndCloudState, *DeviceAndCloudState, *DeviceAndCloudStatePartial]
-}
+	// @restream.store(DeviceAndCloudStore, DeviceAndCloud)
+	type DeviceAndCloud struct {
+		storeData *restream.StoreData[DeviceAndCloudState, *DeviceAndCloudState, *DeviceAndCloudStatePartial]
+	}
 
-// @restream.store(CloudImplOfDeviceStore, CloudImplOfDevice)
-type CloudImplOfDevice struct {
-	storeData *restream.StoreData[CloudImplOfDeviceState, *CloudImplOfDeviceState, *CloudImplOfDeviceStatePartial]
-}
+	// @restream.store(CloudSourceStore, DeviceWithCloudSource)
+	type DeviceCloudSource struct {
+		storeData *restream.StoreData[DeviceCloudSourceState, *DeviceCloudSourceState, *DeviceCloudSourceStatePartial]
+	}
 
-// @restream.store(CloudOnlyStore, CloudOnly)
-type CloudOnly struct {
-	storeData *restream.StoreData[CloudOnlyState, *CloudOnlyState, *CloudOnlyStatePartial]
+	// @restream.store(CloudImplOfDeviceStore, CloudImplOfDevice)
+	type CloudImplOfDevice struct {
+		storeData *restream.StoreData[CloudImplOfDeviceState, *CloudImplOfDeviceState, *CloudImplOfDeviceStatePartial]
+	}
+
+	// @restream.store(CloudSourceForDeviceStore, CloudSourceForDevice)
+	type CloudSourceForDevice struct {
+		storeData *restream.StoreData[CloudSourceForDeviceState, *CloudSourceForDeviceState, *CloudSourceForDeviceStatePartial]
+	}
+
+	// @restream.store(CloudOnlyStore, CloudOnly)
+	type CloudOnly struct {
+		storeData *restream.StoreData[CloudOnlyState, *CloudOnlyState, *CloudOnlyStatePartial]
 }
 `), 0644); err != nil {
 		t.Fatal(err)
@@ -502,7 +518,9 @@ type CloudOnly struct {
 		"return restream.StoreTypeDeviceWithNoRelay",
 		"return restream.StoreTypeDeviceWithCloudImpl",
 		"return restream.StoreTypeDeviceAndCloud",
+		"return restream.StoreTypeDeviceWithCloudSource",
 		"return restream.StoreTypeCloudImplOfDevice",
+		"return restream.StoreTypeCloudSourceForDevice",
 		"return restream.StoreTypeCloudOnly",
 	} {
 		if !strings.Contains(storeGenerated, expected) {
@@ -518,7 +536,17 @@ type CloudOnly struct {
 	if !strings.Contains(relayGenerated, "restream.NewRelayStore[DeviceRelayState, *DeviceRelayState, *DeviceRelayStatePartial]") {
 		t.Fatalf("generated relay factory missing DeviceWithRelay store:\n%s", relayGenerated)
 	}
-	for _, unexpected := range []string{"DeviceNoRelayName", "DeviceCloudImplName", "DeviceAndCloudName", "CloudImplOfDeviceName", "CloudOnlyName"} {
+	if !strings.Contains(relayGenerated, "restream.NewCloudSourceForDeviceStore[DeviceCloudSourceState, *DeviceCloudSourceState, *DeviceCloudSourceStatePartial]") {
+		t.Fatalf("generated relay factory missing DeviceWithCloudSource store:\n%s", relayGenerated)
+	}
+	for _, unexpected := range []string{
+		"DeviceNoRelayName",
+		"DeviceCloudImplName",
+		"DeviceAndCloudName",
+		"CloudImplOfDeviceName",
+		"CloudSourceForDeviceName",
+		"CloudOnlyName",
+	} {
 		if strings.Contains(relayGenerated, unexpected) {
 			t.Fatalf("generated relay factory included non-relay store %q:\n%s", unexpected, relayGenerated)
 		}

@@ -1,6 +1,7 @@
 package restream
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -28,7 +29,8 @@ func (*storeDataLockTestPartial) Serialize(*binarystreams.Writer, *VarInfoStruct
 	return nil
 }
 
-func (*storeDataLockTestPartial) Deserialize(*binarystreams.Reader, *VarInfoStruct) error {
+func (p *storeDataLockTestPartial) Deserialize(*binarystreams.Reader, *VarInfoStruct) error {
+	p.Value = "decoded relay partial"
 	return nil
 }
 
@@ -67,6 +69,33 @@ func (s *storeDataLockTestStore) SubscribeToField(field []any, callback any) {
 func newStoreDataLockTestStore() (*storeDataLockTestStore, *storeDataLockTestState) {
 	state := &storeDataLockTestState{}
 	store := &storeDataLockTestStore{}
+	store.data = NewStoreData[storeDataLockTestState, *storeDataLockTestState, *storeDataLockTestPartial](store, state)
+	return store, state
+}
+
+type storeDataCloudSourceTestStore struct {
+	data *StoreData[storeDataLockTestState, *storeDataLockTestState, *storeDataLockTestPartial]
+}
+
+func (s *storeDataCloudSourceTestStore) GetName() string {
+	return "store-data-cloud-source-test"
+}
+
+func (s *storeDataCloudSourceTestStore) GetStoreData() StoreDataBase {
+	return s.data
+}
+
+func (s *storeDataCloudSourceTestStore) GetStoreType() StoreType {
+	return StoreTypeDeviceWithCloudSource
+}
+
+func (s *storeDataCloudSourceTestStore) SubscribeToField(field []any, callback any) {
+	s.data.SubscribeToField(field, callback)
+}
+
+func newStoreDataCloudSourceTestStore() (*storeDataCloudSourceTestStore, *storeDataLockTestState) {
+	state := &storeDataLockTestState{}
+	store := &storeDataCloudSourceTestStore{}
 	store.data = NewStoreData[storeDataLockTestState, *storeDataLockTestState, *storeDataLockTestPartial](store, state)
 	return store, state
 }
@@ -198,6 +227,45 @@ func TestApplyPartialUnlocksAfterPanic(t *testing.T) {
 	}
 }
 
+func TestCloudSourceStoreDataRejectsLocalApplyPartial(t *testing.T) {
+	store, state := newStoreDataCloudSourceTestStore()
+
+	defer func() {
+		recovered := recover()
+		if !errors.Is(recoveredAsError(recovered), ErrCloudSourceStoreMutation) {
+			t.Fatalf("panic = %v, want ErrCloudSourceStoreMutation", recovered)
+		}
+		if state.Value != "" {
+			t.Fatalf("state value = %q, want unchanged", state.Value)
+		}
+	}()
+
+	store.data.ApplyPartial(&storeDataLockTestPartial{Value: "local"})
+}
+
+func TestCloudSourceStoreDataAllowsDecodedRelayPartial(t *testing.T) {
+	store, state := newStoreDataCloudSourceTestStore()
+	callbacks := 0
+	store.data.AddCallback(func(_ string, _ [][]any, _ Partial) {
+		callbacks++
+	})
+
+	partialBytes, err := SerializeToBytes(&storeDataLockTestPartial{}, nil)
+	if err != nil {
+		t.Fatalf("SerializeToBytes failed: %v", err)
+	}
+	if err := store.data.DecodeAndApplyPartial(partialBytes); err != nil {
+		t.Fatalf("DecodeAndApplyPartial failed: %v", err)
+	}
+
+	if state.Value != "decoded relay partial" {
+		t.Fatalf("state value = %q, want decoded relay partial", state.Value)
+	}
+	if callbacks != 1 {
+		t.Fatalf("callbacks = %d, want 1", callbacks)
+	}
+}
+
 func TestGetSerializedFullStateSerializesSnapshotOutsideReadLock(t *testing.T) {
 	store, state := newStoreDataSnapshotTestStore()
 	state.onSerialize = func() {
@@ -266,6 +334,11 @@ func assertPanics(t *testing.T, fn func()) {
 	if !didPanic {
 		t.Fatal("expected panic")
 	}
+}
+
+func recoveredAsError(recovered any) error {
+	err, _ := recovered.(error)
+	return err
 }
 
 func assertCompletes(t *testing.T, fn func()) {

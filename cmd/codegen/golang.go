@@ -865,6 +865,7 @@ type relayStoreFactory struct {
 	storeName          string
 	stateRef           storeStateRef
 	minimumAccessLevel string
+	constructor        string
 }
 
 func (pt *ProjTracking) addRelayStoreFactory(
@@ -873,6 +874,7 @@ func (pt *ProjTracking) addRelayStoreFactory(
 	storeName string,
 	stateRef storeStateRef,
 	minimumAccessLevel string,
+	constructor string,
 ) {
 	pkg := pt.relayStorePackageForFile(ft)
 	if pkg.generateStoreNameConstants && stateRef.Qualifier == "" {
@@ -887,6 +889,7 @@ func (pt *ProjTracking) addRelayStoreFactory(
 		storeName:          storeName,
 		stateRef:           stateRef,
 		minimumAccessLevel: minimumAccessLevel,
+		constructor:        constructor,
 	}
 	if lo.SomeBy(pkg.stores, func(existing relayStoreFactory) bool {
 		return existing.storeTypeName == store.storeTypeName
@@ -966,7 +969,7 @@ func (p *relayStorePackage) relayStoreFactoryDef() fdef {
 		if store.stateRef.Qualifier != "" && store.stateRef.PackagePath != "" {
 			imports[store.stateRef.PackagePath] = struct{}{}
 		}
-		out += fmt.Sprintf("        restream.NewRelayStore[%s, *%s, *%s](\n", stateType, stateType, partialType)
+		out += fmt.Sprintf("        restream.%s[%s, *%s, *%s](\n", store.constructor, stateType, stateType, partialType)
 		out += fmt.Sprintf("            %sName,\n", store.storeTypeName)
 		out += fmt.Sprintf("            &%s{},\n", stateType)
 		out += fmt.Sprintf("            %s,\n", store.minimumAccessLevel)

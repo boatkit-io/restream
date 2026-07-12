@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/boatkit-io/restream/pkg/binarystreams"
 	"github.com/boatkit-io/restream/pkg/relay/protocol"
 	"github.com/boatkit-io/restream/pkg/restream"
 	gws "github.com/gorilla/websocket"
@@ -250,6 +251,42 @@ func TestConnectionSendStoreSubscriptionWritesPacket(t *testing.T) {
 	}
 }
 
+func TestConnectionSendStoreStateWritesPackets(t *testing.T) {
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	conn := NewConnection(serverConn)
+	if err := conn.SendFullState("TestStore", []byte{1, 2, 3}); err != nil {
+		t.Fatalf("SendFullState failed: %v", err)
+	}
+	_, message, err := clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read full state failed: %v", err)
+	}
+	packet, ok := mustDecodePacket(t, message).(*protocol.StoreStatePacket)
+	if !ok {
+		t.Fatalf("full state packet type = %T, want *StoreStatePacket", mustDecodePacket(t, message))
+	}
+	if packet.StoreName != "TestStore" || packet.Kind() != protocol.KindFullState || string(packet.Data) != string([]byte{1, 2, 3}) {
+		t.Fatalf("full state packet = %+v, want TestStore full state", packet)
+	}
+
+	if err := conn.SendPartialState("TestStore", []byte{4, 5, 6}); err != nil {
+		t.Fatalf("SendPartialState failed: %v", err)
+	}
+	_, message, err = clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read partial state failed: %v", err)
+	}
+	packet, ok = mustDecodePacket(t, message).(*protocol.StoreStatePacket)
+	if !ok {
+		t.Fatalf("partial state packet type = %T, want *StoreStatePacket", mustDecodePacket(t, message))
+	}
+	if packet.StoreName != "TestStore" || packet.Kind() != protocol.KindPartialState || string(packet.Data) != string([]byte{4, 5, 6}) {
+		t.Fatalf("partial state packet = %+v, want TestStore partial state", packet)
+	}
+}
+
 func TestConnectionCloseWithReasonWritesCloseFrame(t *testing.T) {
 	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
 	defer cleanup()
@@ -284,6 +321,72 @@ func TestDeviceConnectedClosesPreviousConnectionWithReason(t *testing.T) {
 	}
 	if closeErr.Text != duplicateRelayConnectionReason {
 		t.Fatalf("close reason = %q, want %q", closeErr.Text, duplicateRelayConnectionReason)
+	}
+}
+
+func TestServerAcceptConnSendsCloudSourceFullState(t *testing.T) {
+	manager := NewDeviceManager(DeviceManagerConfig{
+		Stores: func(string) ([]restream.Store, error) {
+			return []restream.Store{
+				restream.NewCloudSourceForDeviceStore[testState, *testState, *testPartial](
+					"CloudSourceStore",
+					&testState{Value: "cloud"},
+					restream.AccessLevelPublic,
+				),
+			}, nil
+		},
+	})
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	relayServer := New(Config{
+		DeviceManager: manager,
+		AuthenticateDevice: func(context.Context, *protocol.DeviceHello, *Connection) (restream.AccessLevel, error) {
+			return restream.AccessLevel(1), nil
+		},
+	})
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- relayServer.AcceptConn(context.Background(), serverConn)
+	}()
+
+	helloBytes, err := protocol.EncodeDeviceHello(&protocol.DeviceHello{
+		ProtocolVersion: protocol.CurrentVersion,
+		DeviceID:        "device-1",
+	})
+	if err != nil {
+		t.Fatalf("EncodeDeviceHello failed: %v", err)
+	}
+	if err := clientConn.WriteMessage(gws.BinaryMessage, helloBytes); err != nil {
+		t.Fatalf("Write hello failed: %v", err)
+	}
+	if _, _, err := clientConn.ReadMessage(); err != nil {
+		t.Fatalf("Read connected failed: %v", err)
+	}
+	_, fullStateBytes, err := clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read cloud-source full state failed: %v", err)
+	}
+	packet, ok := mustDecodePacket(t, fullStateBytes).(*protocol.StoreStatePacket)
+	if !ok {
+		t.Fatalf("cloud-source packet type = %T, want *StoreStatePacket", mustDecodePacket(t, fullStateBytes))
+	}
+	if packet.StoreName != "CloudSourceStore" || packet.Kind() != protocol.KindFullState {
+		t.Fatalf("cloud-source packet = %+v, want full state for CloudSourceStore", packet)
+	}
+	var state testState
+	if err := state.Deserialize(binarystreams.NewReaderFromBytes(packet.Data), nil); err != nil {
+		t.Fatalf("Deserialize cloud-source full state failed: %v", err)
+	}
+	if state.Value != "cloud" {
+		t.Fatalf("cloud-source full state value = %q, want cloud", state.Value)
+	}
+
+	clientConn.Close() //nolint:errcheck
+	select {
+	case <-serverDone:
+	case <-time.After(time.Second):
+		t.Fatal("AcceptConn did not return after client close")
 	}
 }
 
@@ -495,6 +598,56 @@ func TestCloudWholeStoreSubscriptionForwardsToConnectedDevice(t *testing.T) {
 		subscriptionPacket.Key != "" ||
 		subscriptionPacket.Action != protocol.StoreSubscribe {
 		t.Fatalf("forwarded subscription = %+v, want TestStore empty-key subscribe", subscriptionPacket)
+	}
+}
+
+func TestCloudSourcePartialForwardsToConnectedDevice(t *testing.T) {
+	manager := NewDeviceManager(DeviceManagerConfig{
+		Stores: func(string) ([]restream.Store, error) {
+			return []restream.Store{
+				restream.NewCloudSourceForDeviceStore[testState, *testState, *testPartial](
+					"CloudSourceStore",
+					&testState{},
+					restream.AccessLevelPublic,
+				),
+			}, nil
+		},
+	})
+	device, err := manager.GetDevice("device-1")
+	if err != nil {
+		t.Fatalf("GetDevice failed: %v", err)
+	}
+
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	device.DeviceConnected(NewConnection(serverConn))
+	value := "friend"
+	partialBytes, err := restream.SerializeToBytes(&testPartial{Value: &value}, nil)
+	if err != nil {
+		t.Fatalf("SerializeToBytes failed: %v", err)
+	}
+	if err := device.StoreRegistry.ApplyPartialToStore("CloudSourceStore", partialBytes); err != nil {
+		t.Fatalf("ApplyPartialToStore failed: %v", err)
+	}
+
+	_, forwardedBytes, err := clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read forwarded partial failed: %v", err)
+	}
+	packet, ok := mustDecodePacket(t, forwardedBytes).(*protocol.StoreStatePacket)
+	if !ok {
+		t.Fatalf("forwarded packet type = %T, want *StoreStatePacket", mustDecodePacket(t, forwardedBytes))
+	}
+	if packet.StoreName != "CloudSourceStore" || packet.Kind() != protocol.KindPartialState {
+		t.Fatalf("forwarded packet = %+v, want partial state for CloudSourceStore", packet)
+	}
+	var partial testPartial
+	if err := partial.Deserialize(binarystreams.NewReaderFromBytes(packet.Data), nil); err != nil {
+		t.Fatalf("Deserialize forwarded partial failed: %v", err)
+	}
+	if partial.Value == nil || *partial.Value != "friend" {
+		t.Fatalf("forwarded partial value = %v, want friend", partial.Value)
 	}
 }
 

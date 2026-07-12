@@ -327,6 +327,7 @@ func TestStreamerStoreTypesFilterRelayTraffic(t *testing.T) {
 	noRelayStore := newStreamerTypedRelayStore("NoRelayStore", restream.StoreTypeDeviceWithNoRelay)
 	cloudImplStore := newStreamerTypedRelayStore("CloudImplStore", restream.StoreTypeDeviceWithCloudImpl)
 	deviceAndCloudStore := newStreamerTypedRelayStore("DeviceAndCloudStore", restream.StoreTypeDeviceAndCloud)
+	cloudSourceStore := newStreamerTypedRelayStore("CloudSourceStore", restream.StoreTypeDeviceWithCloudSource)
 	cloudImplOfDeviceStore := newStreamerTypedRelayStore("CloudImplOfDeviceStore", restream.StoreTypeCloudImplOfDevice)
 	cloudOnlyStore := newStreamerTypedRelayStore("CloudOnlyStore", restream.StoreTypeCloudOnly)
 	registry, err := restream.NewStoreRegistry([]restream.Store{
@@ -334,6 +335,7 @@ func TestStreamerStoreTypesFilterRelayTraffic(t *testing.T) {
 		noRelayStore,
 		cloudImplStore,
 		deviceAndCloudStore,
+		cloudSourceStore,
 		cloudImplOfDeviceStore,
 		cloudOnlyStore,
 	})
@@ -369,7 +371,7 @@ func TestStreamerStoreTypesFilterRelayTraffic(t *testing.T) {
 		}
 		fullStateStores[storePacket.StoreName] = struct{}{}
 	}
-	for _, unexpected := range []string{"NoRelayStore", "DeviceAndCloudStore", "CloudImplOfDeviceStore", "CloudOnlyStore"} {
+	for _, unexpected := range []string{"NoRelayStore", "DeviceAndCloudStore", "CloudSourceStore", "CloudImplOfDeviceStore", "CloudOnlyStore"} {
 		if _, ok := fullStateStores[unexpected]; ok {
 			t.Fatalf("sendFullStates sent %s; want skipped", unexpected)
 		}
@@ -382,6 +384,7 @@ func TestStreamerStoreTypesFilterRelayTraffic(t *testing.T) {
 
 	s.partialCallback("NoRelayStore", nil, &streamerTestPartial{})
 	s.partialCallback("DeviceAndCloudStore", nil, &streamerTestPartial{})
+	s.partialCallback("CloudSourceStore", nil, &streamerTestPartial{})
 	s.partialCallback("CloudImplOfDeviceStore", nil, &streamerTestPartial{})
 	s.partialCallback("CloudOnlyStore", nil, &streamerTestPartial{})
 	if len(sendQueue) != 0 {
@@ -402,6 +405,70 @@ func TestStreamerStoreTypesFilterRelayTraffic(t *testing.T) {
 	}
 	if storePacket.StoreName != "CloudImplStore" || storePacket.Kind() != protocol.KindPartialState {
 		t.Fatalf("store packet = %+v, want partial state for CloudImplStore", storePacket)
+	}
+}
+
+func TestStreamerAppliesInboundRelayStateOnlyForCloudSourceStores(t *testing.T) {
+	stores := []restream.Store{
+		newStreamerTypedRelayStore("RelayStore", restream.StoreTypeDeviceWithRelay),
+		newStreamerTypedRelayStore("NoRelayStore", restream.StoreTypeDeviceWithNoRelay),
+		newStreamerTypedRelayStore("CloudImplStore", restream.StoreTypeDeviceWithCloudImpl),
+		newStreamerTypedRelayStore("DeviceAndCloudStore", restream.StoreTypeDeviceAndCloud),
+		newStreamerTypedRelayStore("CloudSourceStore", restream.StoreTypeDeviceWithCloudSource),
+		newStreamerTypedRelayStore("CloudImplOfDeviceStore", restream.StoreTypeCloudImplOfDevice),
+		newStreamerTypedRelayStore("CloudSourceForDeviceStore", restream.StoreTypeCloudSourceForDevice),
+		newStreamerTypedRelayStore("CloudOnlyStore", restream.StoreTypeCloudOnly),
+	}
+	registry, err := restream.NewStoreRegistry(stores)
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	s := NewStreamer(registry, nil, nil, Config{})
+	defer s.Close() //nolint:errcheck
+
+	applied := map[string]int{}
+	registry.SubscribeToPartialApplies(func(storeName string, _ [][]any, _ restream.Partial) {
+		applied[storeName]++
+	})
+
+	fullStateBytes, err := restream.SerializeToBytes(&streamerTestState{Value: "cloud full"}, nil)
+	if err != nil {
+		t.Fatalf("SerializeToBytes full state failed: %v", err)
+	}
+	partialValue := "cloud partial"
+	partialBytes, err := restream.SerializeToBytes(&streamerTestPartial{Value: &partialValue}, nil)
+	if err != nil {
+		t.Fatalf("SerializeToBytes partial failed: %v", err)
+	}
+
+	for _, store := range stores {
+		storeName := store.GetName()
+		if err := s.handleStoreState(protocol.NewFullStatePacket(storeName, fullStateBytes)); err != nil {
+			t.Fatalf("handleStoreState full for %s failed: %v", storeName, err)
+		}
+		if err := s.handleStoreState(protocol.NewPartialStatePacket(storeName, partialBytes)); err != nil {
+			t.Fatalf("handleStoreState partial for %s failed: %v", storeName, err)
+		}
+	}
+
+	for _, store := range stores {
+		storeName := store.GetName()
+		state := readStreamerTestStoreState(t, registry, storeName)
+		if storeName == "CloudSourceStore" {
+			if state.Value != "cloud partial" {
+				t.Fatalf("%s value = %q, want cloud partial", storeName, state.Value)
+			}
+			if applied[storeName] != 1 {
+				t.Fatalf("%s applied count = %d, want 1", storeName, applied[storeName])
+			}
+			continue
+		}
+		if state.Value != "" {
+			t.Fatalf("%s value = %q, want unchanged", storeName, state.Value)
+		}
+		if applied[storeName] != 0 {
+			t.Fatalf("%s applied count = %d, want 0", storeName, applied[storeName])
+		}
 	}
 }
 
@@ -507,6 +574,15 @@ func assertActiveRelayKeys(
 	}
 }
 
+func readStreamerTestStoreState(t *testing.T, registry *restream.StoreRegistry, storeName string) *streamerTestState {
+	t.Helper()
+	snapshot, err := registry.GetFullStateSnapshot(storeName, restream.AccessLevelPublic)
+	if err != nil {
+		t.Fatalf("GetFullStateSnapshot %s failed: %v", storeName, err)
+	}
+	return snapshot.(*streamerTestState)
+}
+
 type streamerTypedRelayStore struct {
 	*restream.RelayStore[streamerTestState, *streamerTestState, *streamerTestPartial]
 	storeType restream.StoreType
@@ -540,15 +616,15 @@ func (s *streamerTestState) RestreamClone() *streamerTestState {
 	return &clone
 }
 
-func (s *streamerTestState) Serialize(*binarystreams.Writer, *restream.VarInfoStruct) error {
+func (s *streamerTestState) Serialize(w *binarystreams.Writer, _ *restream.VarInfoStruct) error {
 	if s.onSerialize != nil {
 		s.onSerialize()
 	}
-	return nil
+	return restream.SerializeValue(s.Value, w, &restream.VarInfoPrimitive{DataType: restream.SerializationTypeString})
 }
 
-func (*streamerTestState) Deserialize(*binarystreams.Reader, *restream.VarInfoStruct) error {
-	return nil
+func (s *streamerTestState) Deserialize(r *binarystreams.Reader, _ *restream.VarInfoStruct) error {
+	return restream.DeserializeValue(&s.Value, r, &restream.VarInfoPrimitive{DataType: restream.SerializationTypeString})
 }
 
 type streamerTestPartial struct {
@@ -556,22 +632,37 @@ type streamerTestPartial struct {
 	onSerialize func()
 }
 
-func (p *streamerTestPartial) Serialize(*binarystreams.Writer, *restream.VarInfoStruct) error {
+func (p *streamerTestPartial) Serialize(w *binarystreams.Writer, _ *restream.VarInfoStruct) error {
 	if p.onSerialize != nil {
 		p.onSerialize()
 	}
-	return nil
+	return restream.SerializeValue(p.Value, w, &restream.VarInfoPointer{
+		NotNil:  false,
+		SubType: &restream.VarInfoPrimitive{DataType: restream.SerializationTypeString},
+	})
 }
 
-func (*streamerTestPartial) Deserialize(*binarystreams.Reader, *restream.VarInfoStruct) error {
-	return nil
+func (p *streamerTestPartial) Deserialize(r *binarystreams.Reader, _ *restream.VarInfoStruct) error {
+	return restream.DeserializeValue(&p.Value, r, &restream.VarInfoPointer{
+		NotNil:  false,
+		SubType: &restream.VarInfoPrimitive{DataType: restream.SerializationTypeString},
+	})
 }
 
-func (*streamerTestPartial) MergeOntoPartial(any) {
+func (p *streamerTestPartial) MergeOntoPartial(other any) {
+	po := other.(*streamerTestPartial)
+	if p.Value != nil {
+		po.Value = p.Value
+	}
 }
 
-func (*streamerTestPartial) ApplyTo(any) [][]any {
-	return nil
+func (p *streamerTestPartial) ApplyTo(state any) [][]any {
+	if p.Value == nil {
+		return nil
+	}
+	st := state.(*streamerTestState)
+	st.Value = *p.Value
+	return [][]any{{"Value"}}
 }
 
 func newTestWebsocketPair(t *testing.T) (*gws.Conn, *gws.Conn, func()) {

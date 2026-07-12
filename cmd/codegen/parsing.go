@@ -90,7 +90,14 @@ func (ft *FileTracking) parseStructDecls() error { //nolint:gocyclo,funlen
 				if err != nil {
 					return err
 				}
-				ft.pt.addRelayStoreFactory(ft, si, storeAnnotation.StoreName, stateRef, minimumAccessLevelExpr)
+				ft.pt.addRelayStoreFactory(
+					ft,
+					si,
+					storeAnnotation.StoreName,
+					stateRef,
+					minimumAccessLevelExpr,
+					storeAnnotation.StoreType.relayStoreConstructor(),
+				)
 			}
 			ft.createGoStoreMethods(si, storeAnnotation.StoreName, storeAnnotation.StoreType.restreamExpr())
 			ft.createTSStoreNameConst(si.Name, storeAnnotation.StoreName)
@@ -219,12 +226,14 @@ type parsedRestreamStoreAnnotation struct {
 type restreamStoreAnnotationType string
 
 const (
-	restreamStoreTypeDeviceWithRelay     restreamStoreAnnotationType = "DeviceWithRelay"
-	restreamStoreTypeDeviceWithNoRelay   restreamStoreAnnotationType = "DeviceWithNoRelay"
-	restreamStoreTypeDeviceWithCloudImpl restreamStoreAnnotationType = "DeviceWithCloudImpl"
-	restreamStoreTypeDeviceAndCloud      restreamStoreAnnotationType = "DeviceAndCloud"
-	restreamStoreTypeCloudOnly           restreamStoreAnnotationType = "CloudOnly"
-	restreamStoreTypeCloudImplOfDevice   restreamStoreAnnotationType = "CloudImplOfDevice"
+	restreamStoreTypeDeviceWithRelay       restreamStoreAnnotationType = "DeviceWithRelay"
+	restreamStoreTypeDeviceWithNoRelay     restreamStoreAnnotationType = "DeviceWithNoRelay"
+	restreamStoreTypeDeviceWithCloudImpl   restreamStoreAnnotationType = "DeviceWithCloudImpl"
+	restreamStoreTypeDeviceAndCloud        restreamStoreAnnotationType = "DeviceAndCloud"
+	restreamStoreTypeDeviceWithCloudSource restreamStoreAnnotationType = "DeviceWithCloudSource"
+	restreamStoreTypeCloudOnly             restreamStoreAnnotationType = "CloudOnly"
+	restreamStoreTypeCloudImplOfDevice     restreamStoreAnnotationType = "CloudImplOfDevice"
+	restreamStoreTypeCloudSourceForDevice  restreamStoreAnnotationType = "CloudSourceForDevice"
 )
 
 func (t restreamStoreAnnotationType) restreamExpr() string {
@@ -232,7 +241,17 @@ func (t restreamStoreAnnotationType) restreamExpr() string {
 }
 
 func (t restreamStoreAnnotationType) generatesRelayStore() bool {
-	return t == restreamStoreTypeDeviceWithRelay
+	return t == restreamStoreTypeDeviceWithRelay ||
+		t == restreamStoreTypeDeviceWithCloudSource
+}
+
+func (t restreamStoreAnnotationType) relayStoreConstructor() string {
+	switch t {
+	case restreamStoreTypeDeviceWithCloudSource:
+		return "NewCloudSourceForDeviceStore"
+	default:
+		return "NewRelayStore"
+	}
 }
 
 func parseRestreamStoreAnnotation(dec string) (parsedRestreamStoreAnnotation, error) {
@@ -344,12 +363,16 @@ func parseRestreamStoreTypeArg(arg string) (restreamStoreAnnotationType, error) 
 		return restreamStoreTypeDeviceWithCloudImpl, nil
 	case restreamStoreTypeDeviceAndCloud:
 		return restreamStoreTypeDeviceAndCloud, nil
+	case restreamStoreTypeDeviceWithCloudSource:
+		return restreamStoreTypeDeviceWithCloudSource, nil
 	case restreamStoreTypeCloudOnly:
 		return restreamStoreTypeCloudOnly, nil
 	case restreamStoreTypeCloudImplOfDevice:
 		return restreamStoreTypeCloudImplOfDevice, nil
+	case restreamStoreTypeCloudSourceForDevice:
+		return restreamStoreTypeCloudSourceForDevice, nil
 	default:
-		return "", fmt.Errorf("unknown @restream.store type %q; expected DeviceWithRelay, DeviceWithNoRelay, DeviceWithCloudImpl, DeviceAndCloud, CloudImplOfDevice, or CloudOnly", arg)
+		return "", fmt.Errorf("unknown @restream.store type %q; expected DeviceWithRelay, DeviceWithNoRelay, DeviceWithCloudImpl, DeviceAndCloud, DeviceWithCloudSource, CloudImplOfDevice, CloudSourceForDevice, or CloudOnly", arg)
 	}
 }
 

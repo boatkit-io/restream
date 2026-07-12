@@ -36,6 +36,30 @@ func NewRelayStore[S any, SP StoreDataPtrType[S], P Partial](
 	return s
 }
 
+// CloudSourceForDeviceStore is a simple cloud-owned store data holder whose state streams down to a device.
+type CloudSourceForDeviceStore[S any, SP StoreDataPtrType[S], P Partial] struct {
+	name               string
+	minimumAccessLevel AccessLevel
+
+	storeData *StoreData[S, SP, P]
+}
+
+// NewCloudSourceForDeviceStore returns a cloud-owned store whose state is streamed down to its device.
+func NewCloudSourceForDeviceStore[S any, SP StoreDataPtrType[S], P Partial](
+	name string,
+	baseState *S,
+	minimumAccessLevel AccessLevel,
+) *CloudSourceForDeviceStore[S, SP, P] {
+	s := &CloudSourceForDeviceStore[S, SP, P]{
+		name:               name,
+		minimumAccessLevel: minimumAccessLevel,
+	}
+
+	s.storeData = NewStoreData[S, SP, P](s, baseState)
+
+	return s
+}
+
 // GetName implements Store.
 func (s *RelayStore[S, SP, P]) GetName() string {
 	return s.name
@@ -58,6 +82,31 @@ func (s *RelayStore[S, SP, P]) GetStoreData() StoreDataBase {
 
 // SubscribeToField implements the restream.Store interface
 func (s *RelayStore[S, SP, P]) SubscribeToField(field []any, callback any) {
+	s.storeData.SubscribeToField(field, callback)
+}
+
+// GetName implements Store.
+func (s *CloudSourceForDeviceStore[S, SP, P]) GetName() string {
+	return s.name
+}
+
+// GetMinimumAccessLevel implements MinimumAccessLevelStore.
+func (s *CloudSourceForDeviceStore[S, SP, P]) GetMinimumAccessLevel() AccessLevel {
+	return s.minimumAccessLevel
+}
+
+// GetStoreType implements Store.
+func (s *CloudSourceForDeviceStore[S, SP, P]) GetStoreType() StoreType {
+	return StoreTypeCloudSourceForDevice
+}
+
+// GetStoreData implements Store.
+func (s *CloudSourceForDeviceStore[S, SP, P]) GetStoreData() StoreDataBase {
+	return s.storeData
+}
+
+// SubscribeToField implements the restream.Store interface.
+func (s *CloudSourceForDeviceStore[S, SP, P]) SubscribeToField(field []any, callback any) {
 	s.storeData.SubscribeToField(field, callback)
 }
 

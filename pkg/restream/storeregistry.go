@@ -330,6 +330,33 @@ func (s *StoreRegistry) StoreStreamsToRelay(storeName string) (bool, error) {
 	return StoreTypeStreamsToRelay(storeType), nil
 }
 
+// StoreReceivesFromRelay reports whether storeName should accept full states and partials from a relay.
+func (s *StoreRegistry) StoreReceivesFromRelay(storeName string) (bool, error) {
+	storeType, err := s.GetStoreType(storeName)
+	if err != nil {
+		return false, err
+	}
+	return StoreTypeReceivesFromRelay(storeType), nil
+}
+
+// StoreAcceptsDeviceRelayUpdates reports whether storeName should accept full states and partials from a device relay.
+func (s *StoreRegistry) StoreAcceptsDeviceRelayUpdates(storeName string) (bool, error) {
+	storeType, err := s.GetStoreType(storeName)
+	if err != nil {
+		return false, err
+	}
+	return StoreTypeAcceptsDeviceRelayUpdates(storeType), nil
+}
+
+// StoreStreamsFromRelay reports whether storeName should send cloud-originated full states and partials to a device.
+func (s *StoreRegistry) StoreStreamsFromRelay(storeName string) (bool, error) {
+	storeType, err := s.GetStoreType(storeName)
+	if err != nil {
+		return false, err
+	}
+	return StoreTypeStreamsFromRelay(storeType), nil
+}
+
 func requireStoreAccess(si *StoreInfo, accessLevel AccessLevel) error {
 	if accessLevel >= si.MinAccessLevel {
 		return nil
