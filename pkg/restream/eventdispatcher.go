@@ -40,6 +40,7 @@ func NewEventDispatcher(log *logrus.Logger) *EventDispatcher {
 	return &EventDispatcher{
 		log: log,
 
+		mutex:          smartmutex.SmartMutex{Name: "restream.EventDispatcher.mutex"},
 		eventLookup:    map[string]eventInfo{},
 		eventCallbacks: subscribableevent.NewEvent[EventCallbackFunc](),
 	}

@@ -96,6 +96,7 @@ func NewStoreData[S any, SP StoreDataPtrType[S], P Partial](store Store, state S
 
 	return &StoreData[S, SP, P]{
 		name:         name,
+		stateMutex:   smartmutex.SmartMutex{Name: "restream.StoreData(" + name + ").stateMutex"},
 		state:        state,
 		stateReflect: ds,
 

@@ -160,6 +160,7 @@ func AddSocketHandlers(
 		accessLookup: accessLookup,
 
 		emitQueue:          make(chan emitMessage, 100),
+		subscriptionMutex:  smartmutex.SmartMutex{Name: "restream.socketTracker.subscriptionMutex"},
 		storeSubscriptions: map[string]map[string]int{},
 	}
 

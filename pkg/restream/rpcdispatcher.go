@@ -45,6 +45,7 @@ func NewRPCDispatcher(log *logrus.Logger) *RPCDispatcher {
 	return &RPCDispatcher{
 		log: log,
 
+		mutex:     smartmutex.SmartMutex{Name: "restream.RPCDispatcher.mutex"},
 		rpcLookup: make(map[string]rpcInfo),
 	}
 }
