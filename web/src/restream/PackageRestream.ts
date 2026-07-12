@@ -30,6 +30,8 @@ export enum StoreType {
     CloudOnly = 3,
     CloudImplOfDevice = 4,
     DeviceAndCloud = 5,
+    DeviceWithCloudSource = 6,
+    CloudSourceForDevice = 7,
 }
 
 export const StoreTypeDeviceWithRelay = 0;

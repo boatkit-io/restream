@@ -285,7 +285,7 @@ func TestStoreAnnotationGeneratesStoreBoilerplate(t *testing.T) {
 
 	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/storeannotation
 
-go 1.26.3
+go 1.26.5
 
 require github.com/boatkit-io/restream v0.0.0
 
@@ -412,7 +412,7 @@ func TestStoreAnnotationStoreTypesControlRelayFactory(t *testing.T) {
 
 	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/storeannotationtypes
 
-go 1.26.3
+go 1.26.5
 
 require github.com/boatkit-io/restream v0.0.0
 
@@ -570,7 +570,7 @@ func TestStoreAnnotationRelayFactoryResolvesImportedMinimumAccessConstant(t *tes
 
 	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/importedaccess
 
-go 1.26.3
+go 1.26.5
 
 require github.com/boatkit-io/restream v0.0.0
 
@@ -727,7 +727,7 @@ func TestStoreAnnotationFindsReferencedStateInAnotherPackage(t *testing.T) {
 
 	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/crossstore
 
-go 1.26.3
+go 1.26.5
 
 require github.com/boatkit-io/restream v0.0.0
 
@@ -870,7 +870,7 @@ func TestRelayStoreFactoryCanBeGeneratedToConfiguredPackage(t *testing.T) {
 
 	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/relayconfig
 
-go 1.26.3
+go 1.26.5
 
 require github.com/boatkit-io/restream v0.0.0
 
@@ -955,7 +955,7 @@ func TestStoreAnnotationPreservesCorrectStoreDataFormatting(t *testing.T) {
 
 	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/storeannotationformat
 
-go 1.26.3
+go 1.26.5
 
 require github.com/boatkit-io/restream v0.0.0
 
@@ -1589,7 +1589,7 @@ func setupFieldCompatibilityGitProject(t *testing.T) (string, string) {
 
 	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/fieldcompat
 
-go 1.26.3
+go 1.26.5
 
 require github.com/boatkit-io/restream v0.0.0
 

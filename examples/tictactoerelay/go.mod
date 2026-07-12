@@ -1,6 +1,6 @@
 module github.com/boatkit-io/restream/examples/tictactoerelay
 
-go 1.26.3
+go 1.26.5
 
 require (
 	github.com/boatkit-io/restream v0.0.0
