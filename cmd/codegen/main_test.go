@@ -142,6 +142,52 @@ type AlreadyGenerated struct{}
 	}
 }
 
+func TestParseProjectIgnoresFilesExcludedByBuildConstraints(t *testing.T) {
+	projectDir := t.TempDir()
+	serverDir := filepath.Join(projectDir, "cmd", "server")
+	if err := os.MkdirAll(serverDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/buildconstraints
+
+go 1.26.2
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(serverDir, "model.go"), []byte(`package main
+
+// @restream.fields
+type Model struct {
+	Count int
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(serverDir, "disabled_backend.go"), []byte(`//go:build customtag
+
+package main
+
+import "example.com/buildconstraints/internal/disabled"
+
+var _ = disabled.Value
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	pt := NewProjTracking(projectDir, &restreamConfig{
+		InputDirs: []string{"cmd/server"},
+	})
+	if err := pt.parseProject(); err != nil {
+		t.Fatal(err)
+	}
+	if len(pt.files) != 1 || filepath.Base(pt.files[0].inFile) != "model.go" {
+		t.Fatalf("parsed files = %v, want only model.go", fileTrackingBaseNames(pt.files))
+	}
+}
+
 func TestConstIgnoreAnnotationSkipsTSConst(t *testing.T) {
 	projectDir := t.TempDir()
 	serverDir := filepath.Join(projectDir, "cmd", "server")

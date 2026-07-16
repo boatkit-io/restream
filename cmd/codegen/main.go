@@ -4,6 +4,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"go/build"
 	"go/parser"
 	"go/token"
 	"go/types"
@@ -277,6 +278,14 @@ func (pt *ProjTracking) parseFile(fn string) error {
 func restreamSourceFileFilter(dir string) func(os.FileInfo) bool {
 	return func(info os.FileInfo) bool {
 		if info.IsDir() || !strings.HasSuffix(info.Name(), ".go") {
+			return false
+		}
+
+		matches, err := build.Default.MatchFile(dir, info.Name())
+		if err != nil {
+			return true
+		}
+		if !matches {
 			return false
 		}
 
