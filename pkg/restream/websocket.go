@@ -1,6 +1,9 @@
 package restream
 
 import (
+	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -269,20 +272,74 @@ func (st *socketTracker) emitMessage(name string, arg any) {
 }
 
 func (st *socketTracker) queueEmitMessage(msg emitMessage) {
-	st.emitQueueMutex.RLock()
+	st.emitQueueMutex.Lock()
 	if st.emitQueue == nil {
-		st.emitQueueMutex.RUnlock()
+		st.emitQueueMutex.Unlock()
 		return
 	}
 	select {
 	case st.emitQueue <- msg:
-		st.emitQueueMutex.RUnlock()
+		st.emitQueueMutex.Unlock()
 	default:
-		st.emitQueueMutex.RUnlock()
+		queueCapacity := cap(st.emitQueue)
+		// Overflow always disconnects this client, so drain the doomed queue for
+		// diagnostics and close it before allowing another producer to enqueue.
+		queuedCount, queuedSummary := drainEmitQueueSummary(st.emitQueue)
+		close(st.emitQueue)
+		st.emitQueue = nil
+		st.emitQueueMutex.Unlock()
 		if st.log != nil {
-			st.log.Warnf("Disconnecting websocket client with full emit queue while sending %s", msg.Name)
+			st.log.Warnf(
+				"Disconnecting websocket client with full emit queue while sending %s; queued messages (%d/%d): %s",
+				describeEmitMessage(msg),
+				queuedCount,
+				queueCapacity,
+				queuedSummary,
+			)
 		}
 		st.disconnect()
+	}
+}
+
+func drainEmitQueueSummary(queue chan emitMessage) (int, string) {
+	counts := map[string]int{}
+	total := 0
+	for {
+		select {
+		case msg := <-queue:
+			counts[describeEmitMessage(msg)]++
+			total++
+		default:
+			keys := make([]string, 0, len(counts))
+			for key := range counts {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+
+			parts := make([]string, 0, len(keys))
+			for _, key := range keys {
+				parts = append(parts, fmt.Sprintf("%s: %d", key, counts[key]))
+			}
+			if len(parts) == 0 {
+				return total, "none"
+			}
+			return total, strings.Join(parts, ", ")
+		}
+	}
+}
+
+func describeEmitMessage(msg emitMessage) string {
+	switch message := msg.Message.(type) {
+	case StoreUpdateFullMessage:
+		return fmt.Sprintf("%s/full store=%q", msg.Name, message.StoreName)
+	case *StoreUpdateFullMessage:
+		return fmt.Sprintf("%s/full store=%q", msg.Name, message.StoreName)
+	case StoreUpdatePartialMessage:
+		return fmt.Sprintf("%s/partial store=%q", msg.Name, message.StoreName)
+	case *StoreUpdatePartialMessage:
+		return fmt.Sprintf("%s/partial store=%q", msg.Name, message.StoreName)
+	default:
+		return msg.Name
 	}
 }
 

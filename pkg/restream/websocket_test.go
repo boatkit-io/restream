@@ -1,7 +1,9 @@
 package restream
 
 import (
+	"bytes"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -479,6 +481,74 @@ func TestViewerSocketEmitMessageDoesNotBlockWhenQueueIsFull(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("emitMessage blocked on a full emit queue")
+	}
+}
+
+func TestViewerSocketFullEmitQueueLogsMessageSummary(t *testing.T) {
+	var logOutput bytes.Buffer
+	log := logrus.New()
+	log.SetOutput(&logOutput)
+	log.SetFormatter(&logrus.TextFormatter{
+		DisableColors:    true,
+		DisableTimestamp: true,
+	})
+
+	socket := &socketTracker{
+		log:       log,
+		emitQueue: make(chan emitMessage, 5),
+	}
+	socket.emitQueue <- emitMessage{Name: SocketEventNameEvent, Message: EventMessage{EventName: "alarm"}}
+	socket.emitQueue <- emitMessage{
+		Name: SocketEventNameStoreUpdate,
+		Message: StoreUpdatePartialMessage{StoreUpdateMessage: StoreUpdateMessage{
+			StoreName: "store-a",
+			Kind:      StoreUpdatePartial,
+		}},
+	}
+	socket.emitQueue <- emitMessage{
+		Name: SocketEventNameStoreUpdate,
+		Message: StoreUpdateFullMessage{StoreUpdateMessage: StoreUpdateMessage{
+			StoreName: "store-a",
+			Kind:      StoreUpdateFull,
+		}},
+	}
+	socket.emitQueue <- emitMessage{
+		Name: SocketEventNameStoreUpdate,
+		Message: StoreUpdatePartialMessage{StoreUpdateMessage: StoreUpdateMessage{
+			StoreName: "store-b",
+			Kind:      StoreUpdatePartial,
+		}},
+	}
+	socket.emitQueue <- emitMessage{
+		Name: SocketEventNameStoreUpdate,
+		Message: StoreUpdatePartialMessage{StoreUpdateMessage: StoreUpdateMessage{
+			StoreName: "store-a",
+			Kind:      StoreUpdatePartial,
+		}},
+	}
+
+	socket.emitMessage(SocketEventNameStoreUpdate, StoreUpdatePartialMessage{
+		StoreUpdateMessage: StoreUpdateMessage{
+			StoreName: "store-c",
+			Kind:      StoreUpdatePartial,
+		},
+	})
+
+	logged := logOutput.String()
+	expectedParts := []string{
+		`while sending storeupdate/partial store=\"store-c\"`,
+		`queued messages (5/5): event: 1`,
+		`storeupdate/full store=\"store-a\": 1`,
+		`storeupdate/partial store=\"store-a\": 2`,
+		`storeupdate/partial store=\"store-b\": 1`,
+	}
+	for _, expected := range expectedParts {
+		if !strings.Contains(logged, expected) {
+			t.Errorf("log output %q does not contain %q", logged, expected)
+		}
+	}
+	if socket.emitQueue != nil {
+		t.Fatal("full emit queue was not closed")
 	}
 }
 
