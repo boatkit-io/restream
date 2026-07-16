@@ -56,6 +56,8 @@ type relaySubscriptionKey struct {
 
 type outboundPacket struct {
 	description string
+	storeName   string
+	packetKind  protocol.PacketKind
 	bytes       []byte
 	build       func() ([]byte, error)
 }
@@ -435,7 +437,7 @@ func (s *Streamer) sendFullState(storeName string) error {
 	if err != nil {
 		return err
 	}
-	return s.enqueuePacketBuilder("full state "+storeName, func() ([]byte, error) {
+	return s.enqueueStorePacketBuilder("full state "+storeName, storeName, protocol.KindFullState, func() ([]byte, error) {
 		stateBytes, err := restream.SerializeToBytes(stateSnapshot, nil)
 		if err != nil {
 			return nil, err
@@ -445,7 +447,7 @@ func (s *Streamer) sendFullState(storeName string) error {
 }
 
 func (s *Streamer) sendPartial(storeName string, partial restream.Partial) error {
-	return s.enqueuePacketBuilder("partial state "+storeName, func() ([]byte, error) {
+	return s.enqueueStorePacketBuilder("partial state "+storeName, storeName, protocol.KindPartialState, func() ([]byte, error) {
 		partialBytes, err := restream.SerializeToBytes(partial, nil)
 		if err != nil {
 			return nil, err
@@ -647,9 +649,16 @@ func (s *Streamer) enqueuePacket(packetDescription string, b []byte) error {
 	})
 }
 
-func (s *Streamer) enqueuePacketBuilder(packetDescription string, build func() ([]byte, error)) error {
+func (s *Streamer) enqueueStorePacketBuilder(
+	packetDescription string,
+	storeName string,
+	packetKind protocol.PacketKind,
+	build func() ([]byte, error),
+) error {
 	return s.enqueueOutboundPacket(outboundPacket{
 		description: packetDescription,
+		storeName:   storeName,
+		packetKind:  packetKind,
 		build:       build,
 	})
 }
@@ -715,6 +724,13 @@ func (s *Streamer) handleSendQueue(conn *gws.Conn, sendQueue <-chan outboundPack
 				}
 				if s.opts.Callbacks.OnBytesSent != nil {
 					s.opts.Callbacks.OnBytesSent(len(b))
+				}
+				if packet.storeName != "" && s.opts.Callbacks.OnStorePacketSent != nil {
+					s.opts.Callbacks.OnStorePacketSent(StorePacketSentInfo{
+						StoreName:  packet.storeName,
+						PacketKind: packet.packetKind,
+						Bytes:      len(b),
+					})
 				}
 			}
 		}

@@ -56,15 +56,23 @@ type SendQueueFullInfo struct {
 	QueueCapacity     int
 }
 
+// StorePacketSentInfo describes a store packet successfully written to the relay connection.
+type StorePacketSentInfo struct {
+	StoreName  string
+	PacketKind protocol.PacketKind
+	Bytes      int
+}
+
 // Callbacks observe streamer lifecycle and extension packets.
 type Callbacks struct {
-	OnConnected     func(*protocol.ConnectedPacket)
-	OnDisconnected  func(error)
-	OnDialError     func(error)
-	OnBytesSent     func(int)
-	OnSendQueueFull func(SendQueueFullInfo)
-	OnCustomPacket  func(*protocol.CustomPacket) error
-	OnRawPacket     func(*protocol.RawPacket) error
+	OnConnected       func(*protocol.ConnectedPacket)
+	OnDisconnected    func(error)
+	OnDialError       func(error)
+	OnBytesSent       func(int)
+	OnStorePacketSent func(StorePacketSentInfo)
+	OnSendQueueFull   func(SendQueueFullInfo)
+	OnCustomPacket    func(*protocol.CustomPacket) error
+	OnRawPacket       func(*protocol.RawPacket) error
 }
 
 // Config configures a Streamer.

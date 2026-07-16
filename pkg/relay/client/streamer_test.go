@@ -232,7 +232,12 @@ func TestSendFullStateUsesStoreMinimumAccess(t *testing.T) {
 		t.Fatalf("sendFullState failed: %v", err)
 	}
 
-	packetBytes := mustBuildOutboundPacket(t, <-sendQueue)
+	outbound := <-sendQueue
+	if outbound.storeName != "TestStore" || outbound.packetKind != protocol.KindFullState {
+		t.Fatalf("outbound store metadata = %q/%d, want TestStore/%d",
+			outbound.storeName, outbound.packetKind, protocol.KindFullState)
+	}
+	packetBytes := mustBuildOutboundPacket(t, outbound)
 	packet, err := protocol.DecodePacket(packetBytes)
 	if err != nil {
 		t.Fatalf("DecodePacket failed: %v", err)
@@ -244,6 +249,53 @@ func TestSendFullStateUsesStoreMinimumAccess(t *testing.T) {
 	if storePacket.StoreName != "TestStore" || storePacket.Kind() != protocol.KindFullState {
 		t.Fatalf("store packet = %+v, want full state for TestStore", storePacket)
 	}
+}
+
+func TestStorePacketSentCallbackRunsAfterSuccessfulWrite(t *testing.T) {
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	sent := make(chan StorePacketSentInfo, 1)
+	s := &Streamer{opts: Config{
+		WriteTimeout: time.Second,
+		Callbacks: Callbacks{
+			OnStorePacketSent: func(info StorePacketSentInfo) {
+				sent <- info
+			},
+		},
+	}}
+	sendQueue := make(chan outboundPacket, 1)
+	sendDone := make(chan struct{})
+	s.handleSendQueue(clientConn, sendQueue, sendDone)
+
+	packetBytes, err := protocol.EncodePacket(protocol.NewPartialStatePacket("TestStore", []byte{1, 2, 3}))
+	if err != nil {
+		t.Fatalf("EncodePacket failed: %v", err)
+	}
+	sendQueue <- outboundPacket{
+		description: "partial state TestStore",
+		storeName:   "TestStore",
+		packetKind:  protocol.KindPartialState,
+		bytes:       packetBytes,
+	}
+
+	_, receivedBytes, err := serverConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("ReadMessage failed: %v", err)
+	}
+	if string(receivedBytes) != string(packetBytes) {
+		t.Fatalf("received bytes = %v, want %v", receivedBytes, packetBytes)
+	}
+
+	select {
+	case info := <-sent:
+		if info.StoreName != "TestStore" || info.PacketKind != protocol.KindPartialState || info.Bytes != len(packetBytes) {
+			t.Fatalf("sent info = %+v, want TestStore partial state with %d bytes", info, len(packetBytes))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for store packet sent callback")
+	}
+	close(sendDone)
 }
 
 func TestSendFullStateDefersSerializationUntilOutboundPacketBuild(t *testing.T) {
