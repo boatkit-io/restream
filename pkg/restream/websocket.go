@@ -268,19 +268,6 @@ func (st *socketTracker) emitMessage(name string, arg any) {
 	st.queueEmitMessage(emitMessage{Name: name, Message: arg})
 }
 
-func (st *socketTracker) emitDeferredMessage(name string, build func() (any, error)) {
-	st.queueEmitMessage(emitMessage{
-		Name: name,
-		Build: func() (emitMessage, error) {
-			msg, err := build()
-			if err != nil {
-				return emitMessage{}, err
-			}
-			return emitMessage{Name: name, Message: msg}, nil
-		},
-	})
-}
-
 func (st *socketTracker) queueEmitMessage(msg emitMessage) {
 	st.emitQueueMutex.RLock()
 	if st.emitQueue == nil {
@@ -454,15 +441,17 @@ func (st *socketTracker) emitFullStoreUpdateSnapshot(storeName string, state Ser
 		Kind:      StoreUpdateFull,
 		StoreName: storeName,
 	}
-	st.emitDeferredMessage(SocketEventNameStoreUpdate, func() (any, error) {
-		stateBytes, err := SerializeToBytes(state, nil)
-		if err != nil {
-			return nil, err
+	stateBytes, err := SerializeToBytes(state, nil)
+	if err != nil {
+		if st.log != nil {
+			st.log.Warnf("Error serializing full store update: %+v", err)
 		}
-		return StoreUpdateFullMessage{
-			StoreUpdateMessage: update,
-			State:              socketTypes.NewBytesBuffer(stateBytes),
-		}, nil
+		st.disconnect()
+		return
+	}
+	st.emitMessage(SocketEventNameStoreUpdate, StoreUpdateFullMessage{
+		StoreUpdateMessage: update,
+		State:              socketTypes.NewBytesBuffer(stateBytes),
 	})
 }
 
@@ -472,15 +461,17 @@ func (st *socketTracker) emitPartialStoreUpdateSnapshot(storeName string, partia
 		Kind:      StoreUpdatePartial,
 		StoreName: storeName,
 	}
-	st.emitDeferredMessage(SocketEventNameStoreUpdate, func() (any, error) {
-		partialBytes, err := SerializeToBytes(partial, nil)
-		if err != nil {
-			return nil, err
+	partialBytes, err := SerializeToBytes(partial, nil)
+	if err != nil {
+		if st.log != nil {
+			st.log.Warnf("Error serializing partial store update: %+v", err)
 		}
-		return StoreUpdatePartialMessage{
-			StoreUpdateMessage: update,
-			Partial:            socketTypes.NewBytesBuffer(partialBytes),
-		}, nil
+		st.disconnect()
+		return
+	}
+	st.emitMessage(SocketEventNameStoreUpdate, StoreUpdatePartialMessage{
+		StoreUpdateMessage: update,
+		Partial:            socketTypes.NewBytesBuffer(partialBytes),
 	})
 }
 

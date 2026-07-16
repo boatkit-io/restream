@@ -482,7 +482,7 @@ func TestViewerSocketEmitMessageDoesNotBlockWhenQueueIsFull(t *testing.T) {
 	}
 }
 
-func TestViewerSocketPartialCallbackDefersSerializationUntilEmitMessageResolve(t *testing.T) {
+func TestViewerSocketPartialCallbackSerializesBeforeQueue(t *testing.T) {
 	serializeCount := 0
 	socket := &socketTracker{
 		emitQueue: make(chan emitMessage, 1),
@@ -503,16 +503,13 @@ func TestViewerSocketPartialCallbackDefersSerializationUntilEmitMessageResolve(t
 		},
 	)
 
-	if serializeCount != 0 {
-		t.Fatalf("PartialCallback serialized before enqueue: %d", serializeCount)
+	if serializeCount != 1 {
+		t.Fatalf("PartialCallback serialized %d times, want 1", serializeCount)
 	}
 	emitted := <-socket.emitQueue
-	if serializeCount != 0 {
-		t.Fatalf("queued emit serialized before resolve: %d", serializeCount)
-	}
 	resolved := resolveEmitMessage(t, emitted)
 	if serializeCount != 1 {
-		t.Fatalf("emit resolve serialized %d times, want 1", serializeCount)
+		t.Fatalf("emit resolve serialized again: %d", serializeCount)
 	}
 	if resolved.Name != SocketEventNameStoreUpdate {
 		t.Fatalf("expected %s event, got %s", SocketEventNameStoreUpdate, resolved.Name)
@@ -524,6 +521,38 @@ func TestViewerSocketPartialCallbackDefersSerializationUntilEmitMessageResolve(t
 	if update.Kind != StoreUpdatePartial || update.StoreName != viewerSocketTestStoreName {
 		t.Fatalf("expected partial update for %s, got %#v", viewerSocketTestStoreName, update.StoreUpdateMessage)
 	}
+}
+
+func TestViewerSocketQueuedPartialUpdateDoesNotShareOriginalMap(t *testing.T) {
+	socket := &socketTracker{
+		emitQueue: make(chan emitMessage, 1),
+		storeSubscriptions: map[string]map[string]int{
+			viewerSocketTestStoreName: {
+				"": 1,
+			},
+		},
+	}
+	partial := &viewerSocketTestPartial{
+		Values: NewPartialMap[string, int]().Set("a", 1),
+	}
+	fields := partial.ApplyTo(&viewerSocketTestState{Values: map[string]int{}})
+
+	socket.PartialCallback(viewerSocketTestStoreName, fields, partial)
+	partial.Values.Set("a", 2)
+
+	resolved := resolveEmitMessage(t, <-socket.emitQueue)
+	update, ok := resolved.Message.(StoreUpdatePartialMessage)
+	if !ok {
+		t.Fatalf("expected partial store update, got %T", resolved.Message)
+	}
+	var queued viewerSocketTestPartial
+	if err := queued.Deserialize(binarystreams.NewReaderFromBytes(update.Partial.Bytes()), nil); err != nil {
+		t.Fatalf("partial deserialize failed: %v", err)
+	}
+
+	state := &viewerSocketTestState{Values: map[string]int{}}
+	queued.ApplyTo(state)
+	assertMapEqual(t, map[string]int{"a": 1}, state.Values)
 }
 
 const viewerSocketTestStoreName = "test-store"
