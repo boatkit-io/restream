@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -142,7 +143,7 @@ type AlreadyGenerated struct{}
 	}
 }
 
-func TestParseProjectIgnoresFilesExcludedByBuildConstraints(t *testing.T) {
+func TestParseProjectIgnoresBuildConstrainedFiles(t *testing.T) {
 	projectDir := t.TempDir()
 	serverDir := filepath.Join(projectDir, "cmd", "server")
 	if err := os.MkdirAll(serverDir, 0755); err != nil {
@@ -173,6 +174,38 @@ package main
 import "example.com/buildconstraints/internal/disabled"
 
 var _ = disabled.Value
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(serverDir, "matching_backend.go"), []byte(`//go:build `+runtime.GOOS+`
+
+package main
+
+var matchingBackend = true
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(serverDir, "matching_legacy_backend.go"), []byte(`// +build `+runtime.GOOS+`
+
+package main
+
+var matchingLegacyBackend = true
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(serverDir, "filename_backend_"+runtime.GOOS+".go"), []byte(`package main
+
+var filenameBackend = true
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(serverDir, "filename_arch_backend_"+runtime.GOARCH+".go"), []byte(`package main
+
+var filenameArchBackend = true
 `), 0644); err != nil {
 		t.Fatal(err)
 	}

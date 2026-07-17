@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"go/build"
+	"go/build/constraint"
 	"go/parser"
 	"go/token"
 	"go/types"
@@ -276,16 +277,12 @@ func (pt *ProjTracking) parseFile(fn string) error {
 }
 
 func restreamSourceFileFilter(dir string) func(os.FileInfo) bool {
+	universalBuildContext := build.Default
+	universalBuildContext.GOOS = "restream_universal"
+	universalBuildContext.GOARCH = "restream_universal"
+
 	return func(info os.FileInfo) bool {
 		if info.IsDir() || !strings.HasSuffix(info.Name(), ".go") {
-			return false
-		}
-
-		matches, err := build.Default.MatchFile(dir, info.Name())
-		if err != nil {
-			return true
-		}
-		if !matches {
 			return false
 		}
 
@@ -294,8 +291,35 @@ func restreamSourceFileFilter(dir string) func(os.FileInfo) bool {
 			return true
 		}
 		firstLine, _, _ := strings.Cut(string(content), "\n")
-		return firstLine != restreamGeneratedFileBanner
+		if firstLine == restreamGeneratedFileBanner || hasBuildDirective(content) {
+			return false
+		}
+
+		matches, err := universalBuildContext.MatchFile(dir, info.Name())
+		return err != nil || matches
 	}
+}
+
+func hasBuildDirective(content []byte) bool {
+	f, _ := parser.ParseFile(token.NewFileSet(), "", content, parser.PackageClauseOnly|parser.ParseComments)
+	if f == nil {
+		return false
+	}
+
+	for _, group := range f.Comments {
+		for _, comment := range group.List {
+			if comment.Pos() > f.Package {
+				return false
+			}
+
+			line := strings.TrimSpace(comment.Text)
+			if constraint.IsGoBuild(line) || constraint.IsPlusBuild(line) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func (pt *ProjTracking) resolveProjectPath(p string) string {
