@@ -333,6 +333,9 @@ func (d *StoreData[S, SP, PS]) applyPartial(partial PS) {
 		fields = partial.ApplyTo(d.state)
 	}()
 	fields = reduceFieldPaths(fields)
+	if len(fields) == 0 {
+		return
+	}
 
 	d.partialCallbacks.Fire(d.name, fields, partial)
 

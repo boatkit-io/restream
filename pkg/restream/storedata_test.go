@@ -23,6 +23,7 @@ func (*storeDataLockTestState) Deserialize(*binarystreams.Reader, *VarInfoStruct
 type storeDataLockTestPartial struct {
 	Value      string
 	panicApply bool
+	noFields   bool
 }
 
 func (*storeDataLockTestPartial) Serialize(*binarystreams.Writer, *VarInfoStruct) error {
@@ -40,10 +41,27 @@ func (p *storeDataLockTestPartial) ApplyTo(target any) [][]any {
 	if p.panicApply {
 		panic("test partial apply panic")
 	}
+	if p.noFields {
+		return nil
+	}
 
 	state := target.(*storeDataLockTestState)
 	state.Value = p.Value
 	return [][]any{{"Value"}}
+}
+
+func TestApplyPartialSkipsCallbacksWhenNoFieldsChanged(t *testing.T) {
+	store, _ := newStoreDataLockTestStore()
+	callbackCount := 0
+	store.data.AddCallback(func(string, [][]any, Partial) {
+		callbackCount++
+	})
+
+	store.data.ApplyPartial(&storeDataLockTestPartial{noFields: true})
+
+	if callbackCount != 0 {
+		t.Fatalf("callback count = %d, want 0", callbackCount)
+	}
 }
 
 type storeDataLockTestStore struct {
