@@ -79,7 +79,9 @@ func (s *registryTestStore) SubscriptionEndedForKey(key string) {
 }
 
 type registryTestStoreData struct {
-	callbacks []PartialCallbackFunc
+	callbacks        []PartialCallbackFunc
+	decodedFullState []byte
+	decodeFullErr    error
 }
 
 func (d *registryTestStoreData) AddCallback(callback PartialCallbackFunc) subscribableevent.SubscriptionId {
@@ -91,8 +93,9 @@ func (d *registryTestStoreData) RemoveCallback(subscribableevent.SubscriptionId)
 	return nil
 }
 
-func (d *registryTestStoreData) DecodeAndSetFullState([]byte) error {
-	return errors.New("not implemented")
+func (d *registryTestStoreData) DecodeAndSetFullState(state []byte) error {
+	d.decodedFullState = append([]byte(nil), state...)
+	return d.decodeFullErr
 }
 
 func (d *registryTestStoreData) DecodeAndApplyPartial([]byte) error {
@@ -148,6 +151,99 @@ func TestStoreRegistryRefCountsDuplicateKeySubscriptions(t *testing.T) {
 
 	if err := registry.StopListeningToStoreKey(store.GetName(), "values%&a"); err == nil {
 		t.Fatal("expected double unsubscribe to fail")
+	}
+}
+
+func TestStoreRegistryPublishesAggregateSubscriptionTransitions(t *testing.T) {
+	store := newRegistryTestStore()
+	registry, err := NewStoreRegistry([]Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+
+	type transition struct {
+		key        string
+		subscribed bool
+	}
+	var transitions []transition
+	registry.SubscribeToStoreSubscriptions(func(storeName string, key string, subscribed bool) {
+		if storeName != store.GetName() {
+			t.Fatalf("transition store = %q, want %q", storeName, store.GetName())
+		}
+		transitions = append(transitions, transition{key: key, subscribed: subscribed})
+	})
+
+	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "values%&a", AccessLevelPublic))
+	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "values%&a", AccessLevelPublic))
+	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "values%&b", AccessLevelPublic))
+	mustNoError(t, registry.StopListeningToStoreKey(store.GetName(), "values%&a"))
+	mustNoError(t, registry.StopListeningToStoreKey(store.GetName(), "values%&a"))
+	mustNoError(t, registry.StopListeningToStoreKey(store.GetName(), "values%&b"))
+
+	want := []transition{
+		{key: "values%&a", subscribed: true},
+		{key: "values%&b", subscribed: true},
+		{key: "values%&a", subscribed: false},
+		{key: "values%&b", subscribed: false},
+	}
+	if len(transitions) != len(want) {
+		t.Fatalf("transitions = %#v, want %#v", transitions, want)
+	}
+	for idx := range want {
+		if transitions[idx] != want[idx] {
+			t.Fatalf("transitions = %#v, want %#v", transitions, want)
+		}
+	}
+
+	keys, err := registry.GetActiveStoreSubscriptionKeys(store.GetName())
+	if err != nil {
+		t.Fatalf("GetActiveStoreSubscriptionKeys failed: %v", err)
+	}
+	if len(keys) != 0 {
+		t.Fatalf("active keys = %#v, want none", keys)
+	}
+}
+
+func TestStoreRegistryPublishesSuccessfulFullStateApplies(t *testing.T) {
+	store := newRegistryTestStore()
+	registry, err := NewStoreRegistry([]Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+
+	var callbacks [][]byte
+	subID := registry.SubscribeToFullStateApplies(func(storeName string, stateBytes []byte) {
+		if storeName != store.GetName() {
+			t.Fatalf("full-state store = %q, want %q", storeName, store.GetName())
+		}
+		callbacks = append(callbacks, append([]byte(nil), stateBytes...))
+	})
+
+	stateBytes := []byte{7, 8, 9}
+	if err := registry.SetFullStateToStore(store.GetName(), stateBytes); err != nil {
+		t.Fatalf("SetFullStateToStore failed: %v", err)
+	}
+	stateBytes[0] = 0
+	if len(callbacks) != 1 || string(callbacks[0]) != string([]byte{7, 8, 9}) {
+		t.Fatalf("full-state callbacks = %#v, want [7 8 9]", callbacks)
+	}
+
+	if err := registry.UnsubscribeFromFullStateApplies(subID); err != nil {
+		t.Fatalf("UnsubscribeFromFullStateApplies failed: %v", err)
+	}
+	if err := registry.SetFullStateToStore(store.GetName(), []byte{10}); err != nil {
+		t.Fatalf("second SetFullStateToStore failed: %v", err)
+	}
+	if len(callbacks) != 1 {
+		t.Fatalf("full-state callback count = %d, want 1 after unsubscribe", len(callbacks))
+	}
+
+	store.data.decodeFullErr = errors.New("decode failed")
+	if err := registry.SetFullStateToStore(store.GetName(), []byte{11}); err == nil {
+		t.Fatal("SetFullStateToStore error = nil, want decode error")
+	}
+	if len(callbacks) != 1 {
+		t.Fatalf("failed decode published a callback: %#v", callbacks)
 	}
 }
 

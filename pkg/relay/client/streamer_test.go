@@ -645,6 +645,161 @@ func TestRelayedWholeStoreSubscriptionUsesEmptyKey(t *testing.T) {
 	assertActiveRelayKeys(t, store.RelayStore, nil)
 }
 
+func TestOnDemandStoreStreamingRequiresPolicyAndRelayCapability(t *testing.T) {
+	s := NewStreamer(nil, nil, nil, Config{StorePolicy: StorePolicy{OnDemand: true}})
+	if s.configureOnDemandStoreStreaming(&protocol.ConnectedPacket{}) {
+		t.Fatal("on-demand streaming enabled without relay capability")
+	}
+	if !s.configureOnDemandStoreStreaming(&protocol.ConnectedPacket{Capabilities: protocol.RelayCapabilities{
+		OnDemandStoreStreaming: true,
+	}}) {
+		t.Fatal("on-demand streaming did not enable with policy and relay capability")
+	}
+
+	legacy := NewStreamer(nil, nil, nil, Config{})
+	if legacy.configureOnDemandStoreStreaming(&protocol.ConnectedPacket{Capabilities: protocol.RelayCapabilities{
+		OnDemandStoreStreaming: true,
+	}}) {
+		t.Fatal("on-demand streaming enabled without device policy opt-in")
+	}
+}
+
+func TestOnDemandStoreStreamingSendsOnlyWhileStoreSubscribed(t *testing.T) {
+	store := newStreamerTypedRelayStore("TestStore", restream.StoreTypeDeviceWithRelay)
+	registry, err := restream.NewStoreRegistry([]restream.Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	s, sendQueue := newConnectedOnDemandTestStreamer(registry, StorePolicy{})
+
+	s.partialCallback("TestStore", nil, &streamerTestPartial{})
+	if len(sendQueue) != 0 {
+		t.Fatalf("unsubscribed partial queued %d packets", len(sendQueue))
+	}
+
+	if err := s.startRelayedStoreSubscription("TestStore", "values%&a"); err != nil {
+		t.Fatalf("first subscription failed: %v", err)
+	}
+	assertQueuedStorePacketKind(t, sendQueue, protocol.KindFullState)
+
+	s.partialCallback("TestStore", nil, &streamerTestPartial{})
+	assertQueuedStorePacketKind(t, sendQueue, protocol.KindPartialState)
+
+	if err := s.startRelayedStoreSubscription("TestStore", "values%&b"); err != nil {
+		t.Fatalf("second subscription failed: %v", err)
+	}
+	if len(sendQueue) != 0 {
+		t.Fatalf("second key subscription queued %d packets, want no additional full state", len(sendQueue))
+	}
+
+	if err := s.stopRelayedStoreSubscription("TestStore", "values%&a"); err != nil {
+		t.Fatalf("first unsubscribe failed: %v", err)
+	}
+	s.partialCallback("TestStore", nil, &streamerTestPartial{})
+	assertQueuedStorePacketKind(t, sendQueue, protocol.KindPartialState)
+
+	if err := s.stopRelayedStoreSubscription("TestStore", "values%&b"); err != nil {
+		t.Fatalf("last unsubscribe failed: %v", err)
+	}
+	s.partialCallback("TestStore", nil, &streamerTestPartial{})
+	if len(sendQueue) != 0 {
+		t.Fatalf("partial after last unsubscribe queued %d packets", len(sendQueue))
+	}
+}
+
+func TestOnDemandStoreStreamingQueuesFullBeforeSubscriptionTriggeredPartial(t *testing.T) {
+	store := &streamerSubscriptionUpdatingStore{
+		streamerTypedRelayStore: newStreamerTypedRelayStore("TestStore", restream.StoreTypeDeviceWithRelay),
+		value:                   "started",
+	}
+	registry, err := restream.NewStoreRegistry([]restream.Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	store.registry = registry
+	s, sendQueue := newConnectedOnDemandTestStreamer(registry, StorePolicy{})
+
+	if err := s.startRelayedStoreSubscription("TestStore", ""); err != nil {
+		t.Fatalf("subscription failed: %v", err)
+	}
+	if store.err != nil {
+		t.Fatalf("subscription-triggered update failed: %v", store.err)
+	}
+	assertQueuedStorePacketKind(t, sendQueue, protocol.KindFullState)
+	assertQueuedStorePacketKind(t, sendQueue, protocol.KindPartialState)
+}
+
+func TestOnDemandStoreStreamingDiscardsDebouncedAndStalePackets(t *testing.T) {
+	store := newStreamerTypedRelayStore("TestStore", restream.StoreTypeDeviceWithRelay)
+	registry, err := restream.NewStoreRegistry([]restream.Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	s, sendQueue := newConnectedOnDemandTestStreamer(registry, StorePolicy{
+		Debounce: map[string]time.Duration{"TestStore": time.Hour},
+	})
+
+	if err := s.startRelayedStoreSubscription("TestStore", ""); err != nil {
+		t.Fatalf("subscription failed: %v", err)
+	}
+	staleFull := <-sendQueue
+	s.partialCallback("TestStore", nil, &streamerTestPartial{})
+	if len(s.gatheredPartials) != 1 {
+		t.Fatalf("gathered partial count = %d, want 1", len(s.gatheredPartials))
+	}
+	if err := s.stopRelayedStoreSubscription("TestStore", ""); err != nil {
+		t.Fatalf("unsubscribe failed: %v", err)
+	}
+	if len(s.gatheredPartials) != 0 {
+		t.Fatalf("gathered partial survived unsubscribe: %#v", s.gatheredPartials)
+	}
+	if s.storePacketStillActive(staleFull) {
+		t.Fatal("queued full state remained active after last unsubscribe")
+	}
+
+	if err := s.startRelayedStoreSubscription("TestStore", ""); err != nil {
+		t.Fatalf("resubscription failed: %v", err)
+	}
+	freshFull := <-sendQueue
+	if !s.storePacketStillActive(freshFull) {
+		t.Fatal("new full state was not active after resubscribe")
+	}
+	if freshFull.generation == staleFull.generation {
+		t.Fatalf("resubscription generation = %d, want different from stale generation", freshFull.generation)
+	}
+}
+
+func newConnectedOnDemandTestStreamer(
+	registry *restream.StoreRegistry,
+	policy StorePolicy,
+) (*Streamer, chan outboundPacket) {
+	policy.OnDemand = true
+	s := NewStreamer(registry, nil, nil, Config{StorePolicy: policy})
+	s.conn = &gws.Conn{}
+	s.sendDone = make(chan struct{})
+	s.sendQueue = make(chan outboundPacket, 16)
+	s.configureOnDemandStoreStreaming(&protocol.ConnectedPacket{Capabilities: protocol.RelayCapabilities{
+		OnDemandStoreStreaming: true,
+	}})
+	return s, s.sendQueue
+}
+
+func assertQueuedStorePacketKind(t *testing.T, queue chan outboundPacket, want protocol.PacketKind) {
+	t.Helper()
+	packet := <-queue
+	if packet.packetKind != want {
+		t.Fatalf("queued packet kind = %d, want %d", packet.packetKind, want)
+	}
+	decoded, err := protocol.DecodePacket(mustBuildOutboundPacket(t, packet))
+	if err != nil {
+		t.Fatalf("DecodePacket failed: %v", err)
+	}
+	storePacket, ok := decoded.(*protocol.StoreStatePacket)
+	if !ok || storePacket.Kind() != want {
+		t.Fatalf("decoded packet = %#v, want store packet kind %d", decoded, want)
+	}
+}
+
 func assertActiveRelayKeys(
 	t *testing.T,
 	store *restream.RelayStore[streamerTestState, *streamerTestState, *streamerTestPartial],
@@ -676,6 +831,23 @@ type streamerTypedRelayStore struct {
 	*restream.RelayStore[streamerTestState, *streamerTestState, *streamerTestPartial]
 	storeType restream.StoreType
 }
+
+type streamerSubscriptionUpdatingStore struct {
+	*streamerTypedRelayStore
+	registry *restream.StoreRegistry
+	value    string
+	err      error
+}
+
+func (s *streamerSubscriptionUpdatingStore) SubscriptionStarted() {
+	partialBytes, err := restream.SerializeToBytes(&streamerTestPartial{Value: &s.value}, nil)
+	if err == nil {
+		err = s.registry.ApplyPartialToStore(s.GetName(), partialBytes)
+	}
+	s.err = err
+}
+
+func (*streamerSubscriptionUpdatingStore) SubscriptionEnded() {}
 
 func newStreamerTypedRelayStore(name string, storeType restream.StoreType) *streamerTypedRelayStore {
 	return &streamerTypedRelayStore{

@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/boatkit-io/restream/pkg/relay/protocol"
@@ -24,10 +25,10 @@ type Device struct {
 
 	config DeviceManagerConfig
 
-	relaySubscriptionStores []relaySubscriptionStore
-	relayForwardMutex       sync.Mutex
-	relayForwardSubID       subscribableevent.SubscriptionId
-	relayForwardConn        *Connection
+	relaySubscriptionSubID subscribableevent.SubscriptionId
+	relayForwardMutex      sync.Mutex
+	relayForwardSubID      subscribableevent.SubscriptionId
+	relayForwardConn       *Connection
 
 	connMutex sync.RWMutex
 	conn      *Connection
@@ -40,12 +41,6 @@ type Device struct {
 type pendingRPC struct {
 	conn   *Connection
 	respCh chan []byte
-}
-
-type relaySubscriptionStore interface {
-	restream.Store
-	SetKeySubscriptionForwarder(restream.RelayStoreKeySubscriptionForwarder)
-	ActiveSubscriptionKeys() []string
 }
 
 // NewDevice creates a Device around an existing store registry.
@@ -104,18 +99,19 @@ func (d *Device) DeviceDisconnected(conn *Connection) {
 	d.closePendingRPCsForConn(conn)
 }
 
-func (d *Device) configureRelaySubscriptionForwarding(stores []restream.Store) {
-	for _, store := range stores {
-		relayStore, ok := store.(relaySubscriptionStore)
-		if !ok {
-			continue
-		}
-		relayStore.SetKeySubscriptionForwarder(d.forwardStoreSubscription)
-		d.relaySubscriptionStores = append(d.relaySubscriptionStores, relayStore)
+func (d *Device) configureRelaySubscriptionForwarding() {
+	if d.StoreRegistry == nil {
+		return
 	}
+	d.relaySubscriptionSubID = d.StoreRegistry.SubscribeToStoreSubscriptions(d.forwardStoreSubscription)
 }
 
 func (d *Device) forwardStoreSubscription(storeName string, key string, subscribe bool) {
+	allowed, err := d.StoreRegistry.StoreAcceptsDeviceRelayUpdates(storeName)
+	if err != nil || !allowed {
+		return
+	}
+
 	d.connMutex.RLock()
 	conn := d.conn
 	d.connMutex.RUnlock()
@@ -129,9 +125,22 @@ func (d *Device) forwardStoreSubscription(storeName string, key string, subscrib
 }
 
 func (d *Device) sendActiveStoreSubscriptions(conn *Connection) error {
-	for _, store := range d.relaySubscriptionStores {
-		for _, key := range store.ActiveSubscriptionKeys() {
-			if err := conn.SendStoreSubscription(store.GetName(), key, true); err != nil {
+	storeNames := d.StoreRegistry.GetAllStoreNames()
+	sort.Strings(storeNames)
+	for _, storeName := range storeNames {
+		allowed, err := d.StoreRegistry.StoreAcceptsDeviceRelayUpdates(storeName)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			continue
+		}
+		keys, err := d.StoreRegistry.GetActiveStoreSubscriptionKeys(storeName)
+		if err != nil {
+			return err
+		}
+		for _, key := range keys {
+			if err := conn.SendStoreSubscription(storeName, key, true); err != nil {
 				return err
 			}
 		}

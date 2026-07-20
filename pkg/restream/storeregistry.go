@@ -3,6 +3,7 @@ package restream
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/boatkit-io/tugboat/pkg/subscribableevent"
@@ -18,6 +19,8 @@ type StoreRegistry struct {
 	subscriptionCallbackMutex sync.Mutex
 
 	partialApplyCallbacks subscribableevent.Event[PartialCallbackFunc]
+	fullStateCallbacks    subscribableevent.Event[FullStateCallbackFunc]
+	subscriptionCallbacks subscribableevent.Event[StoreSubscriptionCallbackFunc]
 }
 
 // StoreInfo holds info about a store for the StoreRegistry
@@ -75,6 +78,8 @@ func NewStoreRegistry(storeList []Store) (*StoreRegistry, error) {
 		storeMap: map[string]*StoreInfo{},
 
 		partialApplyCallbacks: subscribableevent.NewEvent[PartialCallbackFunc](),
+		fullStateCallbacks:    subscribableevent.NewEvent[FullStateCallbackFunc](),
+		subscriptionCallbacks: subscribableevent.NewEvent[StoreSubscriptionCallbackFunc](),
 	}
 
 	for _, s := range storeList {
@@ -121,6 +126,28 @@ func (s *StoreRegistry) SubscribeToPartialApplies(cb PartialCallbackFunc) subscr
 // UnsubscribeFromPartialApplies unsubscribes from the above SubscribeToPartialApplies call.
 func (s *StoreRegistry) UnsubscribeFromPartialApplies(sid subscribableevent.SubscriptionId) error {
 	return s.partialApplyCallbacks.Unsubscribe(sid)
+}
+
+// SubscribeToFullStateApplies adds a subscription to successful full-state replacements.
+func (s *StoreRegistry) SubscribeToFullStateApplies(cb FullStateCallbackFunc) subscribableevent.SubscriptionId {
+	return s.fullStateCallbacks.Subscribe(cb)
+}
+
+// UnsubscribeFromFullStateApplies removes a full-state replacement subscription.
+func (s *StoreRegistry) UnsubscribeFromFullStateApplies(sid subscribableevent.SubscriptionId) error {
+	return s.fullStateCallbacks.Unsubscribe(sid)
+}
+
+// SubscribeToStoreSubscriptions adds a subscription to aggregate store/key 0-to-1 and 1-to-0 transitions.
+func (s *StoreRegistry) SubscribeToStoreSubscriptions(
+	cb StoreSubscriptionCallbackFunc,
+) subscribableevent.SubscriptionId {
+	return s.subscriptionCallbacks.Subscribe(cb)
+}
+
+// UnsubscribeFromStoreSubscriptions removes a store subscription transition callback.
+func (s *StoreRegistry) UnsubscribeFromStoreSubscriptions(sid subscribableevent.SubscriptionId) error {
+	return s.subscriptionCallbacks.Unsubscribe(sid)
 }
 
 // PartialCallback is a callback for any Partial application for all storedatas in the SDR
@@ -216,20 +243,24 @@ func (s *StoreRegistry) ListeningToStoreKey(storeName string, key string, access
 
 	var keySubCallbacks KeySubscriptionAwareStore
 	var subAwareCallbacks SubscriptionAwareStore
+	keyStarted := false
 	si.ActiveSubCount++
 	if si.ActiveKeySubCount == nil {
 		si.ActiveKeySubCount = map[string]int{}
 	}
 	si.ActiveKeySubCount[key]++
-	if si.ActiveKeySubCount[key] == 1 && si.KeySubCallbacks != nil {
-		keySubCallbacks = si.KeySubCallbacks
+	if si.ActiveKeySubCount[key] == 1 {
+		keyStarted = true
+		if si.KeySubCallbacks != nil {
+			keySubCallbacks = si.KeySubCallbacks
+		}
 	}
 	if si.ActiveSubCount == 1 && si.SubAwareCallbacks != nil {
 		subAwareCallbacks = si.SubAwareCallbacks
 	}
 	s.subscriptionMutex.Unlock()
 
-	if keySubCallbacks != nil || subAwareCallbacks != nil {
+	if keySubCallbacks != nil || subAwareCallbacks != nil || keyStarted {
 		s.subscriptionCallbackMutex.Lock()
 		defer s.subscriptionCallbackMutex.Unlock()
 		if keySubCallbacks != nil {
@@ -237,6 +268,9 @@ func (s *StoreRegistry) ListeningToStoreKey(storeName string, key string, access
 		}
 		if subAwareCallbacks != nil {
 			subAwareCallbacks.SubscriptionStarted()
+		}
+		if keyStarted {
+			s.subscriptionCallbacks.Fire(storeName, key, true)
 		}
 	}
 	return nil
@@ -268,10 +302,12 @@ func (s *StoreRegistry) StopListeningToStoreKey(storeName string, key string) er
 
 	var keySubCallbacks KeySubscriptionAwareStore
 	var subAwareCallbacks SubscriptionAwareStore
+	keyEnded := false
 	si.ActiveSubCount--
 	si.ActiveKeySubCount[key]--
 	if si.ActiveKeySubCount[key] == 0 {
 		delete(si.ActiveKeySubCount, key)
+		keyEnded = true
 		if si.KeySubCallbacks != nil {
 			keySubCallbacks = si.KeySubCallbacks
 		}
@@ -281,7 +317,7 @@ func (s *StoreRegistry) StopListeningToStoreKey(storeName string, key string) er
 	}
 	s.subscriptionMutex.Unlock()
 
-	if keySubCallbacks != nil || subAwareCallbacks != nil {
+	if keySubCallbacks != nil || subAwareCallbacks != nil || keyEnded {
 		s.subscriptionCallbackMutex.Lock()
 		defer s.subscriptionCallbackMutex.Unlock()
 		if keySubCallbacks != nil {
@@ -290,8 +326,30 @@ func (s *StoreRegistry) StopListeningToStoreKey(storeName string, key string) er
 		if subAwareCallbacks != nil {
 			subAwareCallbacks.SubscriptionEnded()
 		}
+		if keyEnded {
+			s.subscriptionCallbacks.Fire(storeName, key, false)
+		}
 	}
 	return nil
+}
+
+// GetActiveStoreSubscriptionKeys returns the aggregate active subscription keys for a store.
+func (s *StoreRegistry) GetActiveStoreSubscriptionKeys(storeName string) ([]string, error) {
+	s.subscriptionMutex.Lock()
+	defer s.subscriptionMutex.Unlock()
+
+	si, has := s.storeMap[storeName]
+	if !has {
+		return nil, fmt.Errorf("no store found (%s) in GetActiveStoreSubscriptionKeys", storeName)
+	}
+	keys := make([]string, 0, len(si.ActiveKeySubCount))
+	for key, count := range si.ActiveKeySubCount {
+		if count > 0 {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	return keys, nil
 }
 
 // CheckStoreAccess verifies that accessLevel is enough to read or subscribe to storeName.
@@ -374,7 +432,11 @@ func (s *StoreRegistry) SetFullStateToStore(storeName string, stateBytes []byte)
 	if !has {
 		return fmt.Errorf("no store found (%s) in SetFullStateToStore", storeName)
 	}
-	return si.StoreData.DecodeAndSetFullState(stateBytes)
+	if err := si.StoreData.DecodeAndSetFullState(stateBytes); err != nil {
+		return err
+	}
+	s.fullStateCallbacks.Fire(storeName, append([]byte(nil), stateBytes...))
+	return nil
 }
 
 // ApplyPartialToStore finds a store for a storename and applies a partial's raw bytes to it

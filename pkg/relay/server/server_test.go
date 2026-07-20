@@ -49,7 +49,10 @@ func TestServerAcceptConnAuthenticatesAndDispatchesPackets(t *testing.T) {
 	})
 	relayServer := New(Config{
 		DeviceManager: manager,
-		Metadata:      map[string]string{"relay": "test"},
+		Capabilities: protocol.RelayCapabilities{
+			OnDemandStoreStreaming: true,
+		},
+		Metadata: map[string]string{"relay": "test"},
 		AuthenticateDevice: func(_ context.Context, hello *protocol.DeviceHello, conn *Connection) (restream.AccessLevel, error) {
 			if hello.DeviceID != "device-1" {
 				t.Fatalf("DeviceID = %q, want device-1", hello.DeviceID)
@@ -99,6 +102,9 @@ func TestServerAcceptConnAuthenticatesAndDispatchesPackets(t *testing.T) {
 	}
 	if connectedPacket.Metadata["relay"] != "test" {
 		t.Fatalf("connected metadata = %+v, want relay=test", connectedPacket.Metadata)
+	}
+	if !connectedPacket.Capabilities.OnDemandStoreStreaming {
+		t.Fatal("connected packet did not advertise on-demand store streaming")
 	}
 	if !manager.HasDevice("device-1") {
 		t.Fatal("device manager did not provision device-1")
@@ -562,6 +568,42 @@ func TestCloudStoreSubscriptionForwardsToConnectedDevice(t *testing.T) {
 		subscriptionPacket.Key != "values%&a" ||
 		subscriptionPacket.Action != protocol.StoreUnsubscribe {
 		t.Fatalf("forwarded subscription = %+v, want TestStore values%%&a unsubscribe", subscriptionPacket)
+	}
+}
+
+func TestCustomCloudImplementationSubscriptionForwardsToConnectedDevice(t *testing.T) {
+	manager := NewDeviceManager(DeviceManagerConfig{
+		Stores: func(string) ([]restream.Store, error) {
+			return []restream.Store{newCustomServerRelayStore("CustomStore")}, nil
+		},
+	})
+	device, err := manager.GetDevice("device-1")
+	if err != nil {
+		t.Fatalf("GetDevice failed: %v", err)
+	}
+
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+	device.DeviceConnected(NewConnection(serverConn))
+
+	if err := device.StoreRegistry.ListeningToStoreKey(
+		"CustomStore",
+		"pendingNotifications",
+		restream.AccessLevelPublic,
+	); err != nil {
+		t.Fatalf("ListeningToStoreKey failed: %v", err)
+	}
+	_, subscriptionBytes, err := clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read forwarded subscription failed: %v", err)
+	}
+	packet, ok := mustDecodePacket(t, subscriptionBytes).(*protocol.StoreSubscriptionPacket)
+	if !ok {
+		t.Fatalf("forwarded packet type = %T, want *StoreSubscriptionPacket", mustDecodePacket(t, subscriptionBytes))
+	}
+	if packet.StoreName != "CustomStore" || packet.Key != "pendingNotifications" ||
+		packet.Action != protocol.StoreSubscribe {
+		t.Fatalf("forwarded subscription = %+v", packet)
 	}
 }
 

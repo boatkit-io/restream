@@ -138,8 +138,9 @@ type socketTracker struct {
 
 	conn *socket.Socket
 
-	partialApplySubID subscribableevent.SubscriptionId
-	eventSubID        subscribableevent.SubscriptionId
+	partialApplySubID   subscribableevent.SubscriptionId
+	fullStateApplySubID subscribableevent.SubscriptionId
+	eventSubID          subscribableevent.SubscriptionId
 
 	storeSubscriptions map[string]map[string]int
 	subscriptionMutex  smartmutex.SmartMutex
@@ -187,6 +188,7 @@ func AddSocketHandlers(
 	}
 
 	st.partialApplySubID = st.sr.SubscribeToPartialApplies(st.PartialCallback)
+	st.fullStateApplySubID = st.sr.SubscribeToFullStateApplies(st.FullStateCallback)
 	if st.ed != nil {
 		st.eventSubID = st.ed.SubscribeToEvents(st.EventCallback)
 	}
@@ -210,7 +212,8 @@ func (s *socketTracker) cleanupDisconnect() {
 	s.emitQueueMutex.Unlock()
 
 	if s.sr != nil {
-		s.sr.UnsubscribeFromPartialApplies(s.partialApplySubID) //nolint:errcheck // Why: Best effort
+		s.sr.UnsubscribeFromPartialApplies(s.partialApplySubID)     //nolint:errcheck // Why: Best effort
+		s.sr.UnsubscribeFromFullStateApplies(s.fullStateApplySubID) //nolint:errcheck // Why: Best effort
 	}
 	if s.ed != nil {
 		s.ed.UnsubscribeFromEvents(s.eventSubID) //nolint:errcheck // Why: Best effort
@@ -688,6 +691,84 @@ func (st *socketTracker) PartialCallback(storeName string, fields [][]any, parti
 	}
 
 	st.emitPartialStoreUpdateSnapshot(storeName, filteredPartial)
+}
+
+// FullStateCallback relays a full-state replacement to viewers currently subscribed to that store.
+func (st *socketTracker) FullStateCallback(storeName string, stateBytes []byte) {
+	st.subscriptionMutex.RLock()
+	keySubs, subscribed := st.storeSubscriptions[storeName]
+	keys := make([]string, 0, len(keySubs))
+	for key, count := range keySubs {
+		if count > 0 {
+			keys = append(keys, key)
+		}
+	}
+	st.subscriptionMutex.RUnlock()
+	if !subscribed || len(keys) == 0 {
+		return
+	}
+	sort.Strings(keys)
+
+	userAccessLevel := AccessLevelPublic
+	if st.sr != nil {
+		var err error
+		userAccessLevel, err = st.lookupAccessLevel()
+		if err != nil {
+			st.log.Errorf("Error looking up user access level: %+v", err)
+			st.disconnect()
+			return
+		}
+		if err := st.sr.CheckStoreAccess(storeName, userAccessLevel); err != nil {
+			st.log.Errorf("Store full update denied for %s: %+v", storeName, err)
+			st.disconnect()
+			return
+		}
+	}
+
+	// A whole-store subscription needs the replacement verbatim. Keyed subscriptions instead get fresh keyed
+	// snapshots rebuilt from the newly applied state so a device reconnect does not bypass field filtering.
+	if st.sr != nil && keys[0] != "" {
+		keyedMessages := make([]emitMessage, 0, len(keys))
+		for _, key := range keys {
+			partial, exists, err := st.sr.GetPartialSnapshotForSubscriptionKey(storeName, key, userAccessLevel)
+			if err != nil {
+				if st.log != nil {
+					st.log.Warnf("Error rebuilding keyed store update after full state for %s/%s: %+v", storeName, key, err)
+				}
+				st.disconnect()
+				return
+			}
+			if !exists {
+				keyedMessages = nil
+				break
+			}
+			message, err := buildPartialStoreUpdateMessage(storeName, partial)
+			if err != nil {
+				if st.log != nil {
+					st.log.Warnf("Error serializing keyed store update after full state: %+v", err)
+				}
+				st.disconnect()
+				return
+			}
+			keyedMessages = append(keyedMessages, message)
+		}
+		if keyedMessages != nil {
+			for _, message := range keyedMessages {
+				st.queueLiveStoreUpdate(storeName, message)
+			}
+			return
+		}
+	}
+
+	message, err := buildFullStoreUpdateMessage(storeName, RawSerializable(stateBytes))
+	if err != nil {
+		if st.log != nil {
+			st.log.Warnf("Error serializing full store update: %+v", err)
+		}
+		st.disconnect()
+		return
+	}
+	st.queueLiveStoreUpdate(storeName, message)
 }
 
 func (st *socketTracker) partialForSubscriptions(storeName string, fields [][]any, partial Partial) (Partial, bool) {

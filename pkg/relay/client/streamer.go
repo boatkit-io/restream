@@ -41,12 +41,18 @@ type Streamer struct {
 	gatherCancel     context.CancelFunc
 	gatheredPartials map[string]restream.Partial
 	gatherStart      map[string]time.Time
+	gatherGeneration map[string]uint64
 
 	partialSubID subscribableevent.SubscriptionId
 	eventSubID   subscribableevent.SubscriptionId
 
 	relaySubscriptionMutex sync.Mutex
 	relaySubscriptions     map[relaySubscriptionKey]struct{}
+	relayStoreSubCount     map[string]int
+	relayStoreGeneration   map[string]uint64
+	relayStoreCatchingUp   map[string]bool
+	relayCatchupPartials   map[string]restream.Partial
+	onDemandStoreStreaming bool
 }
 
 type relaySubscriptionKey struct {
@@ -58,6 +64,7 @@ type outboundPacket struct {
 	description string
 	storeName   string
 	packetKind  protocol.PacketKind
+	generation  uint64
 	bytes       []byte
 	build       func() ([]byte, error)
 }
@@ -89,9 +96,14 @@ func NewStreamer(
 
 		opts: opts,
 
-		gatheredPartials:   map[string]restream.Partial{},
-		gatherStart:        map[string]time.Time{},
-		relaySubscriptions: map[relaySubscriptionKey]struct{}{},
+		gatheredPartials:     map[string]restream.Partial{},
+		gatherStart:          map[string]time.Time{},
+		gatherGeneration:     map[string]uint64{},
+		relaySubscriptions:   map[relaySubscriptionKey]struct{}{},
+		relayStoreSubCount:   map[string]int{},
+		relayStoreGeneration: map[string]uint64{},
+		relayStoreCatchingUp: map[string]bool{},
+		relayCatchupPartials: map[string]restream.Partial{},
 	}
 
 	if sr != nil {
@@ -186,7 +198,11 @@ func (s *Streamer) SendEvent(eventName string, eventBytes []byte) error {
 }
 
 func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials Credentials) error {
-	defer s.clearRelaySubscriptions()
+	defer func() {
+		// Make local subscription callbacks observe a disconnected streamer while relay keys are unwound.
+		s.closeConn(conn)
+		s.clearRelaySubscriptions()
+	}()
 
 	closeOnContextDone := make(chan struct{})
 	defer close(closeOnContextDone)
@@ -231,10 +247,13 @@ func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials C
 			if packet.ProtocolVersion != protocol.CurrentVersion {
 				return fmt.Errorf("unsupported relay protocol version: %d", packet.ProtocolVersion)
 			}
+			onDemand := s.configureOnDemandStoreStreaming(packet)
 			s.startConn(conn)
 			s.onConnected(packet)
-			if err := s.sendFullStates(); err != nil {
-				return fmt.Errorf("handle relay connected packet: send full states: %w", err)
+			if !onDemand {
+				if err := s.sendFullStates(); err != nil {
+					return fmt.Errorf("handle relay connected packet: send full states: %w", err)
+				}
 			}
 		case *protocol.RPCCallPacket:
 			if err := s.handleRPCCall(packet); err != nil {
@@ -299,14 +318,35 @@ func (s *Streamer) partialCallback(storeName string, _ [][]any, partial restream
 		return
 	}
 
+	generation := uint64(0)
+	s.relaySubscriptionMutex.Lock()
+	if s.onDemandStoreStreaming {
+		if s.relayStoreSubCount[storeName] == 0 {
+			s.relaySubscriptionMutex.Unlock()
+			return
+		}
+		generation = s.relayStoreGeneration[storeName]
+		if s.relayStoreCatchingUp[storeName] {
+			if gathered, exists := s.relayCatchupPartials[storeName]; exists {
+				partial.MergeOntoPartial(gathered)
+			} else {
+				s.relayCatchupPartials[storeName] = partial
+			}
+			s.relaySubscriptionMutex.Unlock()
+			return
+		}
+	}
+
 	if debounce, ok := s.opts.StorePolicy.DebounceFor(storeName); ok {
-		s.gatherPartial(storeName, partial, debounce)
+		s.gatherPartial(storeName, partial, debounce, generation)
+		s.relaySubscriptionMutex.Unlock()
 		return
 	}
 
-	if err := s.sendPartial(storeName, partial); err != nil {
+	if err := s.sendPartialForGeneration(storeName, partial, generation); err != nil {
 		s.closeCurrentConnOnSendError(err)
 	}
+	s.relaySubscriptionMutex.Unlock()
 }
 
 func (s *Streamer) allowsRelayStoreTraffic(storeName string) (bool, error) {
@@ -345,13 +385,19 @@ func (s *Streamer) handleStoreState(packet *protocol.StoreStatePacket) error {
 	}
 }
 
-func (s *Streamer) gatherPartial(storeName string, partial restream.Partial, debounce time.Duration) {
+func (s *Streamer) gatherPartial(
+	storeName string,
+	partial restream.Partial,
+	debounce time.Duration,
+	generation uint64,
+) {
 	s.gatherMutex.Lock()
-	if gathered, exists := s.gatheredPartials[storeName]; exists {
+	if gathered, exists := s.gatheredPartials[storeName]; exists && s.gatherGeneration[storeName] == generation {
 		partial.MergeOntoPartial(gathered)
 	} else {
 		s.gatheredPartials[storeName] = partial
 		s.gatherStart[storeName] = time.Now()
+		s.gatherGeneration[storeName] = generation
 	}
 	s.gatherMutex.Unlock()
 
@@ -371,14 +417,17 @@ func (s *Streamer) recalcGatherTimeout(_ time.Duration) {
 
 	var nextExp *time.Time
 	toSend := map[string]restream.Partial{}
+	toSendGeneration := map[string]uint64{}
 	for storeName, gatherStart := range s.gatherStart {
 		debounce, ok := s.opts.StorePolicy.DebounceFor(storeName)
 		if !ok {
 			toSend[storeName] = s.gatheredPartials[storeName]
+			toSendGeneration[storeName] = s.gatherGeneration[storeName]
 			continue
 		}
 		if time.Since(gatherStart) >= debounce {
 			toSend[storeName] = s.gatheredPartials[storeName]
+			toSendGeneration[storeName] = s.gatherGeneration[storeName]
 		} else {
 			exp := gatherStart.Add(debounce)
 			if nextExp == nil || exp.Before(*nextExp) {
@@ -390,6 +439,7 @@ func (s *Streamer) recalcGatherTimeout(_ time.Duration) {
 	for storeName := range toSend {
 		delete(s.gatheredPartials, storeName)
 		delete(s.gatherStart, storeName)
+		delete(s.gatherGeneration, storeName)
 	}
 
 	if nextExp != nil {
@@ -422,13 +472,17 @@ func (s *Streamer) recalcGatherTimeout(_ time.Duration) {
 	s.gatherMutex.Unlock()
 
 	for storeName, partial := range toSend {
-		if err := s.sendPartial(storeName, partial); err != nil {
+		if err := s.sendPartialForGeneration(storeName, partial, toSendGeneration[storeName]); err != nil {
 			s.closeCurrentConnOnSendError(err)
 		}
 	}
 }
 
 func (s *Streamer) sendFullState(storeName string) error {
+	return s.sendFullStateForGeneration(storeName, 0)
+}
+
+func (s *Streamer) sendFullStateForGeneration(storeName string, generation uint64) error {
 	accessLevel, err := s.sr.GetStoreMinimumAccessLevel(storeName)
 	if err != nil {
 		return err
@@ -437,23 +491,43 @@ func (s *Streamer) sendFullState(storeName string) error {
 	if err != nil {
 		return err
 	}
-	return s.enqueueStorePacketBuilder("full state "+storeName, storeName, protocol.KindFullState, func() ([]byte, error) {
-		stateBytes, err := restream.SerializeToBytes(stateSnapshot, nil)
-		if err != nil {
-			return nil, err
-		}
-		return protocol.EncodePacket(protocol.NewFullStatePacket(storeName, stateBytes))
-	})
+	return s.enqueueStorePacketBuilder(
+		"full state "+storeName,
+		storeName,
+		protocol.KindFullState,
+		generation,
+		func() ([]byte, error) {
+			stateBytes, err := restream.SerializeToBytes(stateSnapshot, nil)
+			if err != nil {
+				return nil, err
+			}
+			return protocol.EncodePacket(protocol.NewFullStatePacket(storeName, stateBytes))
+		},
+	)
 }
 
 func (s *Streamer) sendPartial(storeName string, partial restream.Partial) error {
-	return s.enqueueStorePacketBuilder("partial state "+storeName, storeName, protocol.KindPartialState, func() ([]byte, error) {
-		partialBytes, err := restream.SerializeToBytes(partial, nil)
-		if err != nil {
-			return nil, err
-		}
-		return protocol.EncodePacket(protocol.NewPartialStatePacket(storeName, partialBytes))
-	})
+	return s.sendPartialForGeneration(storeName, partial, 0)
+}
+
+func (s *Streamer) sendPartialForGeneration(
+	storeName string,
+	partial restream.Partial,
+	generation uint64,
+) error {
+	return s.enqueueStorePacketBuilder(
+		"partial state "+storeName,
+		storeName,
+		protocol.KindPartialState,
+		generation,
+		func() ([]byte, error) {
+			partialBytes, err := restream.SerializeToBytes(partial, nil)
+			if err != nil {
+				return nil, err
+			}
+			return protocol.EncodePacket(protocol.NewPartialStatePacket(storeName, partialBytes))
+		},
+	)
 }
 
 func (s *Streamer) sendRPCResponse(rpcID uint32, resp []byte) error {
@@ -500,8 +574,21 @@ func (s *Streamer) handleStoreSubscription(packet *protocol.StoreSubscriptionPac
 	}
 }
 
+func (s *Streamer) configureOnDemandStoreStreaming(packet *protocol.ConnectedPacket) bool {
+	enabled := s.opts.StorePolicy.OnDemand &&
+		packet.Capabilities.OnDemandStoreStreaming
+	s.relaySubscriptionMutex.Lock()
+	s.onDemandStoreStreaming = enabled
+	s.relaySubscriptionMutex.Unlock()
+	return enabled
+}
+
 func (s *Streamer) startRelayedStoreSubscription(storeName string, key string) error {
 	subKey := relaySubscriptionKey{storeName: storeName, key: key}
+	accessLevel, err := s.sr.GetStoreMinimumAccessLevel(storeName)
+	if err != nil {
+		return err
+	}
 
 	s.relaySubscriptionMutex.Lock()
 	if s.relaySubscriptions == nil {
@@ -512,23 +599,61 @@ func (s *Streamer) startRelayedStoreSubscription(storeName string, key string) e
 		return nil
 	}
 	s.relaySubscriptions[subKey] = struct{}{}
+	s.relayStoreSubCount[storeName]++
+	firstStoreSubscription := s.relayStoreSubCount[storeName] == 1
+	onDemand := s.onDemandStoreStreaming
+	generation := s.relayStoreGeneration[storeName]
+	if onDemand && firstStoreSubscription {
+		generation++
+		s.relayStoreGeneration[storeName] = generation
+		s.relayStoreCatchingUp[storeName] = true
+		delete(s.relayCatchupPartials, storeName)
+	}
 	s.relaySubscriptionMutex.Unlock()
 
-	accessLevel, err := s.sr.GetStoreMinimumAccessLevel(storeName)
-	if err != nil {
-		s.relaySubscriptionMutex.Lock()
-		delete(s.relaySubscriptions, subKey)
-		s.relaySubscriptionMutex.Unlock()
+	if err := s.sr.ListeningToStoreKey(storeName, key, accessLevel); err != nil {
+		s.rollbackRelayedStoreSubscription(subKey)
+		return err
+	}
+	if !onDemand || !firstStoreSubscription {
+		return nil
+	}
+
+	if err := s.sendFullStateForGeneration(storeName, generation); err != nil {
+		s.rollbackRelayedStoreSubscription(subKey)
+		s.sr.StopListeningToStoreKey(storeName, key) //nolint:errcheck // Why: Preserve the original send error.
 		return err
 	}
 
-	if err := s.sr.ListeningToStoreKey(storeName, key, accessLevel); err != nil {
-		s.relaySubscriptionMutex.Lock()
-		delete(s.relaySubscriptions, subKey)
-		s.relaySubscriptionMutex.Unlock()
-		return err
+	s.relaySubscriptionMutex.Lock()
+	if s.relayStoreSubCount[storeName] > 0 &&
+		s.relayStoreGeneration[storeName] == generation &&
+		s.relayStoreCatchingUp[storeName] {
+		if partial := s.relayCatchupPartials[storeName]; partial != nil {
+			if err := s.sendPartialForGeneration(storeName, partial, generation); err != nil {
+				s.relaySubscriptionMutex.Unlock()
+				return err
+			}
+		}
+		delete(s.relayCatchupPartials, storeName)
+		delete(s.relayStoreCatchingUp, storeName)
 	}
+	s.relaySubscriptionMutex.Unlock()
 	return nil
+}
+
+func (s *Streamer) rollbackRelayedStoreSubscription(subKey relaySubscriptionKey) {
+	s.relaySubscriptionMutex.Lock()
+	if _, exists := s.relaySubscriptions[subKey]; exists {
+		delete(s.relaySubscriptions, subKey)
+		s.relayStoreSubCount[subKey.storeName]--
+		if s.relayStoreSubCount[subKey.storeName] <= 0 {
+			delete(s.relayStoreSubCount, subKey.storeName)
+			delete(s.relayStoreCatchingUp, subKey.storeName)
+			delete(s.relayCatchupPartials, subKey.storeName)
+		}
+	}
+	s.relaySubscriptionMutex.Unlock()
 }
 
 func (s *Streamer) stopRelayedStoreSubscription(storeName string, key string) error {
@@ -540,7 +665,17 @@ func (s *Streamer) stopRelayedStoreSubscription(storeName string, key string) er
 		return nil
 	}
 	delete(s.relaySubscriptions, subKey)
+	s.relayStoreSubCount[storeName]--
+	lastStoreSubscription := s.relayStoreSubCount[storeName] <= 0
+	if lastStoreSubscription {
+		delete(s.relayStoreSubCount, storeName)
+		delete(s.relayStoreCatchingUp, storeName)
+		delete(s.relayCatchupPartials, storeName)
+	}
 	s.relaySubscriptionMutex.Unlock()
+	if lastStoreSubscription {
+		s.discardGatheredPartial(storeName)
+	}
 
 	return s.sr.StopListeningToStoreKey(storeName, key)
 }
@@ -614,22 +749,39 @@ func (s *Streamer) clearGatheredPartials() {
 	s.gatherCancel = nil
 	s.gatherStart = map[string]time.Time{}
 	s.gatheredPartials = map[string]restream.Partial{}
+	s.gatherGeneration = map[string]uint64{}
+	s.gatherMutex.Unlock()
+}
+
+func (s *Streamer) discardGatheredPartial(storeName string) {
+	s.gatherMutex.Lock()
+	delete(s.gatherStart, storeName)
+	delete(s.gatheredPartials, storeName)
+	delete(s.gatherGeneration, storeName)
+	if len(s.gatheredPartials) == 0 && s.gatherCancel != nil {
+		s.gatherCancel()
+		s.gatherTimeout = nil
+		s.gatherCancel = nil
+	}
 	s.gatherMutex.Unlock()
 }
 
 func (s *Streamer) clearRelaySubscriptions() {
-	if s.sr == nil {
-		return
-	}
-
 	s.relaySubscriptionMutex.Lock()
 	keys := make([]relaySubscriptionKey, 0, len(s.relaySubscriptions))
 	for key := range s.relaySubscriptions {
 		keys = append(keys, key)
 	}
 	s.relaySubscriptions = map[relaySubscriptionKey]struct{}{}
+	s.relayStoreSubCount = map[string]int{}
+	s.relayStoreCatchingUp = map[string]bool{}
+	s.relayCatchupPartials = map[string]restream.Partial{}
+	s.onDemandStoreStreaming = false
 	s.relaySubscriptionMutex.Unlock()
 
+	if s.sr == nil {
+		return
+	}
 	for _, key := range keys {
 		s.sr.StopListeningToStoreKey(key.storeName, key.key) //nolint:errcheck // Why: Cleanup is best effort on relay disconnect.
 	}
@@ -653,12 +805,14 @@ func (s *Streamer) enqueueStorePacketBuilder(
 	packetDescription string,
 	storeName string,
 	packetKind protocol.PacketKind,
+	generation uint64,
 	build func() ([]byte, error),
 ) error {
 	return s.enqueueOutboundPacket(outboundPacket{
 		description: packetDescription,
 		storeName:   storeName,
 		packetKind:  packetKind,
+		generation:  generation,
 		build:       build,
 	})
 }
@@ -706,6 +860,9 @@ func (s *Streamer) handleSendQueue(conn *gws.Conn, sendQueue <-chan outboundPack
 					return
 				default:
 				}
+				if !s.storePacketStillActive(packet) {
+					continue
+				}
 
 				b, err := packet.buildBytes()
 				if err != nil {
@@ -735,6 +892,17 @@ func (s *Streamer) handleSendQueue(conn *gws.Conn, sendQueue <-chan outboundPack
 			}
 		}
 	}()
+}
+
+func (s *Streamer) storePacketStillActive(packet outboundPacket) bool {
+	if packet.storeName == "" || packet.generation == 0 {
+		return true
+	}
+	s.relaySubscriptionMutex.Lock()
+	defer s.relaySubscriptionMutex.Unlock()
+	return s.onDemandStoreStreaming &&
+		s.relayStoreSubCount[packet.storeName] > 0 &&
+		s.relayStoreGeneration[packet.storeName] == packet.generation
 }
 
 func (s *Streamer) onConnected(packet *protocol.ConnectedPacket) {

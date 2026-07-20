@@ -28,6 +28,9 @@ type StorePolicy struct {
 	Exclude         map[string]struct{}
 	Debounce        map[string]time.Duration
 	DefaultDebounce time.Duration
+	// OnDemand sends device store state only while the relay reports at least one active subscription.
+	// The policy falls back to legacy always-on streaming unless the relay advertises support.
+	OnDemand bool
 }
 
 // Allows reports whether storeName should be streamed.

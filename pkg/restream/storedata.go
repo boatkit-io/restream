@@ -24,6 +24,12 @@ var ErrCloudSourceStoreMutation = errors.New("cloud-source stores can only be up
 // PartialCallbackFunc is a reusable type for the callbacks for partial applications
 type PartialCallbackFunc = func(storeName string, fields [][]any, partial Partial)
 
+// FullStateCallbackFunc is called after a serialized full state has replaced a store's state.
+type FullStateCallbackFunc = func(storeName string, stateBytes []byte)
+
+// StoreSubscriptionCallbackFunc is called for aggregate store/key subscription transitions.
+type StoreSubscriptionCallbackFunc = func(storeName string, key string, subscribed bool)
+
 // StoreDataBase is a basic interface for all typed stores, since golang generics are so gimpy
 type StoreDataBase interface {
 	AddCallback(PartialCallbackFunc) subscribableevent.SubscriptionId

@@ -9,8 +9,10 @@ import (
 )
 
 const (
-	maxUint16 = int(^uint16(0))
-	maxUint32 = uint64(^uint32(0))
+	maxUint16                                = int(^uint16(0))
+	maxUint32                                = uint64(^uint32(0))
+	onDemandStoreStreamingCapabilityKey      = "restream.on-demand-store-streaming"
+	enabledConnectedPacketCapabilityMetadata = "1"
 )
 
 // EncodeDeviceHello serializes a device hello message.
@@ -197,7 +199,7 @@ func encodeConnectedPacket(w *binarystreams.Writer, packet *ConnectedPacket) err
 	if err := w.WriteUInt32(packet.ProtocolVersion); err != nil {
 		return err
 	}
-	return writeStringMap(w, packet.Metadata)
+	return writeStringMap(w, encodeConnectedPacketMetadata(packet))
 }
 
 func decodeConnectedPacket(r *binarystreams.Reader) (*ConnectedPacket, error) {
@@ -209,7 +211,34 @@ func decodeConnectedPacket(r *binarystreams.Reader) (*ConnectedPacket, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ConnectedPacket{ProtocolVersion: protocolVersion, Metadata: metadata}, nil
+	capabilities := RelayCapabilities{
+		OnDemandStoreStreaming: metadata[onDemandStoreStreamingCapabilityKey] == enabledConnectedPacketCapabilityMetadata,
+	}
+	delete(metadata, onDemandStoreStreamingCapabilityKey)
+	if len(metadata) == 0 {
+		metadata = nil
+	}
+	return &ConnectedPacket{
+		ProtocolVersion: protocolVersion,
+		Capabilities:    capabilities,
+		Metadata:        metadata,
+	}, nil
+}
+
+func encodeConnectedPacketMetadata(packet *ConnectedPacket) map[string]string {
+	metadata := make(map[string]string, len(packet.Metadata)+1)
+	for key, value := range packet.Metadata {
+		if key != onDemandStoreStreamingCapabilityKey {
+			metadata[key] = value
+		}
+	}
+	if packet.Capabilities.OnDemandStoreStreaming {
+		metadata[onDemandStoreStreamingCapabilityKey] = enabledConnectedPacketCapabilityMetadata
+	}
+	if len(metadata) == 0 {
+		return nil
+	}
+	return metadata
 }
 
 func encodeStoreStatePacket(w *binarystreams.Writer, packet *StoreStatePacket) error {

@@ -29,6 +29,7 @@ type AuthFunc func(context.Context, *protocol.DeviceHello, *Connection) (restrea
 type Config struct {
 	DeviceManager      *DeviceManager
 	AuthenticateDevice AuthFunc
+	Capabilities       protocol.RelayCapabilities
 	Metadata           map[string]string
 	RPCWriteTimeout    time.Duration
 }
@@ -143,6 +144,7 @@ func (s *Server) acceptHello(ctx context.Context, c *Connection) (*Device, error
 func (s *Server) sendConnected(c *Connection) error {
 	connectedBytes, err := protocol.EncodePacket(&protocol.ConnectedPacket{
 		ProtocolVersion: protocol.CurrentVersion,
+		Capabilities:    s.config.Capabilities,
 		Metadata:        s.config.Metadata,
 	})
 	if err != nil {

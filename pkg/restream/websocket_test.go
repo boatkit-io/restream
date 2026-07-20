@@ -570,6 +570,104 @@ func TestViewerSocketEmitsEventDispatcherMessages(t *testing.T) {
 	}
 }
 
+func TestViewerSocketRelaysFullStateAppliesToSubscribedStore(t *testing.T) {
+	socket := &socketTracker{
+		emitQueue: make(chan emitMessage, 1),
+		storeSubscriptions: map[string]map[string]int{
+			viewerSocketTestStoreName: {"": 1},
+		},
+	}
+	stateBytes, err := SerializeToBytes(&viewerSocketTestState{
+		Values: map[string]int{"a": 42},
+		Other:  9,
+	}, nil)
+	if err != nil {
+		t.Fatalf("SerializeToBytes failed: %v", err)
+	}
+
+	socket.FullStateCallback(viewerSocketTestStoreName, stateBytes)
+	emitted := resolveEmitMessage(t, <-socket.emitQueue)
+	update, ok := emitted.Message.(StoreUpdateFullMessage)
+	if !ok {
+		t.Fatalf("full-state update type = %T, want StoreUpdateFullMessage", emitted.Message)
+	}
+	if update.Kind != StoreUpdateFull || update.StoreName != viewerSocketTestStoreName {
+		t.Fatalf("full-state update = %#v", update.StoreUpdateMessage)
+	}
+	var state viewerSocketTestState
+	if err := state.Deserialize(binarystreams.NewReaderFromBytes(update.State.Bytes()), nil); err != nil {
+		t.Fatalf("full-state deserialize failed: %v", err)
+	}
+	if state.Values["a"] != 42 || state.Other != 9 {
+		t.Fatalf("full-state payload = %#v, want a=42 Other=9", state)
+	}
+}
+
+func TestViewerSocketRelaysAppliedFullStateAsFreshKeyedSnapshots(t *testing.T) {
+	store := NewRelayStore[
+		viewerSocketTestState,
+		*viewerSocketTestState,
+		*viewerSocketTestPartial,
+	](viewerSocketTestStoreName, &viewerSocketTestState{
+		Values: map[string]int{"a": 1, "b": 2},
+		Other:  3,
+	}, AccessLevelPublic)
+	registry, err := NewStoreRegistry([]Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	socket := &socketTracker{
+		sr:        registry,
+		emitQueue: make(chan emitMessage, 1),
+		storeSubscriptions: map[string]map[string]int{
+			viewerSocketTestStoreName: {"values%&a": 1},
+		},
+	}
+	subscriptionID := registry.SubscribeToFullStateApplies(socket.FullStateCallback)
+	defer registry.UnsubscribeFromFullStateApplies(subscriptionID) //nolint:errcheck // Test cleanup.
+
+	stateBytes, err := SerializeToBytes(&viewerSocketTestState{
+		Values: map[string]int{"a": 42, "b": 99},
+		Other:  100,
+	}, nil)
+	if err != nil {
+		t.Fatalf("SerializeToBytes failed: %v", err)
+	}
+	if err := registry.SetFullStateToStore(viewerSocketTestStoreName, stateBytes); err != nil {
+		t.Fatalf("SetFullStateToStore failed: %v", err)
+	}
+
+	emitted := resolveEmitMessage(t, <-socket.emitQueue)
+	update, ok := emitted.Message.(StoreUpdatePartialMessage)
+	if !ok {
+		t.Fatalf("full-state keyed update type = %T, want StoreUpdatePartialMessage", emitted.Message)
+	}
+	var partial viewerSocketTestPartial
+	if err := partial.Deserialize(binarystreams.NewReaderFromBytes(update.Partial.Bytes()), nil); err != nil {
+		t.Fatalf("partial deserialize failed: %v", err)
+	}
+	clientState := &viewerSocketTestState{Values: map[string]int{}}
+	fields := partial.ApplyTo(clientState)
+	assertFieldsContainOnly(t, fields, []any{"Values", "a"})
+	assertMapEqual(t, map[string]int{"a": 42}, clientState.Values)
+	if clientState.Other != 0 {
+		t.Fatalf("unsubscribed Other field = %d, want 0", clientState.Other)
+	}
+}
+
+func TestViewerSocketIgnoresFullStateAppliesWithoutSubscription(t *testing.T) {
+	socket := &socketTracker{
+		emitQueue:          make(chan emitMessage, 1),
+		storeSubscriptions: map[string]map[string]int{},
+	}
+	socket.FullStateCallback(viewerSocketTestStoreName, []byte{1, 2, 3})
+	select {
+	case emitted := <-socket.emitQueue:
+		t.Fatalf("unexpected full-state update: %#v", emitted)
+	default:
+	}
+}
+
 func TestViewerSocketEmitMessageDoesNotBlockWhenQueueIsFull(t *testing.T) {
 	socket := &socketTracker{
 		emitQueue: make(chan emitMessage, 1),

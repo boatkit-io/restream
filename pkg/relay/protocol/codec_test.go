@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/boatkit-io/restream/pkg/binarystreams"
 )
 
 func TestDeviceHelloRoundTrip(t *testing.T) {
@@ -51,7 +53,10 @@ func TestPacketRoundTrips(t *testing.T) {
 			name: "connected",
 			in: &ConnectedPacket{
 				ProtocolVersion: CurrentVersion,
-				Metadata:        map[string]string{"relay": "test"},
+				Capabilities: RelayCapabilities{
+					OnDemandStoreStreaming: true,
+				},
+				Metadata: map[string]string{"relay": "test"},
 			},
 			kind: KindConnected,
 		},
@@ -124,6 +129,48 @@ func TestPacketRoundTrips(t *testing.T) {
 				t.Fatalf("decoded packet = %#v, want %#v", decoded, tt.in)
 			}
 		})
+	}
+}
+
+func TestConnectedPacketCapabilitiesUseBackwardCompatibleMetadataEncoding(t *testing.T) {
+	packet := &ConnectedPacket{
+		ProtocolVersion: CurrentVersion,
+		Capabilities: RelayCapabilities{
+			OnDemandStoreStreaming: true,
+		},
+		Metadata: map[string]string{"relay": "test"},
+	}
+
+	encoded, err := EncodePacket(packet)
+	if err != nil {
+		t.Fatalf("EncodePacket failed: %v", err)
+	}
+	r := binarystreams.NewReaderFromBytes(encoded[1:])
+	if _, err := r.ReadUInt32(); err != nil {
+		t.Fatalf("read protocol version failed: %v", err)
+	}
+	metadata, err := readStringMap(r)
+	if err != nil {
+		t.Fatalf("read legacy metadata failed: %v", err)
+	}
+	if metadata[onDemandStoreStreamingCapabilityKey] != enabledConnectedPacketCapabilityMetadata {
+		t.Fatalf("legacy capability metadata = %q, want %q",
+			metadata[onDemandStoreStreamingCapabilityKey], enabledConnectedPacketCapabilityMetadata)
+	}
+	if metadata["relay"] != "test" {
+		t.Fatalf("application metadata = %#v, want relay=test", metadata)
+	}
+
+	decoded, err := DecodePacket(encoded)
+	if err != nil {
+		t.Fatalf("DecodePacket failed: %v", err)
+	}
+	connected := decoded.(*ConnectedPacket)
+	if !connected.Capabilities.OnDemandStoreStreaming {
+		t.Fatal("typed on-demand capability was not decoded")
+	}
+	if _, leaked := connected.Metadata[onDemandStoreStreamingCapabilityKey]; leaked {
+		t.Fatalf("Restream capability leaked into application metadata: %#v", connected.Metadata)
 	}
 }
 

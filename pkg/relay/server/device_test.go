@@ -75,15 +75,23 @@ func TestDeviceAppliesDeviceStateOnlyToDeviceRelayUpdateStores(t *testing.T) {
 	}
 }
 
-func TestCloudSourceForDeviceStoreDoesNotForwardSubscriptions(t *testing.T) {
+func TestCloudSourceForDeviceStoreDoesNotAcceptDeviceRelayUpdates(t *testing.T) {
 	store := restream.NewCloudSourceForDeviceStore[testState, *testState, *testPartial](
 		"CloudSourceStore",
 		&testState{},
 		restream.AccessLevelPublic,
 	)
 
-	if _, ok := any(store).(relaySubscriptionStore); ok {
-		t.Fatal("CloudSourceForDeviceStore implements relaySubscriptionStore, want cloud-owned store without subscription forwarding")
+	registry, err := restream.NewStoreRegistry([]restream.Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	accepts, err := registry.StoreAcceptsDeviceRelayUpdates(store.GetName())
+	if err != nil {
+		t.Fatalf("StoreAcceptsDeviceRelayUpdates failed: %v", err)
+	}
+	if accepts {
+		t.Fatal("CloudSourceForDeviceStore accepts device relay updates")
 	}
 }
 
@@ -110,6 +118,33 @@ func readServerTestStoreState(t *testing.T, registry *restream.StoreRegistry, st
 type serverTypedRelayStore struct {
 	*restream.RelayStore[testState, *testState, *testPartial]
 	storeType restream.StoreType
+}
+
+type customServerRelayStore struct {
+	name string
+	data *restream.StoreData[testState, *testState, *testPartial]
+}
+
+func newCustomServerRelayStore(name string) *customServerRelayStore {
+	store := &customServerRelayStore{name: name}
+	store.data = restream.NewStoreData[testState, *testState, *testPartial](store, &testState{})
+	return store
+}
+
+func (s *customServerRelayStore) GetName() string {
+	return s.name
+}
+
+func (s *customServerRelayStore) GetStoreData() restream.StoreDataBase {
+	return s.data
+}
+
+func (s *customServerRelayStore) SubscribeToField(field []any, callback any) {
+	s.data.SubscribeToField(field, callback)
+}
+
+func (*customServerRelayStore) GetStoreType() restream.StoreType {
+	return restream.StoreTypeCloudImplOfDevice
 }
 
 func newServerTypedRelayStore(name string, storeType restream.StoreType) *serverTypedRelayStore {

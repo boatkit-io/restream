@@ -51,10 +51,17 @@ type Packet interface {
 	Kind() PacketKind
 }
 
+// RelayCapabilities advertises optional relay-server behavior to a connected device.
+type RelayCapabilities struct {
+	OnDemandStoreStreaming bool
+}
+
 // ConnectedPacket acknowledges an accepted device connection.
 type ConnectedPacket struct {
 	ProtocolVersion uint32
-	Metadata        map[string]string
+	Capabilities    RelayCapabilities
+	// Metadata contains application-defined relay metadata. Restream capabilities are exposed separately.
+	Metadata map[string]string
 }
 
 // Kind implements Packet.

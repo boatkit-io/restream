@@ -100,7 +100,7 @@ func (m *DeviceManager) GetDevice(deviceID string) (*Device, error) {
 	}
 
 	device = NewDevice(deviceID, sr, m.config)
-	device.configureRelaySubscriptionForwarding(stores)
+	device.configureRelaySubscriptionForwarding()
 	if m.config.ConfigureDevice != nil {
 		if err := m.config.ConfigureDevice(device); err != nil {
 			return nil, err
