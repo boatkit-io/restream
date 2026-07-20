@@ -373,8 +373,9 @@ func TestSendFullStateDefersSerializationUntilOutboundPacketBuild(t *testing.T) 
 	}
 }
 
-func TestSendPartialDefersSerializationUntilOutboundPacketBuild(t *testing.T) {
+func TestSendPartialSnapshotsSerializedBytesBeforeEnqueue(t *testing.T) {
 	serializeCount := 0
+	value := "queued"
 	done := make(chan struct{})
 	sendQueue := make(chan outboundPacket, 1)
 	s := &Streamer{
@@ -384,19 +385,21 @@ func TestSendPartialDefersSerializationUntilOutboundPacketBuild(t *testing.T) {
 	}
 
 	if err := s.sendPartial("TestStore", &streamerTestPartial{
+		Value: &value,
 		onSerialize: func() {
 			serializeCount++
 		},
 	}); err != nil {
 		t.Fatalf("sendPartial failed: %v", err)
 	}
-	if serializeCount != 0 {
-		t.Fatalf("sendPartial serialized before enqueue: %d", serializeCount)
+	if serializeCount != 1 {
+		t.Fatalf("sendPartial serialized %d times before enqueue, want 1", serializeCount)
 	}
+	value = "mutated after enqueue"
 
 	packetBytes := mustBuildOutboundPacket(t, <-sendQueue)
 	if serializeCount != 1 {
-		t.Fatalf("outbound packet build serialized %d times, want 1", serializeCount)
+		t.Fatalf("outbound packet build reserialized partial; count = %d, want 1", serializeCount)
 	}
 	packet, err := protocol.DecodePacket(packetBytes)
 	if err != nil {
@@ -409,6 +412,28 @@ func TestSendPartialDefersSerializationUntilOutboundPacketBuild(t *testing.T) {
 	if storePacket.StoreName != "TestStore" || storePacket.Kind() != protocol.KindPartialState {
 		t.Fatalf("store packet = %+v, want partial state for TestStore", storePacket)
 	}
+	var decoded streamerTestPartial
+	if err := decoded.Deserialize(binarystreams.NewReaderFromBytes(storePacket.Data), nil); err != nil {
+		t.Fatalf("partial deserialize failed: %v", err)
+	}
+	if decoded.Value == nil || *decoded.Value != "queued" {
+		t.Fatalf("queued partial value = %v, want queued", decoded.Value)
+	}
+}
+
+func TestGatherPartialDetachesRetainedValues(t *testing.T) {
+	values := map[string]string{"status": "gathered"}
+	s := NewStreamer(nil, nil, nil, Config{})
+	if err := s.gatherPartial("TestStore", &streamerMapPartial{Values: values}, time.Hour, 1); err != nil {
+		t.Fatalf("gatherPartial failed: %v", err)
+	}
+
+	values["status"] = "mutated after gather"
+	gathered := s.gatheredPartials["TestStore"].(*streamerMapPartial)
+	if gathered.Values["status"] != "gathered" {
+		t.Fatalf("gathered partial value = %q, want gathered", gathered.Values["status"])
+	}
+	s.clearGatheredPartials()
 }
 
 func TestStreamerStoreTypesFilterRelayTraffic(t *testing.T) {
@@ -891,6 +916,45 @@ func (s *streamerTestState) Deserialize(r *binarystreams.Reader, _ *restream.Var
 type streamerTestPartial struct {
 	Value       *string
 	onSerialize func()
+}
+
+type streamerMapPartial struct {
+	Values map[string]string
+}
+
+func (p *streamerMapPartial) Serialize(w *binarystreams.Writer, _ *restream.VarInfoStruct) error {
+	return restream.SerializeValue(p.Values, w, &restream.VarInfoMap{
+		KeyType:  &restream.VarInfoPrimitive{DataType: restream.SerializationTypeString},
+		ElemType: &restream.VarInfoPrimitive{DataType: restream.SerializationTypeString},
+	})
+}
+
+func (p *streamerMapPartial) Deserialize(r *binarystreams.Reader, _ *restream.VarInfoStruct) error {
+	return restream.DeserializeValue(&p.Values, r, &restream.VarInfoMap{
+		KeyType:  &restream.VarInfoPrimitive{DataType: restream.SerializationTypeString},
+		ElemType: &restream.VarInfoPrimitive{DataType: restream.SerializationTypeString},
+	})
+}
+
+func (p *streamerMapPartial) MergeOntoPartial(other any) {
+	po := other.(*streamerMapPartial)
+	if po.Values == nil {
+		po.Values = map[string]string{}
+	}
+	for key, value := range p.Values {
+		po.Values[key] = value
+	}
+}
+
+func (p *streamerMapPartial) ApplyTo(state any) [][]any {
+	po := state.(*map[string]string)
+	if *po == nil {
+		*po = map[string]string{}
+	}
+	for key, value := range p.Values {
+		(*po)[key] = value
+	}
+	return [][]any{{"Values"}}
 }
 
 func (p *streamerTestPartial) Serialize(w *binarystreams.Writer, _ *restream.VarInfoStruct) error {

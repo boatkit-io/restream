@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/boatkit-io/restream/pkg/binarystreams"
 	"github.com/boatkit-io/restream/pkg/relay/protocol"
 	"github.com/boatkit-io/restream/pkg/restream"
 	"github.com/boatkit-io/tugboat/pkg/subscribableevent"
@@ -327,10 +329,16 @@ func (s *Streamer) partialCallback(storeName string, _ [][]any, partial restream
 		}
 		generation = s.relayStoreGeneration[storeName]
 		if s.relayStoreCatchingUp[storeName] {
+			partialSnapshot, snapshotErr := snapshotPartial(partial)
+			if snapshotErr != nil {
+				s.relaySubscriptionMutex.Unlock()
+				s.closeCurrentConnOnSendError(snapshotErr)
+				return
+			}
 			if gathered, exists := s.relayCatchupPartials[storeName]; exists {
-				partial.MergeOntoPartial(gathered)
+				partialSnapshot.MergeOntoPartial(gathered)
 			} else {
-				s.relayCatchupPartials[storeName] = partial
+				s.relayCatchupPartials[storeName] = partialSnapshot
 			}
 			s.relaySubscriptionMutex.Unlock()
 			return
@@ -338,7 +346,9 @@ func (s *Streamer) partialCallback(storeName string, _ [][]any, partial restream
 	}
 
 	if debounce, ok := s.opts.StorePolicy.DebounceFor(storeName); ok {
-		s.gatherPartial(storeName, partial, debounce, generation)
+		if err := s.gatherPartial(storeName, partial, debounce, generation); err != nil {
+			s.closeCurrentConnOnSendError(err)
+		}
 		s.relaySubscriptionMutex.Unlock()
 		return
 	}
@@ -390,18 +400,24 @@ func (s *Streamer) gatherPartial(
 	partial restream.Partial,
 	debounce time.Duration,
 	generation uint64,
-) {
+) error {
+	partialSnapshot, err := snapshotPartial(partial)
+	if err != nil {
+		return err
+	}
+
 	s.gatherMutex.Lock()
 	if gathered, exists := s.gatheredPartials[storeName]; exists && s.gatherGeneration[storeName] == generation {
-		partial.MergeOntoPartial(gathered)
+		partialSnapshot.MergeOntoPartial(gathered)
 	} else {
-		s.gatheredPartials[storeName] = partial
+		s.gatheredPartials[storeName] = partialSnapshot
 		s.gatherStart[storeName] = time.Now()
 		s.gatherGeneration[storeName] = generation
 	}
 	s.gatherMutex.Unlock()
 
 	s.recalcGatherTimeout(debounce)
+	return nil
 }
 
 func (s *Streamer) recalcGatherTimeout(_ time.Duration) {
@@ -515,19 +531,46 @@ func (s *Streamer) sendPartialForGeneration(
 	partial restream.Partial,
 	generation uint64,
 ) error {
-	return s.enqueueStorePacketBuilder(
-		"partial state "+storeName,
-		storeName,
-		protocol.KindPartialState,
-		generation,
-		func() ([]byte, error) {
-			partialBytes, err := restream.SerializeToBytes(partial, nil)
-			if err != nil {
-				return nil, err
-			}
-			return protocol.EncodePacket(protocol.NewPartialStatePacket(storeName, partialBytes))
-		},
-	)
+	partialBytes, err := restream.SerializeToBytes(partial, nil)
+	if err != nil {
+		return err
+	}
+	packetBytes, err := protocol.EncodePacket(protocol.NewPartialStatePacket(storeName, partialBytes))
+	if err != nil {
+		return err
+	}
+	return s.enqueueOutboundPacket(outboundPacket{
+		description: "partial state " + storeName,
+		storeName:   storeName,
+		packetKind:  protocol.KindPartialState,
+		generation:  generation,
+		bytes:       packetBytes,
+	})
+}
+
+// snapshotPartial detaches a retained partial from values that ApplyTo may have installed directly into live store state.
+func snapshotPartial(partial restream.Partial) (restream.Partial, error) {
+	partialType := reflect.TypeOf(partial)
+	if partialType == nil || partialType.Kind() != reflect.Pointer {
+		return nil, fmt.Errorf("relay partial type %T is not a pointer", partial)
+	}
+	partialValue := reflect.ValueOf(partial)
+	if partialValue.IsNil() {
+		return nil, fmt.Errorf("relay partial type %T is nil", partial)
+	}
+
+	partialBytes, err := restream.SerializeToBytes(partial, nil)
+	if err != nil {
+		return nil, err
+	}
+	snapshot, ok := reflect.New(partialType.Elem()).Interface().(restream.Partial)
+	if !ok {
+		return nil, fmt.Errorf("relay partial snapshot type %s does not implement restream.Partial", partialType)
+	}
+	if err := snapshot.Deserialize(binarystreams.NewReaderFromBytes(partialBytes), nil); err != nil {
+		return nil, err
+	}
+	return snapshot, nil
 }
 
 func (s *Streamer) sendRPCResponse(rpcID uint32, resp []byte) error {
