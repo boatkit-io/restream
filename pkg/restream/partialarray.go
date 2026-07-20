@@ -74,8 +74,52 @@ func (p *PartialModArray[V, P]) MergeOntoPartial(por any) {
 	}
 }
 
-// ApplyTo applies the contents of this partialarray onto a full existing value
+// PruneAgainst removes operations that would not change the target slice and reports whether any remain.
+func (p *PartialModArray[V, PV]) PruneAgainst(por any) bool {
+	if p == nil {
+		return false
+	}
+	po, ok := por.(*[]V)
+	if !ok {
+		po = *por.(**[]V)
+	}
+
+	if p.whole != nil && ValuesEqual(*po, p.whole) {
+		p.whole = nil
+	}
+	if p.whole != nil {
+		return true
+	}
+	for k, v := range p.dataSets {
+		if k < 0 {
+			delete(p.dataSets, k)
+			continue
+		}
+		if k < len(*po) && ValuesEqual((*po)[k], v) {
+			delete(p.dataSets, k)
+		}
+	}
+	for k, pv := range p.dataMods {
+		if k < 0 {
+			delete(p.dataMods, k)
+			continue
+		}
+		var current V
+		if k < len(*po) {
+			current = (*po)[k]
+		}
+		if !PrunePartialAgainst(pv, &current) {
+			delete(p.dataMods, k)
+		}
+	}
+	return len(p.dataSets) > 0 || len(p.dataMods) > 0
+}
+
+// ApplyTo prunes and applies the contents of this partial array.
 func (p *PartialModArray[V, PV]) ApplyTo(por any) [][]any {
+	if !p.PruneAgainst(por) {
+		return [][]any{}
+	}
 	po, ok := por.(*[]V)
 	if !ok {
 		po = *por.(**[]V)
@@ -87,9 +131,6 @@ func (p *PartialModArray[V, PV]) ApplyTo(por any) [][]any {
 		ret = append(ret, []any{})
 	}
 	for k, v := range p.dataSets {
-		if k < 0 {
-			continue
-		}
 		*po = ensureSliceIndex(*po, k)
 		(*po)[k] = v
 		if p.whole == nil {
@@ -97,11 +138,17 @@ func (p *PartialModArray[V, PV]) ApplyTo(por any) [][]any {
 		}
 	}
 	for k, pv := range p.dataMods {
-		if k < 0 {
+		var current V
+		if k < len(*po) {
+			current = (*po)[k]
+		}
+		fs := pv.ApplyTo(&current)
+		if len(fs) == 0 {
+			delete(p.dataMods, k)
 			continue
 		}
 		*po = ensureSliceIndex(*po, k)
-		fs := pv.ApplyTo(&(*po)[k])
+		(*po)[k] = current
 		if p.whole == nil {
 			for _, f := range fs {
 				ret = append(ret, append([]any{k}, f...))
@@ -211,8 +258,39 @@ func (p *PartialArray[V]) MergeOntoPartial(por any) {
 	}
 }
 
-// ApplyTo applies the contents of this partialarray onto a full existing value
+// PruneAgainst removes operations that would not change the target slice and reports whether any remain.
+func (p *PartialArray[V]) PruneAgainst(por any) bool {
+	if p == nil {
+		return false
+	}
+	po, ok := por.(*[]V)
+	if !ok {
+		po = *por.(**[]V)
+	}
+
+	if p.whole != nil && ValuesEqual(*po, p.whole) {
+		p.whole = nil
+	}
+	if p.whole != nil {
+		return true
+	}
+	for k, v := range p.dataSets {
+		if k < 0 {
+			delete(p.dataSets, k)
+			continue
+		}
+		if k < len(*po) && ValuesEqual((*po)[k], v) {
+			delete(p.dataSets, k)
+		}
+	}
+	return len(p.dataSets) > 0
+}
+
+// ApplyTo prunes and applies the contents of this partial array.
 func (p *PartialArray[V]) ApplyTo(por any) [][]any {
+	if !p.PruneAgainst(por) {
+		return [][]any{}
+	}
 	po, ok := por.(*[]V)
 	if !ok {
 		po = *por.(**[]V)
@@ -224,9 +302,6 @@ func (p *PartialArray[V]) ApplyTo(por any) [][]any {
 		ret = append(ret, []any{})
 	}
 	for k, v := range p.dataSets {
-		if k < 0 {
-			continue
-		}
 		*po = ensureSliceIndex(*po, k)
 		(*po)[k] = v
 		if p.whole == nil {

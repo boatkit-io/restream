@@ -108,8 +108,43 @@ func (s *TestAPartial) MergeOntoPartial(por any) {
 	}
 }
 
-// ApplyTo applies this partial to the full version of the struct
+// PruneAgainst removes operations that would not change the target struct and reports whether any remain
+func (s *TestAPartial) PruneAgainst(por any) bool {
+	if s == nil {
+		return false
+	}
+	po, ok := por.(*TestA)
+	if !ok {
+		pop := por.(**TestA)
+		if *pop == nil {
+			po = &TestA{}
+		} else {
+			po = *pop
+		}
+	}
+	hasData := false
+	if s.A != nil {
+		if restream.PrunePartialAgainst(s.A, &po.A) {
+			hasData = true
+		} else {
+			s.A = nil
+		}
+	}
+	if s.B != nil {
+		if restream.PrunePartialAgainst(s.B, &po.B) {
+			hasData = true
+		} else {
+			s.B = nil
+		}
+	}
+	return hasData
+}
+
+// ApplyTo prunes and applies this partial to the full version of the struct
 func (s *TestAPartial) ApplyTo(por any) [][]any {
+	if !s.PruneAgainst(por) {
+		return [][]any{}
+	}
 	po, ok := por.(*TestA)
 	if !ok {
 		pop := por.(**TestA)
@@ -121,12 +156,18 @@ func (s *TestAPartial) ApplyTo(por any) [][]any {
 	ret := [][]any{}
 	if s.A != nil {
 		fs := s.A.ApplyTo(&po.A)
+		if len(fs) == 0 {
+			s.A = nil
+		}
 		for _, f := range fs {
 			ret = append(ret, append(append([]any{}, "A"), f...))
 		}
 	}
 	if s.B != nil {
 		fs := s.B.ApplyTo(&po.B)
+		if len(fs) == 0 {
+			s.B = nil
+		}
 		for _, f := range fs {
 			ret = append(ret, append(append([]any{}, "B"), f...))
 		}
@@ -423,8 +464,50 @@ func (s *TestArrayStatePartial) MergeOntoPartial(por any) {
 	}
 }
 
-// ApplyTo applies this partial to the full version of the struct
+// PruneAgainst removes operations that would not change the target struct and reports whether any remain
+func (s *TestArrayStatePartial) PruneAgainst(por any) bool {
+	if s == nil {
+		return false
+	}
+	po, ok := por.(*TestArrayState)
+	if !ok {
+		pop := por.(**TestArrayState)
+		if *pop == nil {
+			po = &TestArrayState{}
+		} else {
+			po = *pop
+		}
+	}
+	hasData := false
+	if s.Numbers != nil {
+		if restream.PrunePartialAgainst(s.Numbers, &po.Numbers) {
+			hasData = true
+		} else {
+			s.Numbers = nil
+		}
+	}
+	if s.Items != nil {
+		if restream.PrunePartialAgainst(s.Items, &po.Items) {
+			hasData = true
+		} else {
+			s.Items = nil
+		}
+	}
+	if s.PtrItems != nil {
+		if restream.PrunePartialAgainst(s.PtrItems, &po.PtrItems) {
+			hasData = true
+		} else {
+			s.PtrItems = nil
+		}
+	}
+	return hasData
+}
+
+// ApplyTo prunes and applies this partial to the full version of the struct
 func (s *TestArrayStatePartial) ApplyTo(por any) [][]any {
+	if !s.PruneAgainst(por) {
+		return [][]any{}
+	}
 	po, ok := por.(*TestArrayState)
 	if !ok {
 		pop := por.(**TestArrayState)
@@ -436,18 +519,27 @@ func (s *TestArrayStatePartial) ApplyTo(por any) [][]any {
 	ret := [][]any{}
 	if s.Numbers != nil {
 		fs := s.Numbers.ApplyTo(&po.Numbers)
+		if len(fs) == 0 {
+			s.Numbers = nil
+		}
 		for _, f := range fs {
 			ret = append(ret, append(append([]any{}, "Numbers"), f...))
 		}
 	}
 	if s.Items != nil {
 		fs := s.Items.ApplyTo(&po.Items)
+		if len(fs) == 0 {
+			s.Items = nil
+		}
 		for _, f := range fs {
 			ret = append(ret, append(append([]any{}, "Items"), f...))
 		}
 	}
 	if s.PtrItems != nil {
 		fs := s.PtrItems.ApplyTo(&po.PtrItems)
+		if len(fs) == 0 {
+			s.PtrItems = nil
+		}
 		for _, f := range fs {
 			ret = append(ret, append(append([]any{}, "PtrItems"), f...))
 		}
@@ -822,8 +914,43 @@ func (s *TestBPartial) MergeOntoPartial(por any) {
 	}
 }
 
-// ApplyTo applies this partial to the full version of the struct
+// PruneAgainst removes operations that would not change the target struct and reports whether any remain
+func (s *TestBPartial) PruneAgainst(por any) bool {
+	if s == nil {
+		return false
+	}
+	po, ok := por.(*TestB)
+	if !ok {
+		pop := por.(**TestB)
+		if *pop == nil {
+			po = &TestB{}
+		} else {
+			po = *pop
+		}
+	}
+	hasData := false
+	if s.A != nil {
+		if restream.PrunePartialAgainst(s.A, &po.A) {
+			hasData = true
+		} else {
+			s.A = nil
+		}
+	}
+	if s.B != nil {
+		if restream.PrunePartialAgainst(s.B, &po.B) {
+			hasData = true
+		} else {
+			s.B = nil
+		}
+	}
+	return hasData
+}
+
+// ApplyTo prunes and applies this partial to the full version of the struct
 func (s *TestBPartial) ApplyTo(por any) [][]any {
+	if !s.PruneAgainst(por) {
+		return [][]any{}
+	}
 	po, ok := por.(*TestB)
 	if !ok {
 		pop := por.(**TestB)
@@ -835,12 +962,18 @@ func (s *TestBPartial) ApplyTo(por any) [][]any {
 	ret := [][]any{}
 	if s.A != nil {
 		fs := s.A.ApplyTo(&po.A)
+		if len(fs) == 0 {
+			s.A = nil
+		}
 		for _, f := range fs {
 			ret = append(ret, append(append([]any{}, "A"), f...))
 		}
 	}
 	if s.B != nil {
 		fs := s.B.ApplyTo(&po.B)
+		if len(fs) == 0 {
+			s.B = nil
+		}
 		for _, f := range fs {
 			ret = append(ret, append(append([]any{}, "B"), f...))
 		}
@@ -1077,8 +1210,43 @@ func (s *TestCPartial) MergeOntoPartial(por any) {
 	}
 }
 
-// ApplyTo applies this partial to the full version of the struct
+// PruneAgainst removes operations that would not change the target struct and reports whether any remain
+func (s *TestCPartial) PruneAgainst(por any) bool {
+	if s == nil {
+		return false
+	}
+	po, ok := por.(*TestC)
+	if !ok {
+		pop := por.(**TestC)
+		if *pop == nil {
+			po = &TestC{}
+		} else {
+			po = *pop
+		}
+	}
+	hasData := false
+	if s.A != nil {
+		if po.A == *s.A {
+			s.A = nil
+		} else {
+			hasData = true
+		}
+	}
+	if s.B != nil {
+		if po.B == *s.B {
+			s.B = nil
+		} else {
+			hasData = true
+		}
+	}
+	return hasData
+}
+
+// ApplyTo prunes and applies this partial to the full version of the struct
 func (s *TestCPartial) ApplyTo(por any) [][]any {
+	if !s.PruneAgainst(por) {
+		return [][]any{}
+	}
 	po, ok := por.(*TestC)
 	if !ok {
 		pop := por.(**TestC)
@@ -1297,8 +1465,43 @@ func (s *TestMapDataPartial) MergeOntoPartial(por any) {
 	}
 }
 
-// ApplyTo applies this partial to the full version of the struct
+// PruneAgainst removes operations that would not change the target struct and reports whether any remain
+func (s *TestMapDataPartial) PruneAgainst(por any) bool {
+	if s == nil {
+		return false
+	}
+	po, ok := por.(*TestMapData)
+	if !ok {
+		pop := por.(**TestMapData)
+		if *pop == nil {
+			po = &TestMapData{}
+		} else {
+			po = *pop
+		}
+	}
+	hasData := false
+	if s.Number != nil {
+		if po.Number == *s.Number {
+			s.Number = nil
+		} else {
+			hasData = true
+		}
+	}
+	if s.Data != nil {
+		if restream.PrunePartialAgainst(s.Data, &po.Data) {
+			hasData = true
+		} else {
+			s.Data = nil
+		}
+	}
+	return hasData
+}
+
+// ApplyTo prunes and applies this partial to the full version of the struct
 func (s *TestMapDataPartial) ApplyTo(por any) [][]any {
+	if !s.PruneAgainst(por) {
+		return [][]any{}
+	}
 	po, ok := por.(*TestMapData)
 	if !ok {
 		pop := por.(**TestMapData)
@@ -1314,6 +1517,9 @@ func (s *TestMapDataPartial) ApplyTo(por any) [][]any {
 	}
 	if s.Data != nil {
 		fs := s.Data.ApplyTo(&po.Data)
+		if len(fs) == 0 {
+			s.Data = nil
+		}
 		for _, f := range fs {
 			ret = append(ret, append(append([]any{}, "Data"), f...))
 		}
@@ -1531,8 +1737,43 @@ func (s *TestPrimitiveOptionalStatePartial) MergeOntoPartial(por any) {
 	}
 }
 
-// ApplyTo applies this partial to the full version of the struct
+// PruneAgainst removes operations that would not change the target struct and reports whether any remain
+func (s *TestPrimitiveOptionalStatePartial) PruneAgainst(por any) bool {
+	if s == nil {
+		return false
+	}
+	po, ok := por.(*TestPrimitiveOptionalState)
+	if !ok {
+		pop := por.(**TestPrimitiveOptionalState)
+		if *pop == nil {
+			po = &TestPrimitiveOptionalState{}
+		} else {
+			po = *pop
+		}
+	}
+	hasData := false
+	if s.Primitive != nil {
+		if po.Primitive == *s.Primitive {
+			s.Primitive = nil
+		} else {
+			hasData = true
+		}
+	}
+	if s.Optional != nil {
+		if (po.Optional == nil && *s.Optional == nil) || (po.Optional != nil && *s.Optional != nil && *(po.Optional) == *(*s.Optional)) {
+			s.Optional = nil
+		} else {
+			hasData = true
+		}
+	}
+	return hasData
+}
+
+// ApplyTo prunes and applies this partial to the full version of the struct
 func (s *TestPrimitiveOptionalStatePartial) ApplyTo(por any) [][]any {
+	if !s.PruneAgainst(por) {
+		return [][]any{}
+	}
 	po, ok := por.(*TestPrimitiveOptionalState)
 	if !ok {
 		pop := por.(**TestPrimitiveOptionalState)
@@ -1821,8 +2062,57 @@ func (s *TestStatePartial) MergeOntoPartial(por any) {
 	}
 }
 
-// ApplyTo applies this partial to the full version of the struct
+// PruneAgainst removes operations that would not change the target struct and reports whether any remain
+func (s *TestStatePartial) PruneAgainst(por any) bool {
+	if s == nil {
+		return false
+	}
+	po, ok := por.(*TestState)
+	if !ok {
+		pop := por.(**TestState)
+		if *pop == nil {
+			po = &TestState{}
+		} else {
+			po = *pop
+		}
+	}
+	hasData := false
+	if s.MapPtrTest != nil {
+		if restream.PrunePartialAgainst(s.MapPtrTest, &po.MapPtrTest) {
+			hasData = true
+		} else {
+			s.MapPtrTest = nil
+		}
+	}
+	if s.BaseField != nil {
+		if po.BaseField == *s.BaseField {
+			s.BaseField = nil
+		} else {
+			hasData = true
+		}
+	}
+	if s.BaseStruct != nil {
+		if restream.PrunePartialAgainst(s.BaseStruct, &po.BaseStruct) {
+			hasData = true
+		} else {
+			s.BaseStruct = nil
+		}
+	}
+	if s.BaseStructPtr != nil {
+		if restream.PrunePartialAgainst(s.BaseStructPtr, &po.BaseStructPtr) {
+			hasData = true
+		} else {
+			s.BaseStructPtr = nil
+		}
+	}
+	return hasData
+}
+
+// ApplyTo prunes and applies this partial to the full version of the struct
 func (s *TestStatePartial) ApplyTo(por any) [][]any {
+	if !s.PruneAgainst(por) {
+		return [][]any{}
+	}
 	po, ok := por.(*TestState)
 	if !ok {
 		pop := por.(**TestState)
@@ -1834,6 +2124,9 @@ func (s *TestStatePartial) ApplyTo(por any) [][]any {
 	ret := [][]any{}
 	if s.MapPtrTest != nil {
 		fs := s.MapPtrTest.ApplyTo(&po.MapPtrTest)
+		if len(fs) == 0 {
+			s.MapPtrTest = nil
+		}
 		for _, f := range fs {
 			ret = append(ret, append(append([]any{}, "MapPtrTest"), f...))
 		}
@@ -1844,12 +2137,18 @@ func (s *TestStatePartial) ApplyTo(por any) [][]any {
 	}
 	if s.BaseStruct != nil {
 		fs := s.BaseStruct.ApplyTo(&po.BaseStruct)
+		if len(fs) == 0 {
+			s.BaseStruct = nil
+		}
 		for _, f := range fs {
 			ret = append(ret, append(append([]any{}, "BaseStruct"), f...))
 		}
 	}
 	if s.BaseStructPtr != nil {
 		fs := s.BaseStructPtr.ApplyTo(&po.BaseStructPtr)
+		if len(fs) == 0 {
+			s.BaseStructPtr = nil
+		}
 		for _, f := range fs {
 			ret = append(ret, append(append([]any{}, "BaseStructPtr"), f...))
 		}

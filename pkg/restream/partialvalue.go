@@ -38,8 +38,39 @@ func (p *PartialValue[V, P]) MergeOntoPartial(por any) {
 	}
 }
 
-// ApplyTo applies the contents of this partialvalue onto a full existing value
+// PruneAgainst removes operations that would not change the target value and reports whether any remain.
+func (p *PartialValue[V, P]) PruneAgainst(por any) bool {
+	if p == nil {
+		return false
+	}
+	if p.whole != nil {
+		if po, ok := por.(*V); ok {
+			if ValuesEqual(*po, *p.whole) {
+				p.whole = nil
+			}
+		} else {
+			po := por.(**V)
+			if ValuesEqual(*po, p.whole) {
+				p.whole = nil
+			}
+		}
+	}
+	if p.whole != nil {
+		return true
+	}
+	if p.partial != nil {
+		if !PrunePartialAgainst(*p.partial, por) {
+			p.partial = nil
+		}
+	}
+	return p.partial != nil
+}
+
+// ApplyTo prunes and applies the contents of this partial value.
 func (p *PartialValue[V, P]) ApplyTo(por any) [][]any {
+	if !p.PruneAgainst(por) {
+		return [][]any{}
+	}
 	ret := [][]any{}
 	if p.whole != nil {
 		if po, ok := por.(*V); ok {
@@ -51,7 +82,11 @@ func (p *PartialValue[V, P]) ApplyTo(por any) [][]any {
 	}
 	if p.partial != nil {
 		reti := (*p.partial).ApplyTo(por)
-		ret = append(ret, reti...)
+		if len(reti) == 0 {
+			p.partial = nil
+		} else {
+			ret = append(ret, reti...)
+		}
 	}
 	return ret
 }

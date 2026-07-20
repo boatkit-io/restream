@@ -24,9 +24,10 @@ type Credentials struct {
 
 // StorePolicy controls additional store filtering and partial debounce behavior for stores that stream to a relay.
 type StorePolicy struct {
-	Include  map[string]struct{}
-	Exclude  map[string]struct{}
-	Debounce map[string]time.Duration
+	Include         map[string]struct{}
+	Exclude         map[string]struct{}
+	Debounce        map[string]time.Duration
+	DefaultDebounce time.Duration
 }
 
 // Allows reports whether storeName should be streamed.
@@ -42,10 +43,14 @@ func (p StorePolicy) Allows(storeName string) bool {
 	return true
 }
 
-// DebounceFor returns the configured debounce duration for storeName.
+// DebounceFor returns the configured debounce duration for storeName. An entry
+// in Debounce takes precedence over DefaultDebounce, including a non-positive
+// entry that disables debounce for that store.
 func (p StorePolicy) DebounceFor(storeName string) (time.Duration, bool) {
-	d, ok := p.Debounce[storeName]
-	return d, ok && d > 0
+	if d, ok := p.Debounce[storeName]; ok {
+		return d, d > 0
+	}
+	return p.DefaultDebounce, p.DefaultDebounce > 0
 }
 
 // SendQueueFullInfo describes a dropped packet caused by relay send queue backpressure.

@@ -37,10 +37,18 @@ replace github.com/boatkit-io/restream => `+repoRoot+`
 
 	if err := os.WriteFile(filepath.Join(serverDir, "boardstorestate.go"), []byte(`package main
 
+import "time"
+
+type Counter uint32
+
 // @restream.partials
 type BoardStoreState struct {
-	Board   [][]string
-	Player0 bool
+	Board           [][]string
+	Player0         bool
+	Counter         Counter
+	UpdatedAt       time.Time
+	OptionalCount   *uint32
+	OptionalUpdated *time.Time
 }
 `), 0644); err != nil {
 		t.Fatal(err)
@@ -69,9 +77,30 @@ type BoardStoreState struct {
 		"func (s *BoardStoreState) PartialForFields(fields [][]any) (restream.Partial, bool)",
 		"partialForFieldsBoard",
 		"restream.NewPartialArray[[]string]()",
+		"func (s *BoardStoreStatePartial) PruneAgainst(por any) bool",
+		"hasData := false",
+		"return hasData",
+		"if po.Player0 == *s.Player0",
+		"if po.Counter == *s.Counter",
+		"if (po.UpdatedAt).Equal(*s.UpdatedAt)",
+		"*(po.OptionalCount) == *(*s.OptionalCount)",
+		"(po.OptionalUpdated).Equal(*(*s.OptionalUpdated))",
 	} {
 		if !strings.Contains(string(generated), expected) {
 			t.Fatalf("generated partial snapshot support missing expected %q:\n%s", expected, string(generated))
+		}
+	}
+	for _, unexpected := range []string{
+		"restream.ValuesEqual(po.Player0",
+		"restream.ValuesEqual(po.Counter",
+		"restream.ValuesEqual(po.UpdatedAt",
+		"restream.ValuesEqual(po.OptionalCount",
+		"restream.ValuesEqual(po.OptionalUpdated",
+		"ApplyPreparedTo",
+		"IsEmpty() bool",
+	} {
+		if strings.Contains(string(generated), unexpected) {
+			t.Fatalf("generated partial unexpectedly contains %q:\n%s", unexpected, string(generated))
 		}
 	}
 }

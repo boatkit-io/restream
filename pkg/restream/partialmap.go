@@ -93,8 +93,46 @@ func (p *PartialModMap[K, V, PV]) MergeOntoPartial(por any) {
 	}
 }
 
-// ApplyTo applies the contents of this partialmap onto a full existing value
+// PruneAgainst removes operations that would not change the target map and reports whether any remain.
+func (p *PartialModMap[K, V, PV]) PruneAgainst(por any) bool {
+	if p == nil {
+		return false
+	}
+	po, ok := por.(*map[K]V)
+	if !ok {
+		po = *por.(**map[K]V)
+	}
+
+	if p.whole != nil && ValuesEqual(*po, p.whole) {
+		p.whole = nil
+	}
+	if p.whole != nil {
+		return true
+	}
+	for k, v := range p.dataSets {
+		if current, exists := (*po)[k]; exists && ValuesEqual(current, v) {
+			delete(p.dataSets, k)
+		}
+	}
+	for k := range p.dataDeletes {
+		if _, exists := (*po)[k]; !exists {
+			delete(p.dataDeletes, k)
+		}
+	}
+	for k, pv := range p.dataMods {
+		cv := (*po)[k]
+		if !PrunePartialAgainst(pv, &cv) {
+			delete(p.dataMods, k)
+		}
+	}
+	return len(p.dataSets) > 0 || len(p.dataDeletes) > 0 || len(p.dataMods) > 0
+}
+
+// ApplyTo prunes and applies the contents of this partial map.
 func (p *PartialModMap[K, V, PV]) ApplyTo(por any) [][]any {
+	if !p.PruneAgainst(por) {
+		return [][]any{}
+	}
 	po, ok := por.(*map[K]V)
 	if !ok {
 		po = *por.(**map[K]V)
@@ -123,6 +161,13 @@ func (p *PartialModMap[K, V, PV]) ApplyTo(por any) [][]any {
 	for k, pv := range p.dataMods {
 		cv := (*po)[k]
 		fs := pv.ApplyTo(&cv)
+		if len(fs) == 0 {
+			delete(p.dataMods, k)
+			continue
+		}
+		if *po == nil {
+			*po = map[K]V{}
+		}
 		(*po)[k] = cv
 		if p.whole == nil {
 			for _, f := range fs {
@@ -259,8 +304,40 @@ func (p *PartialMap[K, V]) MergeOntoPartial(por any) {
 	}
 }
 
-// ApplyTo applies the contents of this partialmap onto a full existing value
+// PruneAgainst removes operations that would not change the target map and reports whether any remain.
+func (p *PartialMap[K, V]) PruneAgainst(por any) bool {
+	if p == nil {
+		return false
+	}
+	po, ok := por.(*map[K]V)
+	if !ok {
+		po = *por.(**map[K]V)
+	}
+
+	if p.whole != nil && ValuesEqual(*po, p.whole) {
+		p.whole = nil
+	}
+	if p.whole != nil {
+		return true
+	}
+	for k, v := range p.dataSets {
+		if current, exists := (*po)[k]; exists && ValuesEqual(current, v) {
+			delete(p.dataSets, k)
+		}
+	}
+	for k := range p.dataDeletes {
+		if _, exists := (*po)[k]; !exists {
+			delete(p.dataDeletes, k)
+		}
+	}
+	return len(p.dataSets) > 0 || len(p.dataDeletes) > 0
+}
+
+// ApplyTo prunes and applies the contents of this partial map.
 func (p *PartialMap[K, V]) ApplyTo(por any) [][]any {
+	if !p.PruneAgainst(por) {
+		return [][]any{}
+	}
 	po, ok := por.(*map[K]V)
 	if !ok {
 		po = *por.(**map[K]V)

@@ -21,8 +21,9 @@ func resolveEmitMessage(t *testing.T, msg emitMessage) emitMessage {
 }
 
 type viewerSocketTestState struct {
-	Values map[string]int
-	Other  int
+	Values             map[string]int
+	Other              int
+	onPartialForFields func()
 }
 
 type viewerSocketTestPartial struct {
@@ -58,7 +59,8 @@ func (s *viewerSocketTestState) RestreamClone() *viewerSocketTestState {
 		return nil
 	}
 	clone := &viewerSocketTestState{
-		Other: s.Other,
+		Other:              s.Other,
+		onPartialForFields: s.onPartialForFields,
 	}
 	if s.Values != nil {
 		clone.Values = make(map[string]int, len(s.Values))
@@ -67,6 +69,58 @@ func (s *viewerSocketTestState) RestreamClone() *viewerSocketTestState {
 		}
 	}
 	return clone
+}
+
+func (s *viewerSocketTestState) PartialForFields(fields [][]any) (Partial, bool) {
+	if s.onPartialForFields != nil {
+		s.onPartialForFields()
+	}
+
+	ret := &viewerSocketTestPartial{}
+	included := false
+	for _, field := range fields {
+		if len(field) == 0 {
+			values := make(map[string]int, len(s.Values))
+			for key, value := range s.Values {
+				values[key] = value
+			}
+			return &viewerSocketTestPartial{
+				Values: NewPartialMap[string, int]().SetWhole(values),
+				Other:  Ptr(s.Other),
+			}, true
+		}
+	}
+
+	for _, field := range ChildFieldsForField(fields, "Values") {
+		if ret.Values == nil {
+			ret.Values = NewPartialMap[string, int]()
+		}
+		if len(field) == 0 {
+			values := make(map[string]int, len(s.Values))
+			for key, value := range s.Values {
+				values[key] = value
+			}
+			ret.Values.SetWhole(values)
+			included = true
+			continue
+		}
+		key, ok := FieldPathPartToKey[string](field[0])
+		if !ok {
+			continue
+		}
+		if value, exists := s.Values[key]; exists {
+			ret.Values.Set(key, value)
+		} else {
+			ret.Values.Delete(key)
+		}
+		included = true
+	}
+
+	if len(ChildFieldsForField(fields, "Other")) > 0 {
+		ret.Other = Ptr(s.Other)
+		included = true
+	}
+	return ret, included
 }
 
 func (s *viewerSocketTestState) Serialize(w *binarystreams.Writer, _ *VarInfoStruct) error {
@@ -395,6 +449,57 @@ func TestViewerSocketKeyedCatchupUsesRelayStorePartial(t *testing.T) {
 
 	if _, subscribed := socket.storeSubscriptions[viewerSocketTestStoreName]["values%&"+sourceKey]; !subscribed {
 		t.Fatalf("expected socket to track keyed subscription for %s", sourceKey)
+	}
+}
+
+func TestViewerSocketQueuesKeyedCatchupBeforeConcurrentLiveUpdate(t *testing.T) {
+	const sourceKey = "Water_Depth_Auto"
+	state := &viewerSocketTestState{Values: map[string]int{sourceKey: 10}}
+	store := NewRelayStore[
+		viewerSocketTestState,
+		*viewerSocketTestState,
+		*viewerSocketTestPartial,
+	](viewerSocketTestStoreName, state, AccessLevelPublic)
+	registry, err := NewStoreRegistry([]Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	socket := &socketTracker{
+		sr:                 registry,
+		emitQueue:          make(chan emitMessage, 2),
+		storeSubscriptions: map[string]map[string]int{},
+	}
+	partialSubID := registry.SubscribeToPartialApplies(socket.PartialCallback)
+	defer registry.UnsubscribeFromPartialApplies(partialSubID) //nolint:errcheck // Test cleanup.
+
+	state.onPartialForFields = func() {
+		state.onPartialForFields = nil
+		store.storeData.ApplyPartial(&viewerSocketTestPartial{
+			Values: NewPartialMap[string, int]().Set(sourceKey, 11),
+		})
+	}
+
+	socket.onStoreSubscription(StoreSubscriptionMessage{
+		StoreName: viewerSocketTestStoreName,
+		Action:    Subscribe,
+		Key:       "values%&" + sourceKey,
+	})
+
+	clientState := &viewerSocketTestState{Values: map[string]int{}}
+	for updateIndex, expectedValue := range []int{10, 11} {
+		emitted := resolveEmitMessage(t, <-socket.emitQueue)
+		update, ok := emitted.Message.(StoreUpdatePartialMessage)
+		if !ok {
+			t.Fatalf("update %d was %T, want StoreUpdatePartialMessage", updateIndex, emitted.Message)
+		}
+		var partial viewerSocketTestPartial
+		if err := partial.Deserialize(binarystreams.NewReaderFromBytes(update.Partial.Bytes()), nil); err != nil {
+			t.Fatalf("update %d partial deserialize failed: %v", updateIndex, err)
+		}
+		partial.ApplyTo(clientState)
+		if got := clientState.Values[sourceKey]; got != expectedValue {
+			t.Fatalf("after update %d value = %d, want %d", updateIndex, got, expectedValue)
+		}
 	}
 }
 

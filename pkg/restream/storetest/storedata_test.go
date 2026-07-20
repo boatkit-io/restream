@@ -115,6 +115,70 @@ func TestGeneratedPartialCanClearOptionalPrimitivePointer(t *testing.T) {
 	assert.Equal(t, [][]any{{"Primitive"}, {"Optional"}}, fields)
 }
 
+func TestGeneratedApplyPrunesUnchangedFieldsFromPartial(t *testing.T) {
+	state := TestC{A: 1, B: 2}
+	partial := &TestCPartial{A: restream.Ptr(1), B: restream.Ptr(3)}
+	before, err := restream.SerializeToBytes(partial, nil)
+	assert.NoError(t, err)
+
+	fields := partial.ApplyTo(&state)
+	after, err := restream.SerializeToBytes(partial, nil)
+	assert.NoError(t, err)
+
+	assert.Equal(t, TestC{A: 1, B: 3}, state)
+	assert.Equal(t, [][]any{{"B"}}, fields)
+	assert.Nil(t, partial.A)
+	assert.NotNil(t, partial.B)
+	assert.Less(t, len(after), len(before))
+}
+
+func TestGeneratedApplyPrunesRecursivelyEmptyNestedPartials(t *testing.T) {
+	state := TestA{A: TestB{A: TestC{A: 1, B: 2}}}
+	leaf := &TestCPartial{A: restream.Ptr(1), B: restream.Ptr(2)}
+	partial := &TestAPartial{A: (&restream.PartialValue[TestB, *TestBPartial]{}).
+		ApplyPartial(&TestBPartial{A: (&restream.PartialValue[TestC, *TestCPartial]{}).ApplyPartial(leaf)})}
+
+	fields := partial.ApplyTo(&state)
+
+	assert.Empty(t, fields)
+	assert.Nil(t, leaf.A)
+	assert.Nil(t, leaf.B)
+	assert.Nil(t, partial.A)
+}
+
+func TestStoreDataCallbackReceivesPrunedGeneratedPartial(t *testing.T) {
+	state := TestState{BaseField: "same", BaseStruct: TestMapData{Number: 1}}
+	store := &TestStore{}
+	store.Sd = restream.NewStoreData[TestState, *TestState, *TestStatePartial](store, &state)
+	var callbackPartial *TestStatePartial
+	store.Sd.AddCallback(func(_ string, _ [][]any, partial restream.Partial) {
+		callbackPartial = partial.(*TestStatePartial)
+	})
+
+	partial := &TestStatePartial{
+		BaseField: restream.Ptr("same"),
+		BaseStruct: (&restream.PartialValue[TestMapData, *TestMapDataPartial]{}).
+			ApplyPartial(&TestMapDataPartial{Number: restream.Ptr(uint(2))}),
+	}
+	store.Sd.ApplyPartial(partial)
+
+	assert.Same(t, partial, callbackPartial)
+	assert.Nil(t, callbackPartial.BaseField)
+	assert.NotNil(t, callbackPartial.BaseStruct)
+	assert.Equal(t, uint(2), state.BaseStruct.Number)
+}
+
+func TestGeneratedCollectionPartialPrunesEmptyNestedModification(t *testing.T) {
+	state := map[uint8]*TestMapData{5: {Number: 5}}
+	partial := restream.NewPartialModMap[uint8, *TestMapData, *TestMapDataPartial]().
+		ApplyPartial(5, &TestMapDataPartial{Number: restream.Ptr(uint(5))})
+
+	fields := partial.ApplyTo(&state)
+
+	assert.Empty(t, fields)
+	assert.False(t, partial.PruneAgainst(&state))
+}
+
 func TestGeneratedStateCloneDeepCopiesContainers(t *testing.T) {
 	original := &TestState{
 		MapPtrTest: map[uint8]*TestMapData{

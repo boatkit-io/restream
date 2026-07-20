@@ -45,6 +45,43 @@ func TestStorePolicyAllows(t *testing.T) {
 	}
 }
 
+func TestStorePolicyDebounceFor(t *testing.T) {
+	policy := StorePolicy{
+		DefaultDebounce: 500 * time.Millisecond,
+		Debounce: map[string]time.Duration{
+			"CustomStore":    time.Second,
+			"ImmediateStore": 0,
+		},
+	}
+
+	tests := []struct {
+		name      string
+		storeName string
+		want      time.Duration
+		wantOK    bool
+	}{
+		{name: "default", storeName: "DefaultStore", want: 500 * time.Millisecond, wantOK: true},
+		{name: "store override", storeName: "CustomStore", want: time.Second, wantOK: true},
+		{name: "explicitly disabled", storeName: "ImmediateStore", want: 0, wantOK: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := policy.DebounceFor(tt.storeName)
+			if got != tt.want || ok != tt.wantOK {
+				t.Fatalf("DebounceFor(%q) = (%s, %t), want (%s, %t)", tt.storeName, got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestStorePolicyDebounceForWithoutDefault(t *testing.T) {
+	got, ok := (StorePolicy{}).DebounceFor("Store")
+	if got != 0 || ok {
+		t.Fatalf("DebounceFor() = (%s, %t), want (0s, false)", got, ok)
+	}
+}
+
 func TestStaticConfigProvidesEndpointAndCredentials(t *testing.T) {
 	s := NewStreamer(nil, nil, nil, Config{
 		Endpoint: "wss://relay.example/device",

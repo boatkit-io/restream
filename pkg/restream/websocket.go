@@ -143,7 +143,11 @@ type socketTracker struct {
 
 	storeSubscriptions map[string]map[string]int
 	subscriptionMutex  smartmutex.SmartMutex
-	disconnectOnce     sync.Once
+
+	storeUpdateQueueMutex sync.Mutex
+	pendingStoreCatchups  map[string]int
+	bufferedStoreUpdates  map[string][]emitMessage
+	disconnectOnce        sync.Once
 }
 
 func AddSocketHandlers(
@@ -405,6 +409,9 @@ func (st *socketTracker) onStoreSubscription(params ...any) {
 			return
 		}
 
+		// Make the catch-up pending before exposing this subscription to PartialCallback. Any live update that sees the
+		// subscription will then be buffered until its baseline snapshot has been queued.
+		st.storeUpdateQueueMutex.Lock()
 		st.subscriptionMutex.Lock()
 		keySubs := st.storeSubscriptions[subMsg.StoreName]
 		if keySubs == nil {
@@ -413,13 +420,21 @@ func (st *socketTracker) onStoreSubscription(params ...any) {
 		}
 		keySubs[key]++
 		firstKey := keySubs[key] == 1
+		if firstKey {
+			if st.pendingStoreCatchups == nil {
+				st.pendingStoreCatchups = map[string]int{}
+			}
+			st.pendingStoreCatchups[subMsg.StoreName]++
+		}
 		st.subscriptionMutex.Unlock()
+		st.storeUpdateQueueMutex.Unlock()
 
 		if !firstKey {
 			return
 		}
 
 		if err := st.sr.ListeningToStoreKey(subMsg.StoreName, key, userAccessLevel); err != nil {
+			st.cancelSubscriptionCatchup(subMsg.StoreName)
 			st.removeTrackedStoreSubscription(subMsg.StoreName, key)
 			st.log.Errorf("Error ListeningToStoreKey to %s/%s from packet -- possible double subscribe? Reason: %+v", subMsg.StoreName, key, err)
 			st.disconnect()
@@ -427,6 +442,7 @@ func (st *socketTracker) onStoreSubscription(params ...any) {
 		}
 
 		if err := st.emitSubscriptionCatchup(subMsg.StoreName, key, userAccessLevel); err != nil {
+			st.cancelSubscriptionCatchup(subMsg.StoreName)
 			st.removeTrackedStoreSubscription(subMsg.StoreName, key)
 			if errStop := st.sr.StopListeningToStoreKey(subMsg.StoreName, key); errStop != nil {
 				st.log.Errorf("Error rolling back ListeningToStoreKey for %s/%s: %+v", subMsg.StoreName, key, errStop)
@@ -478,7 +494,11 @@ func (st *socketTracker) emitSubscriptionCatchup(storeName string, key string, a
 			return err
 		}
 		if exists {
-			st.emitPartialStoreUpdateSnapshot(storeName, partialSnapshot)
+			message, err := buildPartialStoreUpdateMessage(storeName, partialSnapshot)
+			if err != nil {
+				return err
+			}
+			st.completeSubscriptionCatchup(storeName, message)
 			return nil
 		}
 	}
@@ -488,11 +508,15 @@ func (st *socketTracker) emitSubscriptionCatchup(storeName string, key string, a
 		return err
 	}
 
-	st.emitFullStoreUpdateSnapshot(storeName, stateSnapshot)
+	message, err := buildFullStoreUpdateMessage(storeName, stateSnapshot)
+	if err != nil {
+		return err
+	}
+	st.completeSubscriptionCatchup(storeName, message)
 	return nil
 }
 
-func (st *socketTracker) emitFullStoreUpdateSnapshot(storeName string, state Serializable) {
+func buildFullStoreUpdateMessage(storeName string, state Serializable) (emitMessage, error) {
 	update := StoreUpdateMessage{
 		Time:      time.Now().UnixMilli(),
 		Kind:      StoreUpdateFull,
@@ -500,19 +524,15 @@ func (st *socketTracker) emitFullStoreUpdateSnapshot(storeName string, state Ser
 	}
 	stateBytes, err := SerializeToBytes(state, nil)
 	if err != nil {
-		if st.log != nil {
-			st.log.Warnf("Error serializing full store update: %+v", err)
-		}
-		st.disconnect()
-		return
+		return emitMessage{}, err
 	}
-	st.emitMessage(SocketEventNameStoreUpdate, StoreUpdateFullMessage{
+	return emitMessage{Name: SocketEventNameStoreUpdate, Message: StoreUpdateFullMessage{
 		StoreUpdateMessage: update,
 		State:              socketTypes.NewBytesBuffer(stateBytes),
-	})
+	}}, nil
 }
 
-func (st *socketTracker) emitPartialStoreUpdateSnapshot(storeName string, partial Serializable) {
+func buildPartialStoreUpdateMessage(storeName string, partial Serializable) (emitMessage, error) {
 	update := StoreUpdateMessage{
 		Time:      time.Now().UnixMilli(),
 		Kind:      StoreUpdatePartial,
@@ -520,16 +540,69 @@ func (st *socketTracker) emitPartialStoreUpdateSnapshot(storeName string, partia
 	}
 	partialBytes, err := SerializeToBytes(partial, nil)
 	if err != nil {
+		return emitMessage{}, err
+	}
+	return emitMessage{Name: SocketEventNameStoreUpdate, Message: StoreUpdatePartialMessage{
+		StoreUpdateMessage: update,
+		Partial:            socketTypes.NewBytesBuffer(partialBytes),
+	}}, nil
+}
+
+func (st *socketTracker) emitPartialStoreUpdateSnapshot(storeName string, partial Serializable) {
+	message, err := buildPartialStoreUpdateMessage(storeName, partial)
+	if err != nil {
 		if st.log != nil {
 			st.log.Warnf("Error serializing partial store update: %+v", err)
 		}
 		st.disconnect()
 		return
 	}
-	st.emitMessage(SocketEventNameStoreUpdate, StoreUpdatePartialMessage{
-		StoreUpdateMessage: update,
-		Partial:            socketTypes.NewBytesBuffer(partialBytes),
-	})
+	st.queueLiveStoreUpdate(storeName, message)
+}
+
+func (st *socketTracker) queueLiveStoreUpdate(storeName string, message emitMessage) {
+	st.storeUpdateQueueMutex.Lock()
+	defer st.storeUpdateQueueMutex.Unlock()
+
+	if st.pendingStoreCatchups[storeName] > 0 {
+		if st.bufferedStoreUpdates == nil {
+			st.bufferedStoreUpdates = map[string][]emitMessage{}
+		}
+		st.bufferedStoreUpdates[storeName] = append(st.bufferedStoreUpdates[storeName], message)
+		return
+	}
+	st.queueEmitMessage(message)
+}
+
+func (st *socketTracker) completeSubscriptionCatchup(storeName string, message emitMessage) {
+	st.storeUpdateQueueMutex.Lock()
+	defer st.storeUpdateQueueMutex.Unlock()
+
+	st.queueEmitMessage(message)
+	remaining := st.pendingStoreCatchups[storeName] - 1
+	if remaining > 0 {
+		st.pendingStoreCatchups[storeName] = remaining
+		return
+	}
+
+	delete(st.pendingStoreCatchups, storeName)
+	for _, buffered := range st.bufferedStoreUpdates[storeName] {
+		st.queueEmitMessage(buffered)
+	}
+	delete(st.bufferedStoreUpdates, storeName)
+}
+
+func (st *socketTracker) cancelSubscriptionCatchup(storeName string) {
+	st.storeUpdateQueueMutex.Lock()
+	defer st.storeUpdateQueueMutex.Unlock()
+
+	remaining := st.pendingStoreCatchups[storeName] - 1
+	if remaining > 0 {
+		st.pendingStoreCatchups[storeName] = remaining
+		return
+	}
+	delete(st.pendingStoreCatchups, storeName)
+	delete(st.bufferedStoreUpdates, storeName)
 }
 
 // EventCallback is registered with the EventDispatcher to relay server-side events to the websocket client.

@@ -70,8 +70,47 @@ func (ft *FileTracking) createGoStructSerializers(si StructInfo, fields []*restr
 		}
 		outPartial += "}\n" + "\n"
 
-		outPartial += "// ApplyTo applies this partial to the full version of the struct\n"
+		outPartial += "// PruneAgainst removes operations that would not change the target struct and reports whether any remain\n"
+		outPartial += fmt.Sprintf("func (s *%sPartial) PruneAgainst(por any) bool {\n", si.Name)
+		outPartial += "    if s == nil { return false }\n"
+		outPartial += fmt.Sprintf("    po, ok := por.(*%s)\n", si.Name)
+		outPartial += "    if !ok {\n"
+		outPartial += fmt.Sprintf("        pop := por.(**%s)\n", si.Name)
+		outPartial += fmt.Sprintf("        if *pop == nil { po = &%s{} } else { po = *pop }\n", si.Name)
+		outPartial += "    }\n"
+		outPartial += "    hasData := false\n"
+		for idx, pfi := range partialFields {
+			fi := fields[idx]
+
+			fn := pfi.Name
+			isPartial := ft.supportsPartials(pfi.VarInfo)
+
+			outPartial += fmt.Sprintf("    if s.%s != nil {\n", fn)
+			if isPartial {
+				outPartial += fmt.Sprintf("        if restream.PrunePartialAgainst(s.%s, &po.%s) { hasData = true } else { s.%s = nil }\n",
+					fn, fn, fn)
+			} else {
+				ptn := ft.getGolangTypeName(pfi.VarInfo.(*restream.VarInfoPointer).SubType)
+				tn := ft.getGolangTypeName(fi.VarInfo)
+				nextValue := fmt.Sprintf("*s.%s", fn)
+				if ptn != tn {
+					nextValue = fmt.Sprintf("%s(*s.%s)", tn, fn)
+				}
+				equalExpr, ok := ft.golangWireEqualExpr(fi.VarInfo, "po."+fn, nextValue)
+				if !ok {
+					equalExpr = fmt.Sprintf("restream.ValuesEqual(po.%s, %s)", fn, nextValue)
+				}
+				outPartial += fmt.Sprintf("        if %s { s.%s = nil } else { hasData = true }\n", equalExpr, fn)
+			}
+			outPartial += "    }\n"
+		}
+		outPartial += "    return hasData\n"
+		outPartial += "}\n"
+
+		outPartial += "\n"
+		outPartial += "// ApplyTo prunes and applies this partial to the full version of the struct\n"
 		outPartial += fmt.Sprintf("func (s *%sPartial) ApplyTo(por any) [][]any {\n", si.Name)
+		outPartial += "    if !s.PruneAgainst(por) { return [][]any{} }\n"
 		outPartial += fmt.Sprintf("    po, ok := por.(*%s)\n", si.Name)
 		outPartial += "    if !ok {\n"
 		outPartial += fmt.Sprintf("        pop := por.(**%s)\n", si.Name)
@@ -81,35 +120,27 @@ func (ft *FileTracking) createGoStructSerializers(si StructInfo, fields []*restr
 		outPartial += "    ret := [][]any{}\n"
 		for idx, pfi := range partialFields {
 			fi := fields[idx]
-
 			fn := pfi.Name
-			isPartial := ft.supportsPartials(pfi.VarInfo)
-			isDirectAssign := false
-			switch fi.VarInfo.(type) {
-			case *restream.VarInfoMap, *restream.VarInfoArray:
-				isDirectAssign = true
-			}
-
-			outPartial += fmt.Sprintf("    if s.%s != nil {\n", fn)
-			if isPartial {
+			if ft.supportsPartials(pfi.VarInfo) {
+				outPartial += fmt.Sprintf("    if s.%s != nil {\n", fn)
 				outPartial += fmt.Sprintf("        fs := s.%s.ApplyTo(&po.%s)\n", fn, fn)
+				outPartial += fmt.Sprintf("        if len(fs) == 0 { s.%s = nil }\n", fn)
 				outPartial += "        for _, f := range fs {\n"
 				outPartial += fmt.Sprintf("            ret = append(ret, append(append([]any{}, \"%s\"), f...))\n", fn)
 				outPartial += "        }\n"
-			} else {
-				if isDirectAssign {
-					outPartial += fmt.Sprintf("        po.%s = s.%s\n", fn, fn)
-				} else {
-					ptn := ft.getGolangTypeName(pfi.VarInfo.(*restream.VarInfoPointer).SubType)
-					tn := ft.getGolangTypeName(fi.VarInfo)
-					if ptn == tn {
-						outPartial += fmt.Sprintf("        po.%s = *s.%s\n", fn, fn)
-					} else {
-						outPartial += fmt.Sprintf("        po.%s = %s(*s.%s)\n", fn, tn, fn)
-					}
-				}
-				outPartial += fmt.Sprintf("        ret = append(ret, []any{\"%s\"})\n", fn)
+				outPartial += "    }\n"
+				continue
 			}
+
+			ptn := ft.getGolangTypeName(pfi.VarInfo.(*restream.VarInfoPointer).SubType)
+			tn := ft.getGolangTypeName(fi.VarInfo)
+			nextValue := fmt.Sprintf("*s.%s", fn)
+			if ptn != tn {
+				nextValue = fmt.Sprintf("%s(*s.%s)", tn, fn)
+			}
+			outPartial += fmt.Sprintf("    if s.%s != nil {\n", fn)
+			outPartial += fmt.Sprintf("        po.%s = %s\n", fn, nextValue)
+			outPartial += fmt.Sprintf("        ret = append(ret, []any{\"%s\"})\n", fn)
 			outPartial += "    }\n"
 		}
 		outPartial += "    return ret\n"
@@ -155,6 +186,31 @@ func (ft *FileTracking) createGoStructSerializers(si StructInfo, fields []*restr
 	}
 
 	return nil
+}
+
+// golangWireEqualExpr returns a generated equality expression when VarInfo describes a type whose serialized
+// meaning can be compared without reflection. Pointers recurse so optional primitive fields stay on the same fast path.
+func (ft *FileTracking) golangWireEqualExpr(vi restream.VarInfo, left, right string) (string, bool) {
+	switch vit := vi.(type) {
+	case *restream.VarInfoPrimitive:
+		if vit.DataType == restream.SerializationTypeTime {
+			receiver := left
+			if strings.HasPrefix(receiver, "*(") && strings.HasSuffix(receiver, ")") {
+				receiver = strings.TrimSuffix(strings.TrimPrefix(receiver, "*("), ")")
+			}
+			return fmt.Sprintf("(%s).Equal(%s)", receiver, right), true
+		}
+		return fmt.Sprintf("%s == %s", left, right), true
+	case *restream.VarInfoPointer:
+		subExpr, ok := ft.golangWireEqualExpr(vit.SubType, "*("+left+")", "*("+right+")")
+		if !ok {
+			return "", false
+		}
+		return fmt.Sprintf("(%s == nil && %s == nil) || (%s != nil && %s != nil && %s)",
+			left, right, left, right, subExpr), true
+	default:
+		return "", false
+	}
 }
 
 func (ft *FileTracking) createGolangPartialForFields(
