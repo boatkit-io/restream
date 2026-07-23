@@ -112,6 +112,11 @@ export class TestCPartial {
         if (this.b !== undefined) { por.b = this.b; ret.push(["b"]); }
         return reduceFieldPaths(ret);
     }
+
+    applyOnTop(por: TestC|undefined): [TestC, (string | number)[][]] {
+        const target = por ?? TestC.fromValues();
+        return [target, this.applyTo(target)];
+    }
 }
 
 export class TestMapData {
@@ -215,6 +220,11 @@ export class TestMapDataPartial {
         if (this.data !== undefined) { if (!Array.isArray(por.data)) { por.data = Array.from(por.data ?? []); } const fs = this.data.applyTo(por.data!); for (const f of fs) { ret.push(["data",...f]); }}
         return reduceFieldPaths(ret);
     }
+
+    applyOnTop(por: TestMapData|undefined): [TestMapData, (string | number)[][]] {
+        const target = por ?? TestMapData.fromValues();
+        return [target, this.applyTo(target)];
+    }
 }
 
 export class TestPrimitiveOptionalState {
@@ -317,6 +327,11 @@ export class TestPrimitiveOptionalStatePartial {
         if (this.primitive !== undefined) { por.primitive = this.primitive; ret.push(["primitive"]); }
         if (this.optional !== undefined) { por.optional = this.optional === null ? undefined : this.optional; ret.push(["optional"]); }
         return reduceFieldPaths(ret);
+    }
+
+    applyOnTop(por: TestPrimitiveOptionalState|undefined): [TestPrimitiveOptionalState, (string | number)[][]] {
+        const target = por ?? TestPrimitiveOptionalState.fromValues();
+        return [target, this.applyTo(target)];
     }
 }
 
@@ -450,6 +465,11 @@ export class TestStatePartial {
         if (this.baseStruct !== undefined) { let fs; [por.baseStruct,fs] = this.baseStruct.applyOnTop(por.baseStruct); for (const f of fs) { ret.push(["baseStruct",...f]); }}
         if (this.baseStructPtr !== undefined) { let fs; [por.baseStructPtr,fs] = this.baseStructPtr.applyOnTop(por.baseStructPtr); for (const f of fs) { ret.push(["baseStructPtr",...f]); }}
         return reduceFieldPaths(ret);
+    }
+
+    applyOnTop(por: TestState|undefined): [TestState, (string | number)[][]] {
+        const target = por ?? TestState.fromValues();
+        return [target, this.applyTo(target)];
     }
 }
 
@@ -609,6 +629,11 @@ export class TestArrayStatePartial {
         if (this.ptrItems !== undefined) { if (!Array.isArray(por.ptrItems)) { por.ptrItems = Array.from(por.ptrItems ?? []); } const fs = this.ptrItems.applyTo(por.ptrItems!); for (const f of fs) { ret.push(["ptrItems",...f]); }}
         return reduceFieldPaths(ret);
     }
+
+    applyOnTop(por: TestArrayState|undefined): [TestArrayState, (string | number)[][]] {
+        const target = por ?? TestArrayState.fromValues();
+        return [target, this.applyTo(target)];
+    }
 }
 
 export class TestB {
@@ -712,6 +737,11 @@ export class TestBPartial {
         if (this.b !== undefined) { let fs; [por.b,fs] = this.b.applyOnTop(por.b); for (const f of fs) { ret.push(["b",...f]); }}
         return reduceFieldPaths(ret);
     }
+
+    applyOnTop(por: TestB|undefined): [TestB, (string | number)[][]] {
+        const target = por ?? TestB.fromValues();
+        return [target, this.applyTo(target)];
+    }
 }
 
 export class TestA {
@@ -814,5 +844,10 @@ export class TestAPartial {
         if (this.a !== undefined) { let fs; [por.a,fs] = this.a.applyOnTop(por.a); for (const f of fs) { ret.push(["a",...f]); }}
         if (this.b !== undefined) { let fs; [por.b,fs] = this.b.applyOnTop(por.b); for (const f of fs) { ret.push(["b",...f]); }}
         return reduceFieldPaths(ret);
+    }
+
+    applyOnTop(por: TestA|undefined): [TestA, (string | number)[][]] {
+        const target = por ?? TestA.fromValues();
+        return [target, this.applyTo(target)];
     }
 }

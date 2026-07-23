@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
-import { PartialModArray, PartialModMap } from './PackageRestream.js';
+import { PartialModArray, PartialModMap, PartialValue } from './PackageRestream.js';
+import { TestMapData, TestMapDataPartial } from './PackageStoretest.js';
 import type { AppliablePartial } from '../utils/SerializationTypes.js';
 
 type PartialApplySpecValue = {
@@ -71,6 +72,40 @@ describe('partial apply field paths', () => {
         expect(fields).toEqual([['engine']]);
     });
 
+    test('mod map materializes a missing parent for a generated nested partial', () => {
+        const target = new Map<number, TestMapData>();
+        const partial = PartialModMap.fromValues<number, TestMapData, TestMapDataPartial>(
+            new Map(),
+            new Set(),
+            new Map([[5, TestMapDataPartial.fromValues(42)]]),
+            undefined,
+        );
+
+        const fields = partial.applyTo(target);
+
+        expect(target.get(5)?.number).toBe(42);
+        expect(target.get(5)?.data).toEqual([]);
+        expect(fields).toEqual([[5, 'number']]);
+    });
+
+    test('mod map preserves an existing parent while applying a generated nested partial', () => {
+        const target = new Map<number, TestMapData>([
+            [5, TestMapData.fromValues(1, [7, 8])],
+        ]);
+        const partial = PartialModMap.fromValues<number, TestMapData, TestMapDataPartial>(
+            new Map(),
+            new Set(),
+            new Map([[5, TestMapDataPartial.fromValues(42)]]),
+            undefined,
+        );
+
+        const fields = partial.applyTo(target);
+
+        expect(target.get(5)?.number).toBe(42);
+        expect(target.get(5)?.data).toEqual([7, 8]);
+        expect(fields).toEqual([[5, 'number']]);
+    });
+
     test('mod array suppresses nested fields when the index was set', () => {
         const target: PartialApplySpecValue[] = [{ number: 0 }];
         const partial = PartialModArray.fromValues<PartialApplySpecValue, PartialApplySpecPartial>(
@@ -83,5 +118,33 @@ describe('partial apply field paths', () => {
 
         expect(target[0].number).toBe(2);
         expect(fields).toEqual([[0]]);
+    });
+
+    test('mod array materializes a missing element for a generated nested partial', () => {
+        const target: TestMapData[] = [];
+        const partial = PartialModArray.fromValues<TestMapData, TestMapDataPartial>(
+            new Map(),
+            new Map([[2, TestMapDataPartial.fromValues(84)]]),
+        );
+        partial.whole = undefined;
+
+        const fields = partial.applyTo(target);
+
+        expect(target[2]?.number).toBe(84);
+        expect(target[2]?.data).toEqual([]);
+        expect(fields).toEqual([[2, 'number']]);
+    });
+
+    test('partial value materializes a missing parent for a generated nested partial', () => {
+        const partial = PartialValue.fromValues<TestMapData|undefined, TestMapDataPartial>(
+            undefined,
+            TestMapDataPartial.fromValues(126),
+        );
+
+        const [target, fields] = partial.applyOnTop(undefined);
+
+        expect(target?.number).toBe(126);
+        expect(target?.data).toEqual([]);
+        expect(fields).toEqual([['number']]);
     });
 });

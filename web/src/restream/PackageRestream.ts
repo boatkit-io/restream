@@ -236,13 +236,12 @@ export class PartialModArray<V, P extends AppliablePartial<V>|AppliableOnTopPart
         }
         for (const [k, pv] of this.dataMods) {
             let fs: (string | number)[][] = [];
-            if ((pv as AppliablePartial<V>).applyTo) {
-                fs = (pv as AppliablePartial<V>).applyTo(por[k]!)
-            }
             if ((pv as AppliableOnTopPartial<V>).applyOnTop) {
                 let nv: V;
                 [nv, fs] = (pv as AppliableOnTopPartial<V>).applyOnTop(por[k])
                 por[k] = nv;
+            } else if ((pv as AppliablePartial<V>).applyTo) {
+                fs = (pv as AppliablePartial<V>).applyTo(por[k]!)
             }
 
             if (!this.whole) {
@@ -334,13 +333,12 @@ export class PartialModMap<K extends string|number, V, P extends AppliablePartia
 		}
 		for (const [k, pv] of this.dataMods) {
 			let fs: (string | number)[][] = [];
-			if ((pv as AppliablePartial<V>).applyTo) {
-				fs = (pv as AppliablePartial<V>).applyTo(por.get(k)!)
-			}
 			if ((pv as AppliableOnTopPartial<V>).applyOnTop) {
 				let nv: V;
 				[nv, fs] = (pv as AppliableOnTopPartial<V>).applyOnTop(por.get(k)!)
 				por.set(k, nv);
+			} else if ((pv as AppliablePartial<V>).applyTo) {
+				fs = (pv as AppliablePartial<V>).applyTo(por.get(k)!)
 			}
 			if (!this.whole) {
 				for (const fss of fs) {
@@ -401,11 +399,10 @@ export class PartialValue<V, P extends AppliablePartial<V>|AppliableOnTopPartial
         }
         if (this.partial) {
             let fs: (string | number)[][] = [];
-            if ((this.partial as AppliablePartial<V>).applyTo) {
-                fs = (this.partial as AppliablePartial<V>).applyTo(ret[0]);
-            }
             if ((this.partial as AppliableOnTopPartial<V>).applyOnTop) {
                 [ret[0], fs] = (this.partial as AppliableOnTopPartial<V>).applyOnTop(ret[0]);
+            } else if ((this.partial as AppliablePartial<V>).applyTo) {
+                fs = (this.partial as AppliablePartial<V>).applyTo(ret[0]);
             }
 
             if (!this.whole) {

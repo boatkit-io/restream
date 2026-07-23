@@ -174,8 +174,9 @@ func (ft *FileTracking) genTSClass(si StructInfo, fields []*restream.FieldInfo, 
 	out += genTSFieldInfo(fields)
 
 	if partial {
+		fullType := strings.TrimSuffix(si.Name, "Partial")
 		out += "\n"
-		out += fmt.Sprintf("    applyTo(por: %s): (string | number)[][] {\n", strings.TrimSuffix(si.Name, "Partial"))
+		out += fmt.Sprintf("    applyTo(por: %s): (string | number)[][] {\n", fullType)
 		out += "        const ret: (string | number)[][] = [];\n"
 		for _, fi := range fields {
 			fn := getTSFieldName(fi)
@@ -223,6 +224,11 @@ func (ft *FileTracking) genTSClass(si StructInfo, fields []*restream.FieldInfo, 
 			}
 		}
 		out += "        return reduceFieldPaths(ret);\n"
+		out += "    }" + "\n"
+		out += "\n"
+		out += fmt.Sprintf("    applyOnTop(por: %s|undefined): [%s, (string | number)[][]] {\n", fullType, fullType)
+		out += fmt.Sprintf("        const target = por ?? %s.fromValues();\n", fullType)
+		out += "        return [target, this.applyTo(target)];\n"
 		out += "    }" + "\n"
 	}
 
@@ -1293,11 +1299,10 @@ func genTSPartialAugmentations(si StructInfo) string {
         }
         if (this.partial) {
             let fs: (string | number)[][] = [];
-            if ((this.partial as AppliablePartial<V>).applyTo) {
-                fs = (this.partial as AppliablePartial<V>).applyTo(ret[0]);
-            }
             if ((this.partial as AppliableOnTopPartial<V>).applyOnTop) {
                 [ret[0], fs] = (this.partial as AppliableOnTopPartial<V>).applyOnTop(ret[0]);
+            } else if ((this.partial as AppliablePartial<V>).applyTo) {
+                fs = (this.partial as AppliablePartial<V>).applyTo(ret[0]);
             }
 
             if (!this.whole) {
@@ -1334,13 +1339,12 @@ func genTSPartialAugmentations(si StructInfo) string {
 		}
 		for (const [k, pv] of this.dataMods) {
 			let fs: (string | number)[][] = [];
-			if ((pv as AppliablePartial<V>).applyTo) {
-				fs = (pv as AppliablePartial<V>).applyTo(por.get(k)!)
-			}
 			if ((pv as AppliableOnTopPartial<V>).applyOnTop) {
 				let nv: V;
 				[nv, fs] = (pv as AppliableOnTopPartial<V>).applyOnTop(por.get(k)!)
 				por.set(k, nv);
+			} else if ((pv as AppliablePartial<V>).applyTo) {
+				fs = (pv as AppliablePartial<V>).applyTo(por.get(k)!)
 			}
 			if (!this.whole) {
 				for (const fss of fs) {
@@ -1394,13 +1398,12 @@ func genTSPartialAugmentations(si StructInfo) string {
         }
         for (const [k, pv] of this.dataMods) {
             let fs: (string | number)[][] = [];
-            if ((pv as AppliablePartial<V>).applyTo) {
-                fs = (pv as AppliablePartial<V>).applyTo(por[k]!)
-            }
             if ((pv as AppliableOnTopPartial<V>).applyOnTop) {
                 let nv: V;
                 [nv, fs] = (pv as AppliableOnTopPartial<V>).applyOnTop(por[k])
                 por[k] = nv;
+            } else if ((pv as AppliablePartial<V>).applyTo) {
+                fs = (pv as AppliablePartial<V>).applyTo(por[k]!)
             }
 
             if (!this.whole) {
