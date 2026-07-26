@@ -1614,9 +1614,8 @@ func TestBuildTSRPCStructsDocumentsRuntimeDependencies(t *testing.T) {
 		t.Fatalf("generated entry count = %d, want 2", len(ft.tsGenEntries))
 	}
 	requestDeps := strings.Join(ft.tsGenEntries[0].deps, ",")
-	if !strings.Contains(requestDeps, "RadioBeginTransmitResponse") ||
-		!strings.Contains(requestDeps, "TransmitOptions") {
-		t.Fatalf("request dependencies = %q, want response and options", requestDeps)
+	if !strings.Contains(requestDeps, "TransmitOptions") {
+		t.Fatalf("request dependencies = %q, want options", requestDeps)
 	}
 	responseDeps := strings.Join(ft.tsGenEntries[1].deps, ",")
 	if !strings.Contains(responseDeps, "TransmitLease") {

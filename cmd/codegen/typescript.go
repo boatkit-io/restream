@@ -807,9 +807,7 @@ func (ft *FileTracking) buildTSRPCStructs(rpcn, rpctn string, reqFields []*restr
 	if len(respFields) > 1 {
 		rt = ft.getTSType(respFields[0].VarInfo)
 	}
-	requestDeps := map[string]struct{}{
-		rpctn + "Response": {},
-	}
+	requestDeps := map[string]struct{}{}
 	for _, fi := range reqFields {
 		ft.documentTSSamePackageTypeDeps(fi.VarInfo, requestDeps)
 	}
