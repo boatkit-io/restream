@@ -831,6 +831,27 @@ func (ft *FileTracking) buildTSRPCStructs(rpcn, rpctn string, reqFields []*restr
 	return nil
 }
 
+// buildTSFFRPCStruct builds the request-only TypeScript packet for an FFRPC.
+func (ft *FileTracking) buildTSFFRPCStruct(
+	rpcName string,
+	rpcTypeName string,
+	requestFields []*restream.FieldInfo,
+) error {
+	structInfo := StructInfo{Name: rpcTypeName + "Request"}
+	out := fmt.Sprintf("export class %s extends FFRPCStruct {\n", structInfo.Name)
+	for _, field := range requestFields {
+		out += fmt.Sprintf("    public %s!: %s;\n", getTSFieldName(field), ft.getTSType(field.VarInfo))
+	}
+	out += fmt.Sprintf("    private constructor() { super(%q); }\n\n", rpcName)
+	out += ft.genTSFromValuesConstructor(structInfo, requestFields) + "\n"
+	out += genTSFieldInfo(requestFields)
+	out += ft.genTSNonFieldedStructSerializers(structInfo, requestFields)
+	out += "}\n"
+
+	ft.tsGenEntries = append(ft.tsGenEntries, fdef{name: structInfo.Name, defs: out, typ: fdefTypeOther})
+	return nil
+}
+
 // buildTSEventStruct is a helper to build the typescript event packet struct.
 func (ft *FileTracking) buildTSEventStruct(eventName, eventTypeName string, eventFields []*restream.FieldInfo) error {
 	si := StructInfo{Name: eventTypeName + "Event"}
@@ -1078,7 +1099,7 @@ func (pt *ProjTracking) tsRuntimeImports() ([]tsImport, error) {
 			},
 			{
 				Path:    "../websocket/SocketHelper.js",
-				Imports: []string{"EventStruct", "RPCResponseStruct", "RPCStruct"},
+				Imports: []string{"EventStruct", "FFRPCStruct", "RPCResponseStruct", "RPCStruct"},
 			},
 		}, nil
 	case tsRuntimeImportModePackage:
@@ -1095,7 +1116,7 @@ func (pt *ProjTracking) tsRuntimeImports() ([]tsImport, error) {
 			{
 				Path: runtimeImportPath,
 				Imports: []string{
-					"BinaryReader", "BinaryWriter", "EventStruct", "RPCResponseStruct", "RPCStruct",
+					"BinaryReader", "BinaryWriter", "EventStruct", "FFRPCStruct", "RPCResponseStruct", "RPCStruct",
 					"SerializationType", "VarInfoArray", "VarInfoDynamic", "VarInfoGenericParam", "VarInfoMap",
 					"VarInfoPointer", "VarInfoPrimitive", "VarInfoStruct",
 				},

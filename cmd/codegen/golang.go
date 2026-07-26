@@ -862,6 +862,26 @@ func (ft *FileTracking) buildGolangRPCStructs(rpcn, rpctn string, reqFields []*r
 	return nil
 }
 
+// buildGolangFFRPCStruct builds the request-only Go packet for an FFRPC.
+func (ft *FileTracking) buildGolangFFRPCStruct(
+	rpcName string,
+	rpcTypeName string,
+	requestFields []*restream.FieldInfo,
+) error {
+	requestTypeName := rpcTypeName + "Request"
+	out := fmt.Sprintf("// %s is a request object for the %s FFRPC call\n", requestTypeName, rpcName)
+	out += fmt.Sprintf("type %s struct { //nolint:revive\n", requestTypeName)
+	for _, field := range requestFields {
+		out += fmt.Sprintf("    %s %s\n", field.Name, ft.getGolangTypeName(field.VarInfo))
+	}
+	out += "}\n\n"
+
+	structInfo := StructInfo{Name: requestTypeName}
+	out += createGolangStructNonFieldedSerializers(structInfo, requestFields, true) + "\n"
+	ft.goGenEntries = append(ft.goGenEntries, fdef{name: rpcTypeName, defs: out})
+	return nil
+}
+
 // buildGolangEventStruct is a helper to build the golang event packet struct.
 func (ft *FileTracking) buildGolangEventStruct(eventName, eventTypeName string, eventFields []*restream.FieldInfo) error {
 	out := fmt.Sprintf("// %sEvent is an event packet object for the %s event\n", eventTypeName, eventName)

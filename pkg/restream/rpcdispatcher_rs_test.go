@@ -225,3 +225,81 @@ func (s *call3Response) Deserialize(r *binarystreams.Reader, _ *VarInfoStruct) e
 	}
 	return nil
 }
+
+// notifyRequest is a request object for the notify FFRPC call
+type notifyRequest struct { //nolint:revive
+	Payload []byte
+}
+
+// notifyRequestFieldInfo is the static field info for the notifyRequest struct
+var notifyRequestFieldInfo = []FieldInfo{
+	{Name: "Payload", FieldIdx: 0, VarInfo: &VarInfoArray{NotNil: false, ElemType: &VarInfoPrimitive{DataType: SerializationTypeUint8, MappedType: Ptr("byte")}}},
+}
+
+// Serialize serializes this structure to a binary writer
+func (s *notifyRequest) Serialize(w *binarystreams.Writer, _ *VarInfoStruct) error {
+	if err := SerializeValue(s.Payload, w, notifyRequestFieldInfo[0].VarInfo); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Deserialize deserializes data from a binary reader into this struct
+func (s *notifyRequest) Deserialize(r *binarystreams.Reader, _ *VarInfoStruct) error {
+	if err := DeserializeValue(&s.Payload, r, notifyRequestFieldInfo[0].VarInfo); err != nil {
+		return err
+	}
+	return nil
+}
+
+// notifyErrorRequest is a request object for the notifyError FFRPC call
+type notifyErrorRequest struct { //nolint:revive
+	Trigger bool
+}
+
+// notifyErrorRequestFieldInfo is the static field info for the notifyErrorRequest struct
+var notifyErrorRequestFieldInfo = []FieldInfo{
+	{Name: "Trigger", FieldIdx: 0, VarInfo: &VarInfoPrimitive{DataType: SerializationTypeBool}},
+}
+
+// Serialize serializes this structure to a binary writer
+func (s *notifyErrorRequest) Serialize(w *binarystreams.Writer, _ *VarInfoStruct) error {
+	if err := SerializeValue(s.Trigger, w, notifyErrorRequestFieldInfo[0].VarInfo); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Deserialize deserializes data from a binary reader into this struct
+func (s *notifyErrorRequest) Deserialize(r *binarystreams.Reader, _ *VarInfoStruct) error {
+	if err := DeserializeValue(&s.Trigger, r, notifyErrorRequestFieldInfo[0].VarInfo); err != nil {
+		return err
+	}
+	return nil
+}
+
+// notifyVoidRequest is a request object for the notifyVoid FFRPC call
+type notifyVoidRequest struct { //nolint:revive
+	Value int
+}
+
+// notifyVoidRequestFieldInfo is the static field info for the notifyVoidRequest struct
+var notifyVoidRequestFieldInfo = []FieldInfo{
+	{Name: "Value", FieldIdx: 0, VarInfo: &VarInfoPrimitive{DataType: SerializationTypeInt64, MappedType: Ptr("int")}},
+}
+
+// Serialize serializes this structure to a binary writer
+func (s *notifyVoidRequest) Serialize(w *binarystreams.Writer, _ *VarInfoStruct) error {
+	if err := SerializeValue(s.Value, w, notifyVoidRequestFieldInfo[0].VarInfo); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Deserialize deserializes data from a binary reader into this struct
+func (s *notifyVoidRequest) Deserialize(r *binarystreams.Reader, _ *VarInfoStruct) error {
+	if err := DeserializeValue(&s.Value, r, notifyVoidRequestFieldInfo[0].VarInfo); err != nil {
+		return err
+	}
+	return nil
+}

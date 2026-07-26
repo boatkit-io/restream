@@ -7,6 +7,7 @@ ReStream is a data streaming framework based on [ReSub](https://github.com/boatk
 - [Tic Tac Toe](examples/tictactoe) contains the full getting-started tutorial and completed direct client-server example.
 - [Tic Tac Toe Relay](examples/tictactoerelay) builds on the base example with a device server, cloud relay, and web client switcher.
 - [Keyed Events](examples/keyedevents) is a focused, tested radio-audio example showing exact-key subscriptions in Go and TypeScript.
+- [Fire-and-Forget RPCs](examples/ffrpc) demonstrates request-only browser-to-device audio frames with no response tracking.
 
 # Details
 
@@ -110,6 +111,51 @@ eventd.SubscribeToKeyedEventSubscriptions(func(storeName, eventName, key string,
 Device/cloud relays forward these transitions to the device and carry matching events back to cloud viewers. The relay protocol filters by the exact tuple on both sides and replays active subscriptions when the device reconnects. Cloud code should pass the relay device's `EventDispatcher` to `AddSocketHandlers`; if `ConfigureDevice` replaces that dispatcher, assign it there before returning so Restream attaches subscription forwarding to the replacement.
 
 See the runnable [Keyed Events example](examples/keyedevents), including its exact-routing and refcount tests.
+
+## Fire-and-Forget RPCs
+
+FFRPCs are typed client-to-server calls for data whose caller does not need an acknowledgement. They use the same generated request encoding and access checks as normal RPCs, but their websocket and relay envelopes have no call ID. The TypeScript client creates no promise or pending-call entry, and the receiving Go transport dispatches the handler in a goroutine without emitting a response.
+
+Register an FFRPC with a callback that returns nothing or an `error`. Returned errors are available only for receiver-side logging:
+
+```go
+rpcd.RegisterFFRPCHandler(
+	"Radio.TransmitAudio",
+	AccessLevelAdmin,
+	func(radioID string, sequence uint32, audio []byte) error {
+		return radio.AcceptAudio(radioID, sequence, audio)
+	},
+	nil,
+)
+```
+
+Run codegen to create the request-only `RadioTransmitAudioRequest` and fill in its reflection argument. The browser sends it with `sendFFRPC`, which returns `void`:
+
+```typescript
+rss.sendFFRPC(
+  RadioTransmitAudioRequest.fromValues(radioID, sequence, encodedAudio),
+);
+```
+
+Pass the dispatcher to a direct websocket server as the optional final argument:
+
+```go
+restream.AddSocketHandlers(
+	conn,
+	log,
+	sdr,
+	rpcd.FireRPC,
+	eventd,
+	accessLookup,
+	rpcd.FireFFRPC,
+)
+```
+
+For a device relay, pass `rpcd.FireFFRPC` as the optional final argument to `relayclient.NewStreamer`. A cloud viewer websocket passes `device.FFRPCHandler` to `AddSocketHandlers`; the relay forwards the request without allocating an RPC ID or pending response.
+
+FFRPC delivery still uses the underlying reliable websocket, but execution completion and application errors are deliberately invisible to the sender. Use a normal RPC when the caller must know whether an operation succeeded. For high-rate payloads, include a sequence number so the receiver can identify stale or reordered work.
+
+See the runnable [Fire-and-Forget RPC example](examples/ffrpc).
 
 ## Access Levels
 

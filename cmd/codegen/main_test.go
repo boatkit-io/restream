@@ -1439,7 +1439,7 @@ func TestWriteTSFileUsesPackageRuntimeImportsByDefault(t *testing.T) {
 	for _, expected := range []string{
 		"import * as ReStreamDecoders from '@boatkit-io/restream';",
 		"import * as ReStreamEncoders from '@boatkit-io/restream';",
-		"import { BinaryReader, BinaryWriter, EventStruct, RPCResponseStruct, RPCStruct, SerializationType, VarInfoArray, VarInfoDynamic, VarInfoGenericParam, VarInfoMap, VarInfoPointer, VarInfoPrimitive, VarInfoStruct } from '@boatkit-io/restream';",
+		"import { BinaryReader, BinaryWriter, EventStruct, FFRPCStruct, RPCResponseStruct, RPCStruct, SerializationType, VarInfoArray, VarInfoDynamic, VarInfoGenericParam, VarInfoMap, VarInfoPointer, VarInfoPrimitive, VarInfoStruct } from '@boatkit-io/restream';",
 		"import type { AppliableOnTopPartial, AppliablePartial, FieldInfo, VarInfo } from '@boatkit-io/restream';",
 		"import { SharedType } from './PackageShared.js';",
 	} {

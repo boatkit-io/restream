@@ -13,11 +13,11 @@ run = ["go run ./cmd/codegen -project ."]
 
 [tasks.test]
 description = "Run tests"
-run = ["gotestsum", "cd examples/keyedevents && go test ./...", "cd web && pnpm test"]
+run = ["gotestsum", "cd examples/keyedevents && go test ./...", "cd examples/ffrpc && go test ./...", "cd web && pnpm test"]
 
 [tasks.lint]
 description = "Run linters"
-run = ["golangci-lint run", "cd examples/keyedevents && golangci-lint run", "cd web && pnpm lint"]
+run = ["golangci-lint run", "cd examples/keyedevents && golangci-lint run", "cd examples/ffrpc && golangci-lint run", "cd web && pnpm lint"]
 
 [tasks.web-build]
 description = "Build the TypeScript web package"

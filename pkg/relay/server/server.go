@@ -306,6 +306,20 @@ func (c *Connection) SendRPC(rpcID uint32, name string, accessLevel restream.Acc
 	return c.sendPacket(packetBytes)
 }
 
+// SendFFRPC sends a fire-and-forget RPC command to the connected device.
+func (c *Connection) SendFFRPC(name string, accessLevel restream.AccessLevel, binaryData []byte) error {
+	packetBytes, err := protocol.EncodePacket(&protocol.FFRPCCallPacket{
+		MethodName:  name,
+		AccessLevel: byte(accessLevel),
+		Request:     binaryData,
+	})
+	if err != nil {
+		return err
+	}
+
+	return c.sendPacket(packetBytes)
+}
+
 // SendFullState sends a full store state packet to the connected device.
 func (c *Connection) SendFullState(storeName string, state []byte) error {
 	packetBytes, err := protocol.EncodePacket(protocol.NewFullStatePacket(storeName, state))

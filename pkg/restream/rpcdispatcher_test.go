@@ -1,6 +1,7 @@
 package restream
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 
@@ -88,4 +89,52 @@ func TestCalls(t *testing.T) {
 	assert.True(t, handled)
 	assert.Error(t, err)
 	assert.Nil(t, resb)
+}
+
+func TestFFRPCCalls(t *testing.T) {
+	rpcd := NewRPCDispatcher(logrus.StandardLogger())
+
+	var calledWith []byte
+	rpcd.RegisterFFRPCHandler("notify", AccessLevelAdmin, func(payload []byte) error {
+		calledWith = append([]byte(nil), payload...)
+		return nil
+	}, reflect.TypeFor[notifyRequest]())
+
+	requestBytes, err := SerializeToBytes(&notifyRequest{Payload: []byte{1, 2, 3}}, nil)
+	assert.NoError(t, err)
+
+	handled, err := rpcd.FireFFRPC("notify", AccessLevelAdmin, requestBytes)
+	assert.True(t, handled)
+	assert.NoError(t, err)
+	assert.Equal(t, []byte{1, 2, 3}, calledWith)
+
+	handled, err = rpcd.FireFFRPC("notify", AccessLevelViewer, requestBytes)
+	assert.True(t, handled)
+	assert.Error(t, err)
+
+	handled, err = rpcd.FireFFRPC("missing", AccessLevelAdmin, requestBytes)
+	assert.False(t, handled)
+	assert.NoError(t, err)
+
+	var voidResult int
+	rpcd.RegisterFFRPCHandler("notifyVoid", AccessLevelAdmin, func(value int) {
+		voidResult = value
+	}, reflect.TypeFor[notifyVoidRequest]())
+	voidRequestBytes, err := SerializeToBytes(&notifyVoidRequest{Value: 9}, nil)
+	assert.NoError(t, err)
+	handled, err = rpcd.FireFFRPC("notifyVoid", AccessLevelAdmin, voidRequestBytes)
+	assert.True(t, handled)
+	assert.NoError(t, err)
+	assert.Equal(t, 9, voidResult)
+
+	expectedErr := errors.New("receiver rejected notification")
+	rpcd.RegisterFFRPCHandler("notifyError", AccessLevelAdmin, func(trigger bool) error {
+		assert.True(t, trigger)
+		return expectedErr
+	}, reflect.TypeFor[notifyErrorRequest]())
+	errorRequestBytes, err := SerializeToBytes(&notifyErrorRequest{Trigger: true}, nil)
+	assert.NoError(t, err)
+	handled, err = rpcd.FireFFRPC("notifyError", AccessLevelAdmin, errorRequestBytes)
+	assert.True(t, handled)
+	assert.ErrorIs(t, err, expectedErr)
 }

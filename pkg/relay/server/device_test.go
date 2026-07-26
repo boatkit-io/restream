@@ -4,7 +4,9 @@ import (
 	"testing"
 
 	"github.com/boatkit-io/restream/pkg/binarystreams"
+	"github.com/boatkit-io/restream/pkg/relay/protocol"
 	"github.com/boatkit-io/restream/pkg/restream"
+	gws "github.com/gorilla/websocket"
 )
 
 func TestDeviceUnknownStorePolicy(t *testing.T) {
@@ -16,6 +18,52 @@ func TestDeviceUnknownStorePolicy(t *testing.T) {
 	device = NewDevice("device-1", mustStoreRegistry(t), DeviceManagerConfig{UnknownStorePolicy: UnknownStoreIgnore})
 	if err := device.HandleFullState(nil, "MissingStore", nil); err != nil {
 		t.Fatalf("HandleFullState missing store with ignore policy failed: %v", err)
+	}
+}
+
+func TestDeviceFFRPCHandlerForwardsWithoutPendingResponse(t *testing.T) {
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	device := NewDevice("device-1", mustStoreRegistry(t), DeviceManagerConfig{})
+	device.DeviceConnected(NewConnection(serverConn))
+
+	handled, err := device.FFRPCHandler(
+		"Radio.TransmitAudio",
+		restream.AccessLevel(3),
+		[]byte{7, 8, 9},
+	)
+	if err != nil {
+		t.Fatalf("FFRPCHandler failed: %v", err)
+	}
+	if !handled {
+		t.Fatal("FFRPCHandler reported the relayed call as unhandled")
+	}
+
+	messageType, message, err := clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read FFRPC packet failed: %v", err)
+	}
+	if messageType != gws.BinaryMessage {
+		t.Fatalf("message type = %d, want BinaryMessage", messageType)
+	}
+	packetRaw, err := protocol.DecodePacket(message)
+	if err != nil {
+		t.Fatalf("Decode FFRPC packet failed: %v", err)
+	}
+	packet, ok := packetRaw.(*protocol.FFRPCCallPacket)
+	if !ok {
+		t.Fatalf("packet type = %T, want *FFRPCCallPacket", packetRaw)
+	}
+	if packet.MethodName != "Radio.TransmitAudio" || packet.AccessLevel != 3 {
+		t.Fatalf("FFRPC packet = %+v", packet)
+	}
+
+	device.rpcMutex.Lock()
+	pendingCount := len(device.rpcsPending)
+	device.rpcMutex.Unlock()
+	if pendingCount != 0 {
+		t.Fatalf("pending RPC count = %d, want 0", pendingCount)
 	}
 }
 

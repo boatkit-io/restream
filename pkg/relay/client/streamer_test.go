@@ -176,6 +176,66 @@ func TestHandleConnWrapsRelayRPCPacketError(t *testing.T) {
 	}
 }
 
+func TestHandleConnDispatchesFFRPCsWithoutWaitingForHandlers(t *testing.T) {
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	started := make(chan byte, 2)
+	releaseFirst := make(chan struct{})
+	s := NewStreamer(nil, nil, nil, Config{},
+		func(_ string, _ restream.AccessLevel, request []byte) (bool, error) {
+			started <- request[0]
+			if request[0] == 1 {
+				<-releaseFirst
+			}
+			return true, nil
+		},
+	)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.handleConn(context.Background(), clientConn, Credentials{
+			DeviceID: "device-1",
+			AuthType: "shared-key",
+			AuthData: []byte("secret"),
+		})
+	}()
+
+	if _, _, err := serverConn.ReadMessage(); err != nil {
+		t.Fatalf("Read hello failed: %v", err)
+	}
+	connectedBytes, err := protocol.EncodePacket(&protocol.ConnectedPacket{ProtocolVersion: protocol.CurrentVersion})
+	if err != nil {
+		t.Fatalf("Encode connected failed: %v", err)
+	}
+	if err := serverConn.WriteMessage(gws.BinaryMessage, connectedBytes); err != nil {
+		t.Fatalf("Write connected failed: %v", err)
+	}
+	for _, request := range []byte{1, 2} {
+		packetBytes, encodeErr := protocol.EncodePacket(&protocol.FFRPCCallPacket{
+			MethodName:  "Radio.TransmitAudio",
+			AccessLevel: byte(restream.AccessLevelPublic),
+			Request:     []byte{request},
+		})
+		if encodeErr != nil {
+			t.Fatalf("Encode FFRPC failed: %v", encodeErr)
+		}
+		if err := serverConn.WriteMessage(gws.BinaryMessage, packetBytes); err != nil {
+			t.Fatalf("Write FFRPC failed: %v", err)
+		}
+	}
+
+	received := map[byte]bool{}
+	for len(received) < 2 {
+		select {
+		case request := <-started:
+			received[request] = true
+		case <-time.After(time.Second):
+			t.Fatalf("FFRPC handlers started = %v, want both requests while first remains blocked", received)
+		}
+	}
+	close(releaseFirst)
+}
+
 func TestEnqueuePacketAfterDisconnectDoesNotPanic(t *testing.T) {
 	s := &Streamer{}
 

@@ -7,7 +7,7 @@ import * as ReStreamDecoders from '../utils/Decoders.js';
 import * as ReStreamEncoders from '../utils/Encoders.js';
 import { SerializationType, VarInfoArray, VarInfoPointer, VarInfoPrimitive, VarInfoStruct } from '../utils/SerializationTypes.js';
 import type { FieldInfo } from '../utils/SerializationTypes.js';
-import { EventStruct, RPCStruct } from '../websocket/SocketHelper.js';
+import { EventStruct, FFRPCStruct, RPCStruct } from '../websocket/SocketHelper.js';
 
 export const AccessLevelAdmin = 2;
 
@@ -310,5 +310,83 @@ export class keyedcallEvent extends EventStruct {
 
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
         ReStreamEncoders.serializeValue(this.test, w, keyedcallEvent.fieldInfo[0].varInfo);
+    }
+}
+
+export class notifyErrorRequest extends FFRPCStruct {
+    public trigger!: boolean;
+    private constructor() { super("notifyError"); }
+
+    public static fromValues(
+        trigger: boolean = false,
+    ) {
+        const o = new notifyErrorRequest();
+        o.trigger = trigger;
+        return o;
+    }
+
+    public static readonly fieldInfo: readonly FieldInfo[] = [
+        {name: "Trigger", fieldIdx: 0, varInfo: new VarInfoPrimitive(SerializationType.Bool)},
+    ];
+    public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
+        const o = new notifyErrorRequest();
+        o.trigger = ReStreamDecoders.deserializeValue(r, this.fieldInfo[0].varInfo);
+        return o;
+    }
+
+    public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
+        ReStreamEncoders.serializeValue(this.trigger, w, notifyErrorRequest.fieldInfo[0].varInfo);
+    }
+}
+
+export class notifyRequest extends FFRPCStruct {
+    public payload!: Uint8Array|undefined;
+    private constructor() { super("notify"); }
+
+    public static fromValues(
+        payload: Uint8Array|undefined = new Uint8Array(),
+    ) {
+        const o = new notifyRequest();
+        o.payload = payload;
+        return o;
+    }
+
+    public static readonly fieldInfo: readonly FieldInfo[] = [
+        {name: "Payload", fieldIdx: 0, varInfo: new VarInfoArray(false, new VarInfoPrimitive(SerializationType.Uint8, "byte"))},
+    ];
+    public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
+        const o = new notifyRequest();
+        o.payload = ReStreamDecoders.deserializeValue(r, this.fieldInfo[0].varInfo);
+        return o;
+    }
+
+    public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
+        ReStreamEncoders.serializeValue(this.payload, w, notifyRequest.fieldInfo[0].varInfo);
+    }
+}
+
+export class notifyVoidRequest extends FFRPCStruct {
+    public value!: number;
+    private constructor() { super("notifyVoid"); }
+
+    public static fromValues(
+        value: number = 0,
+    ) {
+        const o = new notifyVoidRequest();
+        o.value = value;
+        return o;
+    }
+
+    public static readonly fieldInfo: readonly FieldInfo[] = [
+        {name: "Value", fieldIdx: 0, varInfo: new VarInfoPrimitive(SerializationType.Int64, "int")},
+    ];
+    public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
+        const o = new notifyVoidRequest();
+        o.value = ReStreamDecoders.deserializeValue(r, this.fieldInfo[0].varInfo);
+        return o;
+    }
+
+    public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
+        ReStreamEncoders.serializeValue(this.value, w, notifyVoidRequest.fieldInfo[0].varInfo);
     }
 }

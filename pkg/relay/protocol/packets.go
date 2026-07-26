@@ -6,7 +6,7 @@
 package protocol
 
 // CurrentVersion is the current relay protocol version.
-const CurrentVersion uint32 = 7
+const CurrentVersion uint32 = 8
 
 // PacketKind identifies the type of a relay packet.
 type PacketKind byte
@@ -30,6 +30,8 @@ const (
 	KindKeyedEvent
 	// KindKeyedEventSubscription carries a keyed-event lifecycle change from the relay server to the device server.
 	KindKeyedEventSubscription
+	// KindFFRPCCall carries a fire-and-forget RPC call from the relay server down to the device server.
+	KindFFRPCCall
 )
 
 const (
@@ -127,6 +129,19 @@ type RPCCallPacket struct {
 	Request     []byte
 }
 
+// FFRPCCallPacket carries an FFRPC call from the relay server to the device
+// server without a response ID.
+type FFRPCCallPacket struct {
+	MethodName  string
+	AccessLevel byte
+	Request     []byte
+}
+
+// Kind implements Packet.
+func (*FFRPCCallPacket) Kind() PacketKind {
+	return KindFFRPCCall
+}
+
 // Kind implements Packet.
 func (*RPCCallPacket) Kind() PacketKind {
 	return KindRPCCall
@@ -205,7 +220,7 @@ func (p *RawPacket) Kind() PacketKind {
 
 // IsStandardKind reports whether kind is reserved by this protocol package.
 func IsStandardKind(kind PacketKind) bool {
-	return kind >= KindConnected && kind <= KindKeyedEventSubscription
+	return kind >= KindConnected && kind <= KindFFRPCCall
 }
 
 // IsApplicationKind reports whether kind is in the fixed application extension range.

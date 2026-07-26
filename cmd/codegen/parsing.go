@@ -1075,7 +1075,9 @@ func (ft *FileTracking) parseFuncDecls() error { //nolint:gocyclo,funlen
 			if !ok {
 				continue
 			}
-			if sexid.Name != "rpcd" || se.Sel.Name != "RegisterRPCHandler" {
+			isRPC := sexid.Name == "rpcd" && se.Sel.Name == "RegisterRPCHandler"
+			isFFRPC := sexid.Name == "rpcd" && se.Sel.Name == "RegisterFFRPCHandler"
+			if !isRPC && !isFFRPC {
 				if se.Sel.Name != "RegisterEvent" && se.Sel.Name != "RegisterKeyedEvent" {
 					continue
 				}
@@ -1162,9 +1164,52 @@ func (ft *FileTracking) parseFuncDecls() error { //nolint:gocyclo,funlen
 				ftt = receiverLookup[tn+"."+st.Sel.Name]
 			}
 
-			var respField *dst.Field
 			ftp := ftt.Params
 			ftr := ftt.Results
+			if isFFRPC {
+				if ftr != nil && len(ftr.List) > 1 {
+					return fmt.Errorf("FFRPC handler for %s has %d return values", rpcn, len(ftr.List))
+				}
+				if ftr != nil && len(ftr.List) == 1 {
+					resultType, ok := ftr.List[0].Type.(*dst.Ident)
+					if !ok || resultType.Name != "error" {
+						return fmt.Errorf("FFRPC handler for %s must return nothing or error", rpcn)
+					}
+				}
+
+				fmt.Printf("Building FFRPC handler for: %s\n", rpcn)
+
+				reqFields, err := ft.genParamFieldInfo(ftp.List)
+				if err != nil {
+					return err
+				}
+				for _, fi := range reqFields {
+					fi.Name = toPublicName(fi.Name)
+				}
+				if err := ft.buildGolangFFRPCStruct(rpcn, rpctn, reqFields); err != nil {
+					return err
+				}
+				if err := ft.buildTSFFRPCStruct(rpcn, rpctn, reqFields); err != nil {
+					return err
+				}
+
+				fixed := false
+				requestTypeName := fmt.Sprintf("%sRequest", rpctn)
+				if len(xt.Args) <= 3 {
+					xt.Args = append(xt.Args, genRPCArg(requestTypeName))
+					fixed = true
+				} else if !validateRPCArg(xt.Args[3], requestTypeName) {
+					xt.Args[3] = genRPCArg(requestTypeName)
+					fixed = true
+				}
+				if fixed {
+					ft.inputFileDirty = true
+					fmt.Printf("Fixed FFRPC handler type for %s\n", rpcn)
+				}
+				continue
+			}
+
+			var respField *dst.Field
 			errIdx := 0
 			switch len(ftr.List) {
 			case 1:

@@ -2,13 +2,27 @@ import type { Socket } from 'socket.io-client';
 import { describe, expect, test } from 'vitest';
 
 import BinaryReader from '../utils/BinaryReader.js';
+import BinaryWriter from '../utils/BinaryWriter.js';
+import type { VarInfoStruct } from '../utils/SerializationTypes.js';
 import {
     EventStruct,
+    FFRPCCallMessage,
+    FFRPCStruct,
     KeyedEventMessage,
     KeyedEventSubscriptionMessage,
     ReStreamSocket,
     StoreSubscriptionAction,
 } from './SocketHelper.js';
+
+class TestFFRPC extends FFRPCStruct {
+    public constructor(public readonly value: number) {
+        super('Radio.TransmitAudio');
+    }
+
+    public serialize(writer: BinaryWriter, _varInfo: VarInfoStruct | undefined): void {
+        writer.writeUint8(this.value);
+    }
+}
 
 class TestKeyedEvent extends EventStruct {
     public static readonly eventBoundName = 'Radio.Audio';
@@ -128,5 +142,29 @@ describe('ReStreamSocket keyed event subscriptions', () => {
             expect.objectContaining({ key: 'radio-a', action: StoreSubscriptionAction.Subscribe }),
             expect.objectContaining({ key: 'radio-b', action: StoreSubscriptionAction.Subscribe }),
         ]);
+    });
+});
+
+describe('ReStreamSocket FFRPC calls', () => {
+    test('sends a request without allocating response state', () => {
+        const socket = new FakeSocket();
+        const restreamSocket = new ReStreamSocket(socket as unknown as Socket);
+        restreamSocket.markAuthenticated();
+
+        expect(restreamSocket.sendFFRPC(new TestFFRPC(42))).toBeUndefined();
+        expect(socket.emitted).toHaveLength(1);
+        expect(socket.emitted[0]?.name).toBe('ffrpc');
+
+        const message = socket.emitted[0]?.message as FFRPCCallMessage;
+        expect(message.methodName).toBe('Radio.TransmitAudio');
+        expect([...new Uint8Array(message.request)]).toEqual([42]);
+    });
+
+    test('throws synchronously when disconnected', () => {
+        const socket = new FakeSocket();
+        const restreamSocket = new ReStreamSocket(socket as unknown as Socket);
+
+        expect(() => restreamSocket.sendFFRPC(new TestFFRPC(42))).toThrow('Server is disconnected');
+        expect(socket.emitted).toEqual([]);
     });
 });

@@ -11,6 +11,8 @@ export {
     EventMessage,
     EventStruct,
     EventStructType,
+    FFRPCCallMessage,
+    FFRPCStruct,
     KeyedEventMessage,
     KeyedEventSubscriptionMessage,
     ReStreamSocket,

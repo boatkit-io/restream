@@ -50,6 +50,7 @@ const (
 type DeviceManagerConfig struct {
 	Stores              StoreFactory
 	GlobalRPC           restream.RPCHandlerFunc
+	GlobalFFRPC         restream.FFRPCHandlerFunc
 	FullStateHandler    StoreStateHandler
 	PartialStateHandler StoreStateHandler
 	EventHandler        EventHandler

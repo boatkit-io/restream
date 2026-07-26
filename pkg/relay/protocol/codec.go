@@ -112,6 +112,10 @@ func EncodePacket(packet Packet) ([]byte, error) {
 		if err := encodeRPCCallPacket(w, p); err != nil {
 			return nil, err
 		}
+	case *FFRPCCallPacket:
+		if err := encodeFFRPCCallPacket(w, p); err != nil {
+			return nil, err
+		}
 	case *RPCResponsePacket:
 		if err := encodeRPCResponsePacket(w, p); err != nil {
 			return nil, err
@@ -180,6 +184,12 @@ func DecodePacket(data []byte) (Packet, error) {
 			return nil, err
 		}
 		return packet, ensureEOF(r, "rpc call packet")
+	case KindFFRPCCall:
+		packet, err := decodeFFRPCCallPacket(r)
+		if err != nil {
+			return nil, err
+		}
+		return packet, ensureEOF(r, "ffrpc call packet")
 	case KindRPCResponse:
 		packet, err := decodeRPCResponsePacket(r)
 		if err != nil {
@@ -310,6 +320,36 @@ func decodeRPCCallPacket(r *binarystreams.Reader) (*RPCCallPacket, error) {
 	}
 	return &RPCCallPacket{
 		RPCID:       rpcID,
+		MethodName:  methodName,
+		AccessLevel: accessLevel,
+		Request:     request,
+	}, nil
+}
+
+func encodeFFRPCCallPacket(w *binarystreams.Writer, packet *FFRPCCallPacket) error {
+	if err := writeString(w, packet.MethodName); err != nil {
+		return err
+	}
+	if err := w.WriteByte(packet.AccessLevel); err != nil {
+		return err
+	}
+	return writeBytes(w, packet.Request)
+}
+
+func decodeFFRPCCallPacket(r *binarystreams.Reader) (*FFRPCCallPacket, error) {
+	methodName, err := readString(r)
+	if err != nil {
+		return nil, err
+	}
+	accessLevel, err := r.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+	request, err := readBytes(r)
+	if err != nil {
+		return nil, err
+	}
+	return &FFRPCCallPacket{
 		MethodName:  methodName,
 		AccessLevel: accessLevel,
 		Request:     request,

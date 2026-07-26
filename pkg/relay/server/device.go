@@ -453,6 +453,29 @@ func (d *Device) RPCHandler(name string, accessLevel restream.AccessLevel, binar
 	return resp, true, nil
 }
 
+// FFRPCHandler handles cloud viewer FFRPCs by trying GlobalFFRPC first, then
+// forwarding unhandled calls to the connected device without retaining any
+// response state.
+func (d *Device) FFRPCHandler(name string, accessLevel restream.AccessLevel, binaryData []byte) (bool, error) {
+	if d.config.GlobalFFRPC != nil {
+		handled, err := d.config.GlobalFFRPC(name, accessLevel, binaryData)
+		if handled {
+			return true, err
+		}
+	}
+
+	d.connMutex.RLock()
+	conn := d.conn
+	d.connMutex.RUnlock()
+	if conn == nil {
+		return false, fmt.Errorf("no connected device available to handle request")
+	}
+	if err := conn.SendFFRPC(name, accessLevel, binaryData); err != nil {
+		return false, fmt.Errorf("error sending FFRPC: %w", err)
+	}
+	return true, nil
+}
+
 func (d *Device) closePendingRPCsForConn(conn *Connection) {
 	d.rpcMutex.Lock()
 	for rpcID, pending := range d.rpcsPending {

@@ -98,6 +98,13 @@ type RPCCallMessage struct {
 	Request    socketTypes.BufferInterface `json:"request"`
 }
 
+// FFRPCCallMessage is a fire-and-forget RPC sent by the client. It deliberately
+// has no call ID because the server never sends a response.
+type FFRPCCallMessage struct {
+	MethodName string                      `json:"methodName"`
+	Request    socketTypes.BufferInterface `json:"request"`
+}
+
 // RPCCallResponseMessage is a message sent by the server in response to an RPC call
 type RPCCallResponseMessage struct {
 	CallID   int                         `json:"callID"`
@@ -128,6 +135,8 @@ const (
 	SocketEventNameRPCCall = "rpccall"
 	// SocketEventNameRPCCallResponse - RPC Call Response
 	SocketEventNameRPCCallResponse = "rpccallresp"
+	// SocketEventNameFFRPCCall - Fire-and-forget RPC Call
+	SocketEventNameFFRPCCall = "ffrpc"
 )
 
 // emitMessage is a struct for storing queued message to be emitted through the websocket
@@ -151,6 +160,7 @@ type socketTracker struct {
 	log          *logrus.Logger
 	sr           *StoreRegistry
 	rpch         RPCHandlerFunc
+	ffrpch       FFRPCHandlerFunc
 	ed           *EventDispatcher
 	accessLookup AccessLookupFunc
 
@@ -181,12 +191,21 @@ func AddSocketHandlers(
 	rpch RPCHandlerFunc,
 	ed *EventDispatcher,
 	accessLookup AccessLookupFunc,
+	ffrpcHandlers ...FFRPCHandlerFunc,
 ) error {
+	if len(ffrpcHandlers) > 1 {
+		return fmt.Errorf("AddSocketHandlers accepts at most one FFRPC handler")
+	}
+	var ffrpch FFRPCHandlerFunc
+	if len(ffrpcHandlers) == 1 {
+		ffrpch = ffrpcHandlers[0]
+	}
 	st := &socketTracker{
 		conn:         conn,
 		log:          log,
 		sr:           sr,
 		rpch:         rpch,
+		ffrpch:       ffrpch,
 		ed:           ed,
 		accessLookup: accessLookup,
 
@@ -212,6 +231,11 @@ func AddSocketHandlers(
 	}
 
 	if err := conn.On(SocketEventNameRPCCall, st.onRPCCall); err != nil {
+		conn.Disconnect(true)
+		return err
+	}
+
+	if err := conn.On(SocketEventNameFFRPCCall, st.onFFRPCCall); err != nil {
 		conn.Disconnect(true)
 		return err
 	}
@@ -887,6 +911,40 @@ func (st *socketTracker) onRPCCall(params ...any) {
 		}
 
 		st.emitMessage(SocketEventNameRPCCallResponse, resp)
+	}()
+}
+
+// onFFRPCCall dispatches an FFRPC asynchronously without allocating a call ID,
+// retaining response state, or emitting anything back to the caller.
+func (st *socketTracker) onFFRPCCall(params ...any) {
+	if st.ffrpch == nil {
+		st.log.Errorf("FFRPC received but no FFRPCHandlerFunc was provided")
+		st.disconnect()
+		return
+	}
+
+	var rpcMsg FFRPCCallMessage
+	if err := mapstructure.Decode(params[0], &rpcMsg); err != nil {
+		st.log.Errorf("Error parsing ffrpc message: %+v", err)
+		st.disconnect()
+		return
+	}
+
+	go func() {
+		userAccessLevel, err := st.lookupAccessLevel()
+		if err != nil {
+			st.log.Errorf("Error looking up user access level: %+v", err)
+			st.disconnect()
+			return
+		}
+
+		handled, err := st.ffrpch(rpcMsg.MethodName, userAccessLevel, rpcMsg.Request.Bytes())
+		if err != nil {
+			st.log.WithField("ffrpcName", rpcMsg.MethodName).Errorf("Error handling FFRPC call: %+v", err)
+		} else if !handled {
+			st.log.Errorf("Unhandled FFRPC call: %s", rpcMsg.MethodName)
+			st.disconnect()
+		}
 	}()
 }
 

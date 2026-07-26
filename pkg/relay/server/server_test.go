@@ -185,6 +185,38 @@ func TestConnectionSendRPCWritesCallPacket(t *testing.T) {
 	}
 }
 
+func TestConnectionSendFFRPCWritesRequestWithoutID(t *testing.T) {
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	conn := NewConnection(serverConn)
+	if err := conn.SendFFRPC("Radio.TransmitAudio", restream.AccessLevel(3), []byte{7, 8, 9}); err != nil {
+		t.Fatalf("SendFFRPC failed: %v", err)
+	}
+
+	messageType, message, err := clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read FFRPC failed: %v", err)
+	}
+	if messageType != gws.BinaryMessage {
+		t.Fatalf("message type = %d, want BinaryMessage", messageType)
+	}
+	packetRaw, err := protocol.DecodePacket(message)
+	if err != nil {
+		t.Fatalf("Decode FFRPC failed: %v", err)
+	}
+	packet, ok := packetRaw.(*protocol.FFRPCCallPacket)
+	if !ok {
+		t.Fatalf("FFRPC packet type = %T, want *FFRPCCallPacket", packetRaw)
+	}
+	if packet.MethodName != "Radio.TransmitAudio" || packet.AccessLevel != 3 {
+		t.Fatalf("FFRPC packet = %+v, want method=Radio.TransmitAudio access=3", packet)
+	}
+	if string(packet.Request) != string([]byte{7, 8, 9}) {
+		t.Fatalf("FFRPC request = %v, want [7 8 9]", packet.Request)
+	}
+}
+
 func TestServerReadPacketsWrapsStorePacketError(t *testing.T) {
 	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
 	defer cleanup()

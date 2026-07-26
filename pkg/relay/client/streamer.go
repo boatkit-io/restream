@@ -26,9 +26,10 @@ var (
 
 // Streamer streams local Restream state to a relay server.
 type Streamer struct {
-	sr  *restream.StoreRegistry
-	rpc restream.RPCHandlerFunc
-	ed  *restream.EventDispatcher
+	sr    *restream.StoreRegistry
+	rpc   restream.RPCHandlerFunc
+	ffrpc restream.FFRPCHandlerFunc
+	ed    *restream.EventDispatcher
 
 	opts Config
 
@@ -90,13 +91,22 @@ func NewStreamer(
 	rpc restream.RPCHandlerFunc,
 	ed *restream.EventDispatcher,
 	config Config,
+	ffrpcHandlers ...restream.FFRPCHandlerFunc,
 ) *Streamer {
+	if len(ffrpcHandlers) > 1 {
+		panic("NewStreamer accepts at most one FFRPC handler")
+	}
+	var ffrpc restream.FFRPCHandlerFunc
+	if len(ffrpcHandlers) == 1 {
+		ffrpc = ffrpcHandlers[0]
+	}
 	opts := applyDefaults(config)
 
 	s := &Streamer{
-		sr:  sr,
-		rpc: rpc,
-		ed:  ed,
+		sr:    sr,
+		rpc:   rpc,
+		ffrpc: ffrpc,
+		ed:    ed,
 
 		opts: opts,
 
@@ -301,6 +311,10 @@ func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials C
 				return fmt.Errorf("handle relay RPC call packet %q (%d bytes): %w",
 					packet.MethodName, len(packet.Request), err)
 			}
+		case *protocol.FFRPCCallPacket:
+			go func(ffrpcPacket *protocol.FFRPCCallPacket) {
+				_ = s.handleFFRPCCall(ffrpcPacket)
+			}(packet)
 		case *protocol.StoreSubscriptionPacket:
 			if err := s.handleStoreSubscription(packet); err != nil {
 				return fmt.Errorf("handle relay store subscription packet action %d for store %q key %q: %w",
@@ -646,6 +660,20 @@ func (s *Streamer) handleRPCCall(packet *protocol.RPCCallPacket) error {
 		return fmt.Errorf("unhandled RPC %s", packet.MethodName)
 	}
 	return s.sendRPCResponse(packet.RPCID, resp)
+}
+
+func (s *Streamer) handleFFRPCCall(packet *protocol.FFRPCCallPacket) error {
+	if s.ffrpc == nil {
+		return fmt.Errorf("relay FFRPC received but no FFRPC handler is configured")
+	}
+	handled, err := s.ffrpc(packet.MethodName, restream.AccessLevel(packet.AccessLevel), packet.Request)
+	if err != nil {
+		return err
+	}
+	if !handled {
+		return fmt.Errorf("unhandled FFRPC %s", packet.MethodName)
+	}
+	return nil
 }
 
 func (s *Streamer) handleStoreSubscription(packet *protocol.StoreSubscriptionPacket) error {

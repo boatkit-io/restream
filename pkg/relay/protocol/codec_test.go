@@ -101,6 +101,15 @@ func TestPacketRoundTrips(t *testing.T) {
 			kind: KindRPCResponse,
 		},
 		{
+			name: "ffrpc call",
+			in: &FFRPCCallPacket{
+				MethodName:  "Radio.TransmitAudio",
+				AccessLevel: 3,
+				Request:     []byte{14, 15, 16},
+			},
+			kind: KindFFRPCCall,
+		},
+		{
 			name: "store subscription",
 			in: &StoreSubscriptionPacket{
 				StoreName: "TimeSeriesHistory",

@@ -29,6 +29,12 @@ export abstract class RPCStruct<RS extends RPCResponseStruct<RT>, RT> implements
     abstract serialize(w: BinaryWriter, vi: VarInfoStruct | undefined): void;
 }
 
+export abstract class FFRPCStruct implements Serializable {
+    constructor(public readonly ffrpcBoundName: string) { }
+
+    abstract serialize(w: BinaryWriter, vi: VarInfoStruct | undefined): void;
+}
+
 export abstract class RPCResponseStruct<RT = void> {
     public result?: RT;
     public error: string | undefined;
@@ -50,6 +56,7 @@ enum SocketEventNames {
 
     RPCCall = 'rpccall',
     RPCCallResponse = 'rpccallresp',
+    FFRPCCall = 'ffrpc',
 }
 
 export enum StoreSubscriptionAction {
@@ -108,6 +115,11 @@ export interface KeyedEventMessage {
 
 export interface RPCCallMessage {
     callID: number;
+    methodName: string;
+    request: ArrayBufferLike;
+}
+
+export interface FFRPCCallMessage {
     methodName: string;
     request: ArrayBufferLike;
 }
@@ -253,7 +265,7 @@ export class ReStreamSocket {
         const msg: RPCCallMessage = {
             callID: this._rpcCallID++,
             methodName: rpcStruct.rpcBoundName,
-            request: w.getBytes().buffer,
+            request: w.getBytes().slice().buffer,
         };
 
         const def = deferred<unknown>();
@@ -266,6 +278,21 @@ export class ReStreamSocket {
         this._socket.emit(SocketEventNames.RPCCall, msg);
 
         return def.promise as Promise<RT>;
+    }
+
+    sendFFRPC(ffrpcStruct: FFRPCStruct): void {
+        if (!this._authenticated) {
+            throw new Error("Server is disconnected");
+        }
+
+        const w = new BinaryWriter();
+        ffrpcStruct.serialize(w, undefined);
+
+        const msg: FFRPCCallMessage = {
+            methodName: ffrpcStruct.ffrpcBoundName,
+            request: w.getBytes().slice().buffer,
+        };
+        this._socket.emit(SocketEventNames.FFRPCCall, msg);
     }
 
     subscribeToEvent<ES extends EventStruct>(eventType: EventStructType<ES>, callback: (event: ES) => void): () => void {
