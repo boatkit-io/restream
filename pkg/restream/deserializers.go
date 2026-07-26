@@ -327,6 +327,14 @@ func DeserializeArrayValue(v any, r *binarystreams.Reader, vi *VarInfoArray) err
 
 	// See if we can shortcut a byte array
 	if vip, ok := vi.ElemType.(*VarInfoPrimitive); ok && vip.DataType == SerializationTypeUint8 {
+		if tv == anyType {
+			b, err := r.ReadBytes(int(al))
+			if err != nil {
+				return err
+			}
+			rv.Set(reflect.ValueOf(b))
+			return nil
+		}
 		if ov, ok := v.(*[]byte); ok {
 			b, err := r.ReadBytes(int(al))
 			if err != nil {

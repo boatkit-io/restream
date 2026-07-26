@@ -438,6 +438,21 @@ func TestVarOptionsArray(t *testing.T) {
 	assert.Equal(t, iv, ov)
 }
 
+func TestDynamicByteSliceInMap(t *testing.T) {
+	input := map[string]any{
+		"Data": []byte{0x00, 0x7f, 0xff},
+	}
+	vi := &restream.VarInfoDynamic{}
+	w, b := binarystreams.NewMemoryWriter()
+	assert.NoError(t, restream.SerializeDynamicValue(input, w, vi))
+	assert.NoError(t, w.Flush())
+
+	r := binarystreams.NewReaderFromBytes(b.Bytes())
+	var output any
+	assert.NoError(t, restream.DeserializeDynamicValue(&output, r, vi))
+	assert.Equal(t, input, output)
+}
+
 func TestVarOptionsMap(t *testing.T) {
 	iv := map[int]*int{1: restream.Ptr(1), 2: restream.Ptr(2), 3: restream.Ptr(3)}
 	var ov map[int]*int
