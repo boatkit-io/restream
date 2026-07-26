@@ -1278,6 +1278,88 @@ func RegisterAgain(eventDispatcher *testDispatcher) {
 	}
 }
 
+func TestKeyedEventGenerationPreservesStoreNameBeforeGeneratedTypes(t *testing.T) {
+	source := `package main
+
+import (
+	"reflect"
+
+	"github.com/boatkit-io/tugboat/pkg/subscribableevent"
+)
+
+type testDispatcher struct{}
+
+func (*testDispatcher) RegisterKeyedEvent(string, any, string, ...reflect.Type) {}
+
+type audioCallback func(key string, payload []byte)
+
+func Register(eventDispatcher *testDispatcher) {
+	audio := subscribableevent.NewEvent[audioCallback]()
+	eventDispatcher.RegisterKeyedEvent("Radio.Audio", audio, "RadioStore", nil, nil)
+}
+`
+	projectDir, serverDir, sourcePath := setupEventGenerationProject(t, source)
+
+	pt := NewProjTracking(projectDir, &restreamConfig{
+		InputDirs: []string{"cmd/server"},
+	})
+	if err := pt.parseProject(); err != nil {
+		t.Fatal(err)
+	}
+	for _, ft := range pt.files {
+		if err := ft.Run(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out, err := os.ReadFile(filepath.Join(serverDir, "boardstore_rs.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	for _, expected := range []string{
+		"type RadioAudioEvent struct",
+		`{Name: "Payload", FieldIdx: 0`,
+	} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("generated keyed event packet missing expected %q:\n%s", expected, got)
+		}
+	}
+	if strings.Contains(got, `{Name: "Key"`) {
+		t.Fatalf("generated keyed event packet serialized its routing key:\n%s", got)
+	}
+
+	generatedTS := ""
+	for _, ft := range pt.files {
+		for _, entry := range ft.tsGenEntries {
+			generatedTS += entry.defs
+		}
+	}
+	for _, expected := range []string{
+		"public payload!: Uint8Array|undefined;",
+		"payload: Uint8Array|undefined = new Uint8Array()",
+	} {
+		if !strings.Contains(generatedTS, expected) {
+			t.Fatalf("generated keyed event TypeScript missing expected %q:\n%s", expected, generatedTS)
+		}
+	}
+
+	sourceOut, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewrittenSource := string(sourceOut)
+	for _, expected := range []string{
+		`eventDispatcher.RegisterKeyedEvent("Radio.Audio", &audio, "RadioStore"`,
+		"reflect.TypeFor[RadioAudioEvent]()",
+		"reflect.TypeFor[func(string, []uint8)]()",
+	} {
+		if !strings.Contains(rewrittenSource, expected) {
+			t.Fatalf("rewritten keyed event source missing expected %q:\n%s", expected, rewrittenSource)
+		}
+	}
+}
+
 func setupEventGenerationProject(t *testing.T, source string) (string, string, string) {
 	t.Helper()
 

@@ -1,0 +1,10 @@
+[tools]
+go = "1.26.5"
+
+[tasks.generate-restream]
+description = "Generate Restream code"
+run = ["go tool github.com/boatkit-io/restream/cmd/codegen -project ."]
+
+[tasks.test]
+description = "Run the keyed-event example and tests"
+run = ["go test ./..."]

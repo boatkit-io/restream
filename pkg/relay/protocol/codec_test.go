@@ -76,6 +76,16 @@ func TestPacketRoundTrips(t *testing.T) {
 			kind: KindEvent,
 		},
 		{
+			name: "keyed event",
+			in: &KeyedEventPacket{
+				StoreName: "IcomRadioStore",
+				EventName: "IcomRadio.Audio",
+				Key:       "radio-a",
+				Data:      []byte{7, 8},
+			},
+			kind: KindKeyedEvent,
+		},
+		{
 			name: "rpc call",
 			in: &RPCCallPacket{
 				RPCID:       42,
@@ -98,6 +108,16 @@ func TestPacketRoundTrips(t *testing.T) {
 				Action:    StoreSubscribe,
 			},
 			kind: KindStoreSubscription,
+		},
+		{
+			name: "keyed event subscription",
+			in: &KeyedEventSubscriptionPacket{
+				StoreName: "IcomRadioStore",
+				EventName: "IcomRadio.Audio",
+				Key:       "radio-a",
+				Action:    StoreSubscribe,
+			},
+			kind: KindKeyedEventSubscription,
 		},
 		{
 			name: "named custom",
@@ -246,6 +266,31 @@ func TestStoreSubscriptionRejectsInvalidAction(t *testing.T) {
 	encoded[len(encoded)-1] = 99
 	if _, err := DecodePacket(encoded); err == nil {
 		t.Fatal("DecodePacket accepted an invalid store subscription action")
+	}
+}
+
+func TestKeyedEventSubscriptionRejectsInvalidAction(t *testing.T) {
+	if _, err := EncodePacket(&KeyedEventSubscriptionPacket{
+		StoreName: "IcomRadioStore",
+		EventName: "IcomRadio.Audio",
+		Key:       "radio-a",
+		Action:    StoreSubscriptionAction(99),
+	}); err == nil {
+		t.Fatal("EncodePacket accepted an invalid keyed event subscription action")
+	}
+
+	encoded, err := EncodePacket(&KeyedEventSubscriptionPacket{
+		StoreName: "IcomRadioStore",
+		EventName: "IcomRadio.Audio",
+		Key:       "radio-a",
+		Action:    StoreSubscribe,
+	})
+	if err != nil {
+		t.Fatalf("EncodePacket valid keyed event subscription failed: %v", err)
+	}
+	encoded[len(encoded)-1] = 99
+	if _, err := DecodePacket(encoded); err == nil {
+		t.Fatal("DecodePacket accepted an invalid keyed event subscription action")
 	}
 }
 

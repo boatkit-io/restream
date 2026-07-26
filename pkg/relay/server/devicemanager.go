@@ -17,6 +17,16 @@ type StoreStateHandler func(device *Device, conn *Connection, storeName string, 
 // EventHandler handles serialized device-originated events.
 type EventHandler func(device *Device, conn *Connection, eventName string, eventBytes []byte) error
 
+// KeyedEventHandler handles serialized store-owned keyed events from a device.
+type KeyedEventHandler func(
+	device *Device,
+	conn *Connection,
+	storeName string,
+	eventName string,
+	key string,
+	eventBytes []byte,
+) error
+
 // RPCResponseHandler handles a serialized device RPC response.
 type RPCResponseHandler func(device *Device, conn *Connection, rpcID uint32, rpcData []byte) error
 
@@ -43,6 +53,7 @@ type DeviceManagerConfig struct {
 	FullStateHandler    StoreStateHandler
 	PartialStateHandler StoreStateHandler
 	EventHandler        EventHandler
+	KeyedEventHandler   KeyedEventHandler
 	RPCResponseHandler  RPCResponseHandler
 	CustomPacketHandler CustomPacketHandler
 	RawPacketHandler    RawPacketHandler
@@ -100,12 +111,12 @@ func (m *DeviceManager) GetDevice(deviceID string) (*Device, error) {
 	}
 
 	device = NewDevice(deviceID, sr, m.config)
-	device.configureRelaySubscriptionForwarding()
 	if m.config.ConfigureDevice != nil {
 		if err := m.config.ConfigureDevice(device); err != nil {
 			return nil, err
 		}
 	}
+	device.configureRelaySubscriptionForwarding()
 	m.devices[deviceID] = device
 	return device, nil
 }

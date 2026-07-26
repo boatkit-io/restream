@@ -257,6 +257,43 @@ func TestConnectionSendStoreSubscriptionWritesPacket(t *testing.T) {
 	}
 }
 
+func TestConnectionSendKeyedEventSubscriptionWritesPacket(t *testing.T) {
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	conn := NewConnection(serverConn)
+	if err := conn.SendKeyedEventSubscription(
+		"IcomRadioStore",
+		"IcomRadio.Audio",
+		"radio-a",
+		true,
+	); err != nil {
+		t.Fatalf("SendKeyedEventSubscription failed: %v", err)
+	}
+
+	messageType, message, err := clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read keyed event subscription failed: %v", err)
+	}
+	if messageType != gws.BinaryMessage {
+		t.Fatalf("message type = %d, want BinaryMessage", messageType)
+	}
+	packetRaw, err := protocol.DecodePacket(message)
+	if err != nil {
+		t.Fatalf("Decode keyed event subscription failed: %v", err)
+	}
+	packet, ok := packetRaw.(*protocol.KeyedEventSubscriptionPacket)
+	if !ok {
+		t.Fatalf("keyed event subscription packet type = %T", packetRaw)
+	}
+	if packet.StoreName != "IcomRadioStore" ||
+		packet.EventName != "IcomRadio.Audio" ||
+		packet.Key != "radio-a" ||
+		packet.Action != protocol.StoreSubscribe {
+		t.Fatalf("keyed event subscription packet = %+v", packet)
+	}
+}
+
 func TestConnectionSendStoreStateWritesPackets(t *testing.T) {
 	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
 	defer cleanup()
@@ -411,6 +448,9 @@ func TestServerAcceptConnReplaysActiveStoreSubscriptions(t *testing.T) {
 	if err := device.StoreRegistry.ListeningToStoreKey("TestStore", "values%&a", restream.AccessLevelPublic); err != nil {
 		t.Fatalf("ListeningToStoreKey failed: %v", err)
 	}
+	if err := device.EventDispatcher.ListeningToKeyedEvent("TestStore", "audio", "radio-a"); err != nil {
+		t.Fatalf("ListeningToKeyedEvent failed: %v", err)
+	}
 
 	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
 	defer cleanup()
@@ -458,6 +498,24 @@ func TestServerAcceptConnReplaysActiveStoreSubscriptions(t *testing.T) {
 		subscriptionPacket.Key != "values%&a" ||
 		subscriptionPacket.Action != protocol.StoreSubscribe {
 		t.Fatalf("replayed subscription = %+v, want TestStore values%%&a subscribe", subscriptionPacket)
+	}
+
+	_, keyedSubscriptionBytes, err := clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read replayed keyed event subscription failed: %v", err)
+	}
+	keyedSubscriptionPacket, ok := mustDecodePacket(t, keyedSubscriptionBytes).(*protocol.KeyedEventSubscriptionPacket)
+	if !ok {
+		t.Fatalf(
+			"replayed keyed event packet type = %T, want *KeyedEventSubscriptionPacket",
+			mustDecodePacket(t, keyedSubscriptionBytes),
+		)
+	}
+	if keyedSubscriptionPacket.StoreName != "TestStore" ||
+		keyedSubscriptionPacket.EventName != "audio" ||
+		keyedSubscriptionPacket.Key != "radio-a" ||
+		keyedSubscriptionPacket.Action != protocol.StoreSubscribe {
+		t.Fatalf("replayed keyed event subscription = %+v", keyedSubscriptionPacket)
 	}
 
 	clientConn.Close() //nolint:errcheck // Why: End server read loop.
@@ -568,6 +626,66 @@ func TestCloudStoreSubscriptionForwardsToConnectedDevice(t *testing.T) {
 		subscriptionPacket.Key != "values%&a" ||
 		subscriptionPacket.Action != protocol.StoreUnsubscribe {
 		t.Fatalf("forwarded subscription = %+v, want TestStore values%%&a unsubscribe", subscriptionPacket)
+	}
+}
+
+func TestCloudKeyedEventSubscriptionForwardsToConnectedDevice(t *testing.T) {
+	manager := NewDeviceManager(DeviceManagerConfig{
+		Stores: func(string) ([]restream.Store, error) {
+			return []restream.Store{
+				restream.NewRelayStore[testState, *testState, *testPartial](
+					"IcomRadioStore",
+					&testState{},
+					restream.AccessLevelPublic,
+				),
+			}, nil
+		},
+	})
+	device, err := manager.GetDevice("device-1")
+	if err != nil {
+		t.Fatalf("GetDevice failed: %v", err)
+	}
+
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+	device.DeviceConnected(NewConnection(serverConn))
+
+	if err := device.EventDispatcher.ListeningToKeyedEvent(
+		"IcomRadioStore",
+		"IcomRadio.Audio",
+		"radio-a",
+	); err != nil {
+		t.Fatalf("ListeningToKeyedEvent failed: %v", err)
+	}
+	_, subscriptionBytes, err := clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read forwarded keyed event subscription failed: %v", err)
+	}
+	packet, ok := mustDecodePacket(t, subscriptionBytes).(*protocol.KeyedEventSubscriptionPacket)
+	if !ok {
+		t.Fatalf("forwarded packet type = %T, want *KeyedEventSubscriptionPacket", mustDecodePacket(t, subscriptionBytes))
+	}
+	if packet.StoreName != "IcomRadioStore" ||
+		packet.EventName != "IcomRadio.Audio" ||
+		packet.Key != "radio-a" ||
+		packet.Action != protocol.StoreSubscribe {
+		t.Fatalf("forwarded keyed event subscription = %+v", packet)
+	}
+
+	if err := device.EventDispatcher.StopListeningToKeyedEvent(
+		"IcomRadioStore",
+		"IcomRadio.Audio",
+		"radio-a",
+	); err != nil {
+		t.Fatalf("StopListeningToKeyedEvent failed: %v", err)
+	}
+	_, subscriptionBytes, err = clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read forwarded keyed event unsubscribe failed: %v", err)
+	}
+	packet, ok = mustDecodePacket(t, subscriptionBytes).(*protocol.KeyedEventSubscriptionPacket)
+	if !ok || packet.Action != protocol.StoreUnsubscribe {
+		t.Fatalf("forwarded keyed event unsubscribe = %+v", mustDecodePacket(t, subscriptionBytes))
 	}
 }
 

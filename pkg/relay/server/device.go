@@ -12,9 +12,10 @@ import (
 )
 
 const (
-	duplicateRelayConnectionReason          = "replaced by a newer relay connection for this device"
-	storeSubscriptionForwardingFailedReason = "store subscription forwarding failed; reconnect required"
-	relayStateForwardingFailedReason        = "relay state forwarding failed; reconnect required"
+	duplicateRelayConnectionReason               = "replaced by a newer relay connection for this device"
+	storeSubscriptionForwardingFailedReason      = "store subscription forwarding failed; reconnect required"
+	keyedEventSubscriptionForwardingFailedReason = "keyed event subscription forwarding failed; reconnect required"
+	relayStateForwardingFailedReason             = "relay state forwarding failed; reconnect required"
 )
 
 // Device stores aggregated relay data for one device.
@@ -25,10 +26,11 @@ type Device struct {
 
 	config DeviceManagerConfig
 
-	relaySubscriptionSubID subscribableevent.SubscriptionId
-	relayForwardMutex      sync.Mutex
-	relayForwardSubID      subscribableevent.SubscriptionId
-	relayForwardConn       *Connection
+	relaySubscriptionSubID      subscribableevent.SubscriptionId
+	keyedEventSubscriptionSubID subscribableevent.SubscriptionId
+	relayForwardMutex           sync.Mutex
+	relayForwardSubID           subscribableevent.SubscriptionId
+	relayForwardConn            *Connection
 
 	connMutex sync.RWMutex
 	conn      *Connection
@@ -100,10 +102,14 @@ func (d *Device) DeviceDisconnected(conn *Connection) {
 }
 
 func (d *Device) configureRelaySubscriptionForwarding() {
-	if d.StoreRegistry == nil {
-		return
+	if d.StoreRegistry != nil {
+		d.relaySubscriptionSubID = d.StoreRegistry.SubscribeToStoreSubscriptions(d.forwardStoreSubscription)
 	}
-	d.relaySubscriptionSubID = d.StoreRegistry.SubscribeToStoreSubscriptions(d.forwardStoreSubscription)
+	if d.EventDispatcher != nil {
+		d.keyedEventSubscriptionSubID = d.EventDispatcher.SubscribeToKeyedEventSubscriptions(
+			d.forwardKeyedEventSubscription,
+		)
+	}
 }
 
 func (d *Device) forwardStoreSubscription(storeName string, key string, subscribe bool) {
@@ -121,6 +127,35 @@ func (d *Device) forwardStoreSubscription(storeName string, key string, subscrib
 
 	if err := conn.SendStoreSubscription(storeName, key, subscribe); err != nil {
 		conn.CloseWithReason(gws.CloseGoingAway, storeSubscriptionForwardingFailedReason) //nolint:errcheck // Why: Closing forces reconnect and subscription replay.
+	}
+}
+
+func (d *Device) forwardKeyedEventSubscription(
+	storeName string,
+	eventName string,
+	key string,
+	subscribe bool,
+) {
+	if d.StoreRegistry == nil {
+		return
+	}
+	allowed, err := d.StoreRegistry.StoreAcceptsDeviceRelayUpdates(storeName)
+	if err != nil || !allowed {
+		return
+	}
+
+	d.connMutex.RLock()
+	conn := d.conn
+	d.connMutex.RUnlock()
+	if conn == nil {
+		return
+	}
+
+	if err := conn.SendKeyedEventSubscription(storeName, eventName, key, subscribe); err != nil {
+		_ = conn.CloseWithReason(
+			gws.CloseGoingAway,
+			keyedEventSubscriptionForwardingFailedReason,
+		)
 	}
 }
 
@@ -143,6 +178,30 @@ func (d *Device) sendActiveStoreSubscriptions(conn *Connection) error {
 			if err := conn.SendStoreSubscription(storeName, key, true); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+func (d *Device) sendActiveKeyedEventSubscriptions(conn *Connection) error {
+	if d.EventDispatcher == nil || d.StoreRegistry == nil {
+		return nil
+	}
+	for _, subscription := range d.EventDispatcher.GetActiveKeyedEventSubscriptions() {
+		allowed, err := d.StoreRegistry.StoreAcceptsDeviceRelayUpdates(subscription.StoreName)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			continue
+		}
+		if err := conn.SendKeyedEventSubscription(
+			subscription.StoreName,
+			subscription.EventName,
+			subscription.Key,
+			true,
+		); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -288,6 +347,30 @@ func (d *Device) HandleEvent(conn *Connection, eventName string, eventBytes []by
 		return nil
 	}
 	return d.config.EventHandler(d, conn, eventName, eventBytes)
+}
+
+// HandleKeyedEvent handles a serialized store-owned keyed event packet from the connected device.
+func (d *Device) HandleKeyedEvent(
+	conn *Connection,
+	storeName string,
+	eventName string,
+	key string,
+	eventBytes []byte,
+) error {
+	if !d.StoreRegistry.IsStoreValid(storeName) {
+		return d.handleUnknownStore(storeName)
+	}
+	allowed, err := d.StoreRegistry.StoreAcceptsDeviceRelayUpdates(storeName)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return nil
+	}
+	if d.config.KeyedEventHandler != nil {
+		return d.config.KeyedEventHandler(d, conn, storeName, eventName, key, eventBytes)
+	}
+	return d.EventDispatcher.FireSerializedKeyedEvent(storeName, eventName, key, eventBytes)
 }
 
 // HandleRPCResponse handles a serialized RPC response packet from the connected device.

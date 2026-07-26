@@ -6,7 +6,7 @@
 package protocol
 
 // CurrentVersion is the current relay protocol version.
-const CurrentVersion uint32 = 6
+const CurrentVersion uint32 = 7
 
 // PacketKind identifies the type of a relay packet.
 type PacketKind byte
@@ -26,6 +26,10 @@ const (
 	KindRPCResponse
 	// KindStoreSubscription carries a store keyed-subscription lifecycle change from the relay server to the device server.
 	KindStoreSubscription
+	// KindKeyedEvent carries a serialized store-owned keyed event from the device server to the relay server.
+	KindKeyedEvent
+	// KindKeyedEventSubscription carries a keyed-event lifecycle change from the relay server to the device server.
+	KindKeyedEventSubscription
 )
 
 const (
@@ -102,6 +106,19 @@ func (*EventPacket) Kind() PacketKind {
 	return KindEvent
 }
 
+// KeyedEventPacket carries a serialized store-owned event for one exact subscription key.
+type KeyedEventPacket struct {
+	StoreName string
+	EventName string
+	Key       string
+	Data      []byte
+}
+
+// Kind implements Packet.
+func (*KeyedEventPacket) Kind() PacketKind {
+	return KindKeyedEvent
+}
+
 // RPCCallPacket carries an RPC call from the relay server to the device server.
 type RPCCallPacket struct {
 	RPCID       uint32
@@ -148,6 +165,19 @@ func (*StoreSubscriptionPacket) Kind() PacketKind {
 	return KindStoreSubscription
 }
 
+// KeyedEventSubscriptionPacket carries a keyed-event subscription lifecycle change from the relay server to the device.
+type KeyedEventSubscriptionPacket struct {
+	StoreName string
+	EventName string
+	Key       string
+	Action    StoreSubscriptionAction
+}
+
+// Kind implements Packet.
+func (*KeyedEventSubscriptionPacket) Kind() PacketKind {
+	return KindKeyedEventSubscription
+}
+
 // CustomPacket is the preferred extension point for application-defined packets.
 //
 // Name should be namespaced by convention, for example "com.example.metrics".
@@ -175,7 +205,7 @@ func (p *RawPacket) Kind() PacketKind {
 
 // IsStandardKind reports whether kind is reserved by this protocol package.
 func IsStandardKind(kind PacketKind) bool {
-	return kind >= KindConnected && kind <= KindStoreSubscription
+	return kind >= KindConnected && kind <= KindKeyedEventSubscription
 }
 
 // IsApplicationKind reports whether kind is in the fixed application extension range.

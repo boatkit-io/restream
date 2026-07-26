@@ -102,6 +102,9 @@ func (s *Server) AcceptConn(ctx context.Context, conn *gws.Conn) (retErr error) 
 	if err := device.sendActiveStoreSubscriptions(c); err != nil {
 		return err
 	}
+	if err := device.sendActiveKeyedEventSubscriptions(c); err != nil {
+		return err
+	}
 
 	return s.readPackets(c, device)
 }
@@ -187,6 +190,23 @@ func (s *Server) readPackets(c *Connection, device *Device) error {
 		case *protocol.EventPacket:
 			if err := device.HandleEvent(c, packet.EventName, packet.Data); err != nil {
 				return fmt.Errorf("handle relay event packet %q (%d bytes): %w", packet.EventName, len(packet.Data), err)
+			}
+		case *protocol.KeyedEventPacket:
+			if err := device.HandleKeyedEvent(
+				c,
+				packet.StoreName,
+				packet.EventName,
+				packet.Key,
+				packet.Data,
+			); err != nil {
+				return fmt.Errorf(
+					"handle relay keyed event packet for store %q event %q key %q (%d bytes): %w",
+					packet.StoreName,
+					packet.EventName,
+					packet.Key,
+					len(packet.Data),
+					err,
+				)
 			}
 		case *protocol.RPCCallPacket:
 			return fmt.Errorf("device sent unexpected relay RPC call packet %q (%d bytes)",
@@ -314,6 +334,30 @@ func (c *Connection) SendStoreSubscription(storeName string, key string, subscri
 	}
 	packetBytes, err := protocol.EncodePacket(&protocol.StoreSubscriptionPacket{
 		StoreName: storeName,
+		Key:       key,
+		Action:    action,
+	})
+	if err != nil {
+		return err
+	}
+
+	return c.sendPacket(packetBytes)
+}
+
+// SendKeyedEventSubscription sends a keyed-event subscription lifecycle change to the connected device.
+func (c *Connection) SendKeyedEventSubscription(
+	storeName string,
+	eventName string,
+	key string,
+	subscribe bool,
+) error {
+	action := protocol.StoreUnsubscribe
+	if subscribe {
+		action = protocol.StoreSubscribe
+	}
+	packetBytes, err := protocol.EncodePacket(&protocol.KeyedEventSubscriptionPacket{
+		StoreName: storeName,
+		EventName: eventName,
 		Key:       key,
 		Action:    action,
 	})

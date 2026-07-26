@@ -284,3 +284,31 @@ export class callResponse {
         {name: "Error", fieldIdx: 1, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.String))},
     ];
 }
+
+export class keyedcallEvent extends EventStruct {
+    public test!: number;
+
+    public static readonly eventBoundName = "keyed.call";
+    private constructor() { super(keyedcallEvent.eventBoundName); }
+
+    public static fromValues(
+        test: number = 0,
+    ) {
+        const o = new keyedcallEvent();
+        o.test = test;
+        return o;
+    }
+
+    public static readonly fieldInfo: readonly FieldInfo[] = [
+        {name: "Test", fieldIdx: 0, varInfo: new VarInfoPrimitive(SerializationType.Int64, "int")},
+    ];
+    public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
+        const o = new keyedcallEvent();
+        o.test = ReStreamDecoders.deserializeValue(r, this.fieldInfo[0].varInfo);
+        return o;
+    }
+
+    public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
+        ReStreamEncoders.serializeValue(this.test, w, keyedcallEvent.fieldInfo[0].varInfo);
+    }
+}

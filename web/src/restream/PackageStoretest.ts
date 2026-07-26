@@ -121,13 +121,13 @@ export class TestCPartial {
 
 export class TestMapData {
     public number!: number;
-    public data!: number[]|undefined;
+    public data!: Uint8Array|undefined;
 
     private constructor() {}
 
     public static fromValues(
         number: number = 0,
-        data: number[]|undefined = [],
+        data: Uint8Array|undefined = new Uint8Array(),
     ) {
         const o = new TestMapData();
         o.number = number;
@@ -143,7 +143,7 @@ export class TestMapData {
         }
         const o = new TestMapData();
         o.number = fieldMap?.has(1) ? fieldMap.get(1) as number : 0;
-        o.data = fieldMap?.has(2) ? fieldMap.get(2) as number[]|undefined : [];
+        o.data = fieldMap?.has(2) ? fieldMap.get(2) as Uint8Array|undefined : new Uint8Array();
         return o;
     }
 
@@ -217,7 +217,7 @@ export class TestMapDataPartial {
     applyTo(por: TestMapData): (string | number)[][] {
         const ret: (string | number)[][] = [];
         if (this.number !== undefined) { por.number = this.number; ret.push(["number"]); }
-        if (this.data !== undefined) { if (!Array.isArray(por.data)) { por.data = Array.from(por.data ?? []); } const fs = this.data.applyTo(por.data!); for (const f of fs) { ret.push(["data",...f]); }}
+        if (this.data !== undefined) { const value = Array.from(por.data ?? []); const fs = this.data.applyTo(value); por.data = Uint8Array.from(value); for (const f of fs) { ret.push(["data",...f]); }}
         return reduceFieldPaths(ret);
     }
 

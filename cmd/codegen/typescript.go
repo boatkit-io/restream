@@ -196,11 +196,20 @@ func (ft *FileTracking) genTSClass(si StructInfo, fields []*restream.FieldInfo, 
 				} else {
 					switch getTSPartialCollectionKind(fi.VarInfo) {
 					case "array":
-						out += fmt.Sprintf("        if (this.%s !== undefined) { "+
-							"if (!Array.isArray(por.%s)) { por.%s = Array.from(por.%s ?? []); } "+
-							"const fs = this.%s.applyTo(por.%s!); "+
-							"for (const f of fs) { ret.push([\"%s\",...f]); }}\n",
-							fn, fn, fn, fn, fn, fn, fn)
+						if isUint8PartialArrayVarInfo(fi.VarInfo) {
+							out += fmt.Sprintf("        if (this.%s !== undefined) { "+
+								"const value = Array.from(por.%s ?? []); "+
+								"const fs = this.%s.applyTo(value); "+
+								"por.%s = Uint8Array.from(value); "+
+								"for (const f of fs) { ret.push([\"%s\",...f]); }}\n",
+								fn, fn, fn, fn, fn)
+						} else {
+							out += fmt.Sprintf("        if (this.%s !== undefined) { "+
+								"if (!Array.isArray(por.%s)) { por.%s = Array.from(por.%s ?? []); } "+
+								"const fs = this.%s.applyTo(por.%s!); "+
+								"for (const f of fs) { ret.push([\"%s\",...f]); }}\n",
+								fn, fn, fn, fn, fn, fn, fn)
+						}
 					case "map":
 						out += fmt.Sprintf("        if (this.%s !== undefined) { "+
 							"if (!(por.%s instanceof Map)) { por.%s = new Map(); } "+
@@ -657,6 +666,12 @@ func (ft *FileTracking) getTSType(vi restream.VarInfo) string {
 		}
 		return appendTSTypeUnionMember(ut, "undefined")
 	case *restream.VarInfoArray:
+		if isUint8ArrayVarInfo(vit) {
+			if vit.NotNil {
+				return "Uint8Array"
+			}
+			return "Uint8Array|undefined"
+		}
 		it := ft.getTSType(vit.ElemType)
 		if strings.Contains(it, "|") {
 			it = "(" + it + ")"
@@ -752,6 +767,9 @@ func (ft *FileTracking) getTSZeroValue(vi restream.VarInfo) string {
 	case *restream.VarInfoDynamic, *restream.VarInfoPointer:
 		return "undefined"
 	case *restream.VarInfoArray:
+		if isUint8ArrayVarInfo(vit) {
+			return "new Uint8Array()"
+		}
 		return "[]"
 	case *restream.VarInfoMap:
 		if vit.NotNil {
@@ -764,6 +782,23 @@ func (ft *FileTracking) getTSZeroValue(vi restream.VarInfo) string {
 	default:
 		panic(fmt.Sprintf("unhandled type in getTSZeroValue: %+v", vi))
 	}
+}
+
+func isUint8ArrayVarInfo(vi *restream.VarInfoArray) bool {
+	elem, ok := vi.ElemType.(*restream.VarInfoPrimitive)
+	return ok && elem.DataType == restream.SerializationTypeUint8
+}
+
+func isUint8PartialArrayVarInfo(vi restream.VarInfo) bool {
+	if pointer, ok := vi.(*restream.VarInfoPointer); ok {
+		vi = pointer.SubType
+	}
+	partial, ok := vi.(*restream.VarInfoStruct)
+	if !ok || partial.Name != "PartialArray" || len(partial.GenericTypes) == 0 {
+		return false
+	}
+	elem, ok := partial.GenericTypes[0].(*restream.VarInfoPrimitive)
+	return ok && elem.DataType == restream.SerializationTypeUint8
 }
 
 // buildTSRPCStructs is a helper to build the typescript RPC structs

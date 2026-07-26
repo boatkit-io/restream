@@ -95,6 +95,37 @@ func TestCloudSourceForDeviceStoreDoesNotAcceptDeviceRelayUpdates(t *testing.T) 
 	}
 }
 
+func TestDeviceDispatchesKeyedEventsToExactCloudSubscribers(t *testing.T) {
+	device := NewDevice("device-1", mustStoreRegistry(t), DeviceManagerConfig{})
+	var got []byte
+	device.EventDispatcher.SubscribeToKeyedEvents(func(
+		storeName string,
+		eventName string,
+		key string,
+		eventBytes []byte,
+	) {
+		if storeName == "TestStore" && eventName == "audio" && key == "radio-a" {
+			got = append([]byte(nil), eventBytes...)
+		}
+	})
+	if err := device.EventDispatcher.ListeningToKeyedEvent("TestStore", "audio", "radio-a"); err != nil {
+		t.Fatalf("ListeningToKeyedEvent failed: %v", err)
+	}
+
+	if err := device.HandleKeyedEvent(nil, "TestStore", "audio", "radio-b", []byte{9}); err != nil {
+		t.Fatalf("HandleKeyedEvent for other key failed: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("other keyed event was dispatched: %v", got)
+	}
+	if err := device.HandleKeyedEvent(nil, "TestStore", "audio", "radio-a", []byte{1, 2, 3}); err != nil {
+		t.Fatalf("HandleKeyedEvent failed: %v", err)
+	}
+	if string(got) != string([]byte{1, 2, 3}) {
+		t.Fatalf("keyed event payload = %v", got)
+	}
+}
+
 func mustStoreRegistry(t *testing.T) *restream.StoreRegistry {
 	t.Helper()
 	sr, err := restream.NewStoreRegistry([]restream.Store{

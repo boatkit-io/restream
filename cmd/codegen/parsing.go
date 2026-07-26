@@ -1076,7 +1076,7 @@ func (ft *FileTracking) parseFuncDecls() error { //nolint:gocyclo,funlen
 				continue
 			}
 			if sexid.Name != "rpcd" || se.Sel.Name != "RegisterRPCHandler" {
-				if se.Sel.Name != "RegisterEvent" {
+				if se.Sel.Name != "RegisterEvent" && se.Sel.Name != "RegisterKeyedEvent" {
 					continue
 				}
 
@@ -1113,20 +1113,25 @@ func (ft *FileTracking) parseFuncDecls() error { //nolint:gocyclo,funlen
 					fixed = true
 					xt.Args[1] = &dst.UnaryExpr{Op: token.AND, X: xt.Args[1]}
 				}
-				if len(xt.Args) < 3 {
+				generatedTypeArgIndex := 2
+				if se.Sel.Name == "RegisterKeyedEvent" {
+					generatedTypeArgIndex = 3
+				}
+				if len(xt.Args) <= generatedTypeArgIndex {
 					fixed = true
 					xt.Args = append(xt.Args, genRPCArg(eventPacketType))
-				} else if !validateRPCArg(xt.Args[2], eventPacketType) {
+				} else if !validateRPCArg(xt.Args[generatedTypeArgIndex], eventPacketType) {
 					fixed = true
-					xt.Args[2] = genRPCArg(eventPacketType)
+					xt.Args[generatedTypeArgIndex] = genRPCArg(eventPacketType)
 				}
 
-				if len(xt.Args) < 4 {
+				callbackTypeArgIndex := generatedTypeArgIndex + 1
+				if len(xt.Args) <= callbackTypeArgIndex {
 					fixed = true
 					xt.Args = append(xt.Args, genReflectTypeArg(eventInfo.CallbackTypeExpr))
-				} else if !validateReflectTypeArg(xt.Args[3], eventInfo.CallbackTypeExpr) {
+				} else if !validateReflectTypeArg(xt.Args[callbackTypeArgIndex], eventInfo.CallbackTypeExpr) {
 					fixed = true
-					xt.Args[3] = genReflectTypeArg(eventInfo.CallbackTypeExpr)
+					xt.Args[callbackTypeArgIndex] = genReflectTypeArg(eventInfo.CallbackTypeExpr)
 				}
 
 				if fixed {
@@ -1362,11 +1367,11 @@ func (ft *FileTracking) typedEventRegistrations() (map[string]eventRegistrationI
 			return true
 		}
 		se, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || se.Sel.Name != "RegisterEvent" {
+		if !ok || (se.Sel.Name != "RegisterEvent" && se.Sel.Name != "RegisterKeyedEvent") {
 			return true
 		}
 		if len(call.Args) < 2 {
-			walkErr = fmt.Errorf("RegisterEvent call has %d args, expected at least 2", len(call.Args))
+			walkErr = fmt.Errorf("%s call has %d args, expected at least 2", se.Sel.Name, len(call.Args))
 			return false
 		}
 
@@ -1384,25 +1389,47 @@ func (ft *FileTracking) typedEventRegistrations() (map[string]eventRegistrationI
 		signature, ok := subscribableEventSignature(eventType)
 		if !ok {
 			walkErr = fmt.Errorf(
-				"RegisterEvent for %s must pass a subscribableevent.Event, got %s (package errors: %+v)",
-				eventName, eventType, ft.fPackage.Errors,
+				"%s for %s must pass a subscribableevent.Event, got %s (package errors: %+v)",
+				se.Sel.Name, eventName, eventType, ft.fPackage.Errors,
 			)
 			return false
 		}
 		if signature.Results().Len() != 0 {
-			walkErr = fmt.Errorf("RegisterEvent for %s uses an event callback type with %d return values", eventName, signature.Results().Len())
+			walkErr = fmt.Errorf(
+				"%s for %s uses an event callback type with %d return values",
+				se.Sel.Name,
+				eventName,
+				signature.Results().Len(),
+			)
 			return false
 		}
 
-		fields, err := ft.eventFieldsFromSignature(signature)
+		callbackFields, err := ft.eventFieldsFromSignature(signature)
 		if err != nil {
 			walkErr = err
 			return false
 		}
+		packetFields := callbackFields
+		if se.Sel.Name == "RegisterKeyedEvent" {
+			if signature.Params().Len() == 0 {
+				walkErr = fmt.Errorf("RegisterKeyedEvent for %s has no subscription key parameter", eventName)
+				return false
+			}
+			keyType, ok := signature.Params().At(0).Type().Underlying().(*types.Basic)
+			if !ok || keyType.Kind() != types.String {
+				walkErr = fmt.Errorf(
+					"RegisterKeyedEvent for %s must use string as its first callback parameter, got %s",
+					eventName,
+					signature.Params().At(0).Type(),
+				)
+				return false
+			}
+			packetFields = reindexEventFields(callbackFields[1:])
+		}
 
 		ret[eventName] = eventRegistrationInfo{
-			Fields:           fields,
-			CallbackTypeExpr: callbackTypeExprFromFields(ft, fields),
+			Fields:           packetFields,
+			CallbackTypeExpr: callbackTypeExprFromFields(ft, callbackFields),
 			NeedsAddress:     !isPointerType(eventType),
 		}
 		return true
@@ -1412,6 +1439,16 @@ func (ft *FileTracking) typedEventRegistrations() (map[string]eventRegistrationI
 	}
 
 	return ret, nil
+}
+
+func reindexEventFields(fields []*restream.FieldInfo) []*restream.FieldInfo {
+	ret := make([]*restream.FieldInfo, len(fields))
+	for idx, field := range fields {
+		fieldCopy := *field
+		fieldCopy.FieldIdx = idx
+		ret[idx] = &fieldCopy
+	}
+	return ret
 }
 
 func subscribableEventSignature(t types.Type) (*types.Signature, bool) {

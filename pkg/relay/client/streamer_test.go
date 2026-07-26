@@ -245,6 +245,42 @@ func TestSendEventWritesGenericEventPacket(t *testing.T) {
 	}
 }
 
+func TestSendKeyedEventWritesKeyedEventPacket(t *testing.T) {
+	done := make(chan struct{})
+	sendQueue := make(chan outboundPacket, 1)
+
+	s := &Streamer{
+		conn:      &gws.Conn{},
+		sendQueue: sendQueue,
+		sendDone:  done,
+	}
+
+	if err := s.SendKeyedEvent(
+		"IcomRadioStore",
+		"IcomRadio.Audio",
+		"radio-a",
+		[]byte{1, 2, 3},
+	); err != nil {
+		t.Fatalf("SendKeyedEvent failed: %v", err)
+	}
+
+	packetBytes := mustBuildOutboundPacket(t, <-sendQueue)
+	packet, err := protocol.DecodePacket(packetBytes)
+	if err != nil {
+		t.Fatalf("DecodePacket failed: %v", err)
+	}
+	eventPacket, ok := packet.(*protocol.KeyedEventPacket)
+	if !ok {
+		t.Fatalf("packet type = %T, want *protocol.KeyedEventPacket", packet)
+	}
+	if eventPacket.StoreName != "IcomRadioStore" ||
+		eventPacket.EventName != "IcomRadio.Audio" ||
+		eventPacket.Key != "radio-a" ||
+		string(eventPacket.Data) != string([]byte{1, 2, 3}) {
+		t.Fatalf("keyed event packet = %+v", eventPacket)
+	}
+}
+
 func TestSendFullStateUsesStoreMinimumAccess(t *testing.T) {
 	store := restream.NewRelayStore[streamerTestState, *streamerTestState, *streamerTestPartial](
 		"TestStore",
@@ -641,6 +677,84 @@ func TestRelayedStoreSubscriptionsAreIdempotentAndCleanup(t *testing.T) {
 	}
 	s.clearRelaySubscriptions()
 	assertActiveRelayKeys(t, store.RelayStore, nil)
+}
+
+func TestRelayedKeyedEventSubscriptionsAreExactIdempotentAndCleanedUp(t *testing.T) {
+	store := newStreamerTypedRelayStore("IcomRadioStore", restream.StoreTypeDeviceWithRelay)
+	registry, err := restream.NewStoreRegistry([]restream.Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	eventd := restream.NewEventDispatcher(nil)
+	s := NewStreamer(registry, nil, eventd, Config{})
+	s.conn = &gws.Conn{}
+	s.sendDone = make(chan struct{})
+	s.sendQueue = make(chan outboundPacket, 2)
+
+	packet := &protocol.KeyedEventSubscriptionPacket{
+		StoreName: "IcomRadioStore",
+		EventName: "IcomRadio.Audio",
+		Key:       "radio-a",
+		Action:    protocol.StoreSubscribe,
+	}
+	if err := s.handleKeyedEventSubscription(packet); err != nil {
+		t.Fatalf("handle keyed event subscribe failed: %v", err)
+	}
+	if err := s.handleKeyedEventSubscription(packet); err != nil {
+		t.Fatalf("handle duplicate keyed event subscribe failed: %v", err)
+	}
+	if !eventd.HasKeyedEventSubscribers("IcomRadioStore", "IcomRadio.Audio", "radio-a") {
+		t.Fatal("event dispatcher did not track relayed keyed event subscription")
+	}
+
+	if err := eventd.FireSerializedKeyedEvent(
+		"IcomRadioStore",
+		"IcomRadio.Audio",
+		"radio-b",
+		[]byte{9},
+	); err != nil {
+		t.Fatalf("FireSerializedKeyedEvent for another key failed: %v", err)
+	}
+	if len(s.sendQueue) != 0 {
+		t.Fatalf("another key queued %d relay packets", len(s.sendQueue))
+	}
+
+	if err := eventd.FireSerializedKeyedEvent(
+		"IcomRadioStore",
+		"IcomRadio.Audio",
+		"radio-a",
+		[]byte{1, 2, 3},
+	); err != nil {
+		t.Fatalf("FireSerializedKeyedEvent failed: %v", err)
+	}
+	decoded, err := protocol.DecodePacket(mustBuildOutboundPacket(t, <-s.sendQueue))
+	if err != nil {
+		t.Fatalf("DecodePacket failed: %v", err)
+	}
+	keyedEvent, ok := decoded.(*protocol.KeyedEventPacket)
+	if !ok || keyedEvent.Key != "radio-a" {
+		t.Fatalf("relayed keyed event packet = %+v", decoded)
+	}
+
+	packet.Action = protocol.StoreUnsubscribe
+	if err := s.handleKeyedEventSubscription(packet); err != nil {
+		t.Fatalf("handle keyed event unsubscribe failed: %v", err)
+	}
+	if eventd.HasKeyedEventSubscribers("IcomRadioStore", "IcomRadio.Audio", "radio-a") {
+		t.Fatal("event dispatcher kept relayed keyed event subscription after unsubscribe")
+	}
+	if err := s.handleKeyedEventSubscription(packet); err != nil {
+		t.Fatalf("handle duplicate keyed event unsubscribe failed: %v", err)
+	}
+
+	packet.Action = protocol.StoreSubscribe
+	if err := s.handleKeyedEventSubscription(packet); err != nil {
+		t.Fatalf("handle keyed event resubscribe failed: %v", err)
+	}
+	s.clearRelaySubscriptions()
+	if eventd.HasKeyedEventSubscribers("IcomRadioStore", "IcomRadio.Audio", "radio-a") {
+		t.Fatal("relay disconnect cleanup left keyed event subscription active")
+	}
 }
 
 func TestRelayedWholeStoreSubscriptionUsesEmptyKey(t *testing.T) {

@@ -34,6 +34,14 @@ type StoreSubscriptionMessage struct {
 	Key       string                  `json:"key"`
 }
 
+// KeyedEventSubscriptionMessage is a message for subscribing/unsubscribing from a store-owned keyed event.
+type KeyedEventSubscriptionMessage struct {
+	StoreName string                  `json:"storeName"`
+	EventName string                  `json:"eventName"`
+	Action    StoreSubscriptionAction `json:"action"`
+	Key       string                  `json:"key"`
+}
+
 // StoreUpdateMessageKind is an enum for what type of store update message it is
 type StoreUpdateMessageKind uint
 
@@ -74,6 +82,15 @@ type EventMessage struct {
 	Event     socketTypes.BufferInterface `json:"event"`
 }
 
+// KeyedEventMessage is emitted when a subscribed store-owned keyed event fires.
+type KeyedEventMessage struct {
+	Time      int64                       `json:"time"`
+	StoreName string                      `json:"storeName"`
+	EventName string                      `json:"eventName"`
+	Key       string                      `json:"key"`
+	Event     socketTypes.BufferInterface `json:"event"`
+}
+
 // RPCCallMessage is a message sent by the client with an RPC call (i.e. a `BlahStore.SetXYZ` message/call)
 type RPCCallMessage struct {
 	CallID     int                         `json:"callID"`
@@ -102,6 +119,10 @@ const (
 
 	// SocketEventNameEvent - Server-originated EventDispatcher event
 	SocketEventNameEvent = "event"
+	// SocketEventNameKeyedEvent - Server-originated store-owned keyed event
+	SocketEventNameKeyedEvent = "keyedevent"
+	// SocketEventNameKeyedEventSubscription - Store-owned keyed event subscription
+	SocketEventNameKeyedEventSubscription = "keyedeventsub"
 
 	// SocketEventNameRPCCall - RPC Call
 	SocketEventNameRPCCall = "rpccall"
@@ -141,9 +162,11 @@ type socketTracker struct {
 	partialApplySubID   subscribableevent.SubscriptionId
 	fullStateApplySubID subscribableevent.SubscriptionId
 	eventSubID          subscribableevent.SubscriptionId
+	keyedEventSubID     subscribableevent.SubscriptionId
 
-	storeSubscriptions map[string]map[string]int
-	subscriptionMutex  smartmutex.SmartMutex
+	storeSubscriptions      map[string]map[string]int
+	keyedEventSubscriptions map[KeyedEventSubscription]int
+	subscriptionMutex       smartmutex.SmartMutex
 
 	storeUpdateQueueMutex sync.Mutex
 	pendingStoreCatchups  map[string]int
@@ -167,9 +190,10 @@ func AddSocketHandlers(
 		ed:           ed,
 		accessLookup: accessLookup,
 
-		emitQueue:          make(chan emitMessage, 100),
-		subscriptionMutex:  smartmutex.SmartMutex{Name: "restream.socketTracker.subscriptionMutex"},
-		storeSubscriptions: map[string]map[string]int{},
+		emitQueue:               make(chan emitMessage, 100),
+		subscriptionMutex:       smartmutex.SmartMutex{Name: "restream.socketTracker.subscriptionMutex"},
+		storeSubscriptions:      map[string]map[string]int{},
+		keyedEventSubscriptions: map[KeyedEventSubscription]int{},
 	}
 
 	if err := conn.On("disconnect", st.onDisconnect); err != nil {
@@ -178,6 +202,11 @@ func AddSocketHandlers(
 	}
 
 	if err := conn.On(SocketEventNameStoreSubscription, st.onStoreSubscription); err != nil {
+		conn.Disconnect(true)
+		return err
+	}
+
+	if err := conn.On(SocketEventNameKeyedEventSubscription, st.onKeyedEventSubscription); err != nil {
 		conn.Disconnect(true)
 		return err
 	}
@@ -191,6 +220,7 @@ func AddSocketHandlers(
 	st.fullStateApplySubID = st.sr.SubscribeToFullStateApplies(st.FullStateCallback)
 	if st.ed != nil {
 		st.eventSubID = st.ed.SubscribeToEvents(st.EventCallback)
+		st.keyedEventSubID = st.ed.SubscribeToKeyedEvents(st.KeyedEventCallback)
 	}
 
 	st.handleEmitQueue()
@@ -216,13 +246,15 @@ func (s *socketTracker) cleanupDisconnect() {
 		s.sr.UnsubscribeFromFullStateApplies(s.fullStateApplySubID) //nolint:errcheck // Why: Best effort
 	}
 	if s.ed != nil {
-		s.ed.UnsubscribeFromEvents(s.eventSubID) //nolint:errcheck // Why: Best effort
+		s.ed.UnsubscribeFromEvents(s.eventSubID)           //nolint:errcheck // Why: Best effort
+		s.ed.UnsubscribeFromKeyedEvents(s.keyedEventSubID) //nolint:errcheck // Why: Best effort
 	}
 
 	s.subscriptionMutex.RLock()
 	storeSubs := lo.MapValues(s.storeSubscriptions, func(subs map[string]int, _ string) map[string]int {
 		return lo.Assign(map[string]int{}, subs)
 	})
+	keyedEventSubs := lo.Assign(map[KeyedEventSubscription]int{}, s.keyedEventSubscriptions)
 	s.subscriptionMutex.RUnlock()
 	for storeName, keySubs := range storeSubs {
 		for key := range keySubs {
@@ -231,6 +263,24 @@ func (s *socketTracker) cleanupDisconnect() {
 					s.log.Errorf("Error StopListeningToStoreKey to %s/%s -- possible double unsubscribe? Reason: %+v", storeName, key, err)
 				}
 			}
+		}
+	}
+	for subscription, count := range keyedEventSubs {
+		if count == 0 || s.ed == nil {
+			continue
+		}
+		if err := s.ed.StopListeningToKeyedEvent(
+			subscription.StoreName,
+			subscription.EventName,
+			subscription.Key,
+		); err != nil {
+			s.log.Errorf(
+				"Error StopListeningToKeyedEvent to %s/%s/%s during disconnect: %+v",
+				subscription.StoreName,
+				subscription.EventName,
+				subscription.Key,
+				err,
+			)
 		}
 	}
 }
@@ -345,6 +395,22 @@ func describeEmitMessage(msg emitMessage) string {
 		return fmt.Sprintf("%s/partial store=%q", msg.Name, message.StoreName)
 	case *StoreUpdatePartialMessage:
 		return fmt.Sprintf("%s/partial store=%q", msg.Name, message.StoreName)
+	case KeyedEventMessage:
+		return fmt.Sprintf(
+			"%s store=%q event=%q key=%q",
+			msg.Name,
+			message.StoreName,
+			message.EventName,
+			message.Key,
+		)
+	case *KeyedEventMessage:
+		return fmt.Sprintf(
+			"%s store=%q event=%q key=%q",
+			msg.Name,
+			message.StoreName,
+			message.EventName,
+			message.Key,
+		)
 	default:
 		return msg.Name
 	}
@@ -378,6 +444,19 @@ func (st *socketTracker) removeTrackedStoreSubscription(storeName string, key st
 	delete(keySubs, key)
 	if len(keySubs) == 0 {
 		delete(st.storeSubscriptions, storeName)
+	}
+}
+
+func (st *socketTracker) removeTrackedKeyedEventSubscription(subscription KeyedEventSubscription) {
+	st.subscriptionMutex.Lock()
+	defer st.subscriptionMutex.Unlock()
+
+	if st.keyedEventSubscriptions[subscription] == 0 {
+		return
+	}
+	st.keyedEventSubscriptions[subscription]--
+	if st.keyedEventSubscriptions[subscription] == 0 {
+		delete(st.keyedEventSubscriptions, subscription)
 	}
 }
 
@@ -487,6 +566,125 @@ func (st *socketTracker) onStoreSubscription(params ...any) {
 			delete(st.storeSubscriptions, subMsg.StoreName)
 		}
 		st.subscriptionMutex.Unlock()
+	}
+}
+
+// onKeyedEventSubscription handles an exact store/event/key subscription lifecycle message.
+func (st *socketTracker) onKeyedEventSubscription(params ...any) {
+	var subMsg KeyedEventSubscriptionMessage
+	if len(params) == 0 {
+		st.log.Error("Missing keyed event subscription message")
+		st.disconnect()
+		return
+	}
+	if err := mapstructure.Decode(params[0], &subMsg); err != nil {
+		st.log.Errorf("Error parsing keyed event subscription message: %+v", err)
+		st.disconnect()
+		return
+	}
+	if st.ed == nil || st.sr == nil {
+		st.log.Error("Keyed event subscription received without an event dispatcher or store registry")
+		st.disconnect()
+		return
+	}
+	if !st.sr.IsStoreValid(subMsg.StoreName) {
+		st.log.Errorf("Client referenced a keyed event subscription for invalid store %s", subMsg.StoreName)
+		st.disconnect()
+		return
+	}
+	if subMsg.EventName == "" || subMsg.Key == "" {
+		st.log.Errorf(
+			"Client referenced an invalid keyed event subscription for %s/%s/%s",
+			subMsg.StoreName,
+			subMsg.EventName,
+			subMsg.Key,
+		)
+		st.disconnect()
+		return
+	}
+
+	subscription := KeyedEventSubscription{
+		StoreName: subMsg.StoreName,
+		EventName: subMsg.EventName,
+		Key:       subMsg.Key,
+	}
+
+	switch subMsg.Action {
+	case Subscribe:
+		userAccessLevel, err := st.lookupAccessLevel()
+		if err != nil {
+			st.log.Errorf("Error looking up user access level: %+v", err)
+			st.disconnect()
+			return
+		}
+		if err := st.sr.CheckStoreAccess(subMsg.StoreName, userAccessLevel); err != nil {
+			st.log.Errorf(
+				"Keyed event subscription denied for %s/%s/%s: %+v",
+				subMsg.StoreName,
+				subMsg.EventName,
+				subMsg.Key,
+				err,
+			)
+			st.disconnect()
+			return
+		}
+
+		st.subscriptionMutex.Lock()
+		st.keyedEventSubscriptions[subscription]++
+		first := st.keyedEventSubscriptions[subscription] == 1
+		st.subscriptionMutex.Unlock()
+		if !first {
+			return
+		}
+
+		if err := st.ed.ListeningToKeyedEvent(subMsg.StoreName, subMsg.EventName, subMsg.Key); err != nil {
+			st.removeTrackedKeyedEventSubscription(subscription)
+			st.log.Errorf(
+				"Error ListeningToKeyedEvent to %s/%s/%s: %+v",
+				subMsg.StoreName,
+				subMsg.EventName,
+				subMsg.Key,
+				err,
+			)
+			st.disconnect()
+		}
+	case Unsubscribe:
+		st.subscriptionMutex.Lock()
+		count := st.keyedEventSubscriptions[subscription]
+		if count == 0 {
+			st.subscriptionMutex.Unlock()
+			st.log.Errorf(
+				"Keyed event unsubscription for %s/%s/%s with no prior subscription",
+				subMsg.StoreName,
+				subMsg.EventName,
+				subMsg.Key,
+			)
+			return
+		}
+		count--
+		last := count == 0
+		if last {
+			delete(st.keyedEventSubscriptions, subscription)
+		} else {
+			st.keyedEventSubscriptions[subscription] = count
+		}
+		st.subscriptionMutex.Unlock()
+		if !last {
+			return
+		}
+
+		if err := st.ed.StopListeningToKeyedEvent(subMsg.StoreName, subMsg.EventName, subMsg.Key); err != nil {
+			st.log.Errorf(
+				"Error StopListeningToKeyedEvent to %s/%s/%s: %+v",
+				subMsg.StoreName,
+				subMsg.EventName,
+				subMsg.Key,
+				err,
+			)
+		}
+	default:
+		st.log.Errorf("Invalid keyed event subscription action %d", subMsg.Action)
+		st.disconnect()
 	}
 }
 
@@ -617,6 +815,30 @@ func (st *socketTracker) EventCallback(eventName string, eventBytes []byte) {
 	}
 
 	st.emitMessage(SocketEventNameEvent, m)
+}
+
+// KeyedEventCallback relays a keyed event only when this websocket owns the exact subscription.
+func (st *socketTracker) KeyedEventCallback(
+	storeName string,
+	eventName string,
+	key string,
+	eventBytes []byte,
+) {
+	subscription := KeyedEventSubscription{StoreName: storeName, EventName: eventName, Key: key}
+	st.subscriptionMutex.RLock()
+	subscribed := st.keyedEventSubscriptions[subscription] > 0
+	st.subscriptionMutex.RUnlock()
+	if !subscribed {
+		return
+	}
+
+	st.emitMessage(SocketEventNameKeyedEvent, KeyedEventMessage{
+		Time:      time.Now().UnixMilli(),
+		StoreName: storeName,
+		EventName: eventName,
+		Key:       key,
+		Event:     socketTypes.NewBytesBuffer(eventBytes),
+	})
 }
 
 // onRPCCall is a helper that is called when an RPC call message is received

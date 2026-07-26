@@ -6,6 +6,7 @@ ReStream is a data streaming framework based on [ReSub](https://github.com/boatk
 
 - [Tic Tac Toe](examples/tictactoe) contains the full getting-started tutorial and completed direct client-server example.
 - [Tic Tac Toe Relay](examples/tictactoerelay) builds on the base example with a device server, cloud relay, and web client switcher.
+- [Keyed Events](examples/keyedevents) is a focused, tested radio-audio example showing exact-key subscriptions in Go and TypeScript.
 
 # Details
 
@@ -48,6 +49,67 @@ getCAN0RxCount() {
 ```
 
 Struct field names in nested paths are normalized the same way, but map keys are exact. In the example above, `CAN0` is a map key and will not match `can0`. Full-store subscriptions still update for any store change, while field-keyed subscriptions update only when the generated partial reports that exact field path or one of its parent/child paths.
+
+## Keyed Events
+
+Keyed events are transient, typed messages delivered only while a client is subscribed to one exact `{store, event, key}` tuple. They are useful for relatively expensive or high-volume sources such as a radio audio stream, camera frames, debug traces, or device logs. Unlike a field-keyed store subscription, a keyed event does not fetch state or match parent and child field paths: its key is an opaque exact-match identifier.
+
+Define the key as the first string argument of the event callback, followed by the values that should be serialized:
+
+```go
+const (
+	RadioStoreName = "RadioStore"
+	AudioEventName = "Radio.Audio"
+)
+
+type AudioCallback func(radioID string, audio []byte)
+
+func RegisterAudioEvent(eventd *restream.EventDispatcher) *subscribableevent.Event[AudioCallback] {
+	event := subscribableevent.NewEvent[AudioCallback]()
+	eventd.RegisterKeyedEvent("Radio.Audio", &event, RadioStoreName, nil, nil)
+	return &event
+}
+```
+
+Run codegen after adding the registration. It generates the typed `RadioAudioEvent`, fills in the two reflection arguments, and omits `radioID` from the serialized packet because the key already travels in the keyed-event envelope. Go `[]byte` payloads are exposed to TypeScript as `Uint8Array`:
+
+```bash
+go tool github.com/boatkit-io/restream/cmd/codegen -project .
+```
+
+Fire the source event normally. Serialization and delivery are skipped unless that exact radio key currently has at least one listener:
+
+```go
+audioEvent.Fire(normalizedRadioID, audioBytes)
+```
+
+The browser subscribes through `ReStreamSocket`. Multiple local callbacks for the same tuple produce one network subscription; the final local unsubscribe produces the network unsubscribe. Active subscriptions are replayed after reconnect:
+
+```typescript
+const unsubscribe = rss.subscribeToKeyedEvent(
+  RadioStoreName,
+  RadioAudioEvent,
+  normalizedRadioID,
+  event => audioPlayer.write(event.audio ?? new Uint8Array()),
+);
+
+// Later:
+unsubscribe();
+```
+
+The store must be present in the server's `StoreRegistry`. `AddSocketHandlers` applies that store's normal minimum-access check before accepting a keyed-event subscription. Applications that need to start and stop the underlying source can observe aggregate 0-to-1 and 1-to-0 transitions:
+
+```go
+eventd.SubscribeToKeyedEventSubscriptions(func(storeName, eventName, key string, subscribed bool) {
+	if storeName == RadioStoreName && eventName == AudioEventName {
+		setRadioAudioStreaming(key, subscribed)
+	}
+})
+```
+
+Device/cloud relays forward these transitions to the device and carry matching events back to cloud viewers. The relay protocol filters by the exact tuple on both sides and replays active subscriptions when the device reconnects. Cloud code should pass the relay device's `EventDispatcher` to `AddSocketHandlers`; if `ConfigureDevice` replaces that dispatcher, assign it there before returning so Restream attaches subscription forwarding to the replacement.
+
+See the runnable [Keyed Events example](examples/keyedevents), including its exact-routing and refcount tests.
 
 ## Access Levels
 

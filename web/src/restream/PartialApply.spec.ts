@@ -84,13 +84,13 @@ describe('partial apply field paths', () => {
         const fields = partial.applyTo(target);
 
         expect(target.get(5)?.number).toBe(42);
-        expect(target.get(5)?.data).toEqual([]);
+        expect(target.get(5)?.data).toEqual(new Uint8Array());
         expect(fields).toEqual([[5, 'number']]);
     });
 
     test('mod map preserves an existing parent while applying a generated nested partial', () => {
         const target = new Map<number, TestMapData>([
-            [5, TestMapData.fromValues(1, [7, 8])],
+            [5, TestMapData.fromValues(1, new Uint8Array([7, 8]))],
         ]);
         const partial = PartialModMap.fromValues<number, TestMapData, TestMapDataPartial>(
             new Map(),
@@ -102,7 +102,7 @@ describe('partial apply field paths', () => {
         const fields = partial.applyTo(target);
 
         expect(target.get(5)?.number).toBe(42);
-        expect(target.get(5)?.data).toEqual([7, 8]);
+        expect(target.get(5)?.data).toEqual(new Uint8Array([7, 8]));
         expect(fields).toEqual([[5, 'number']]);
     });
 
@@ -131,7 +131,7 @@ describe('partial apply field paths', () => {
         const fields = partial.applyTo(target);
 
         expect(target[2]?.number).toBe(84);
-        expect(target[2]?.data).toEqual([]);
+        expect(target[2]?.data).toEqual(new Uint8Array());
         expect(fields).toEqual([[2, 'number']]);
     });
 
@@ -144,7 +144,7 @@ describe('partial apply field paths', () => {
         const [target, fields] = partial.applyOnTop(undefined);
 
         expect(target?.number).toBe(126);
-        expect(target?.data).toEqual([]);
+        expect(target?.data).toEqual(new Uint8Array());
         expect(fields).toEqual([['number']]);
     });
 });

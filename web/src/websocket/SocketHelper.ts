@@ -16,6 +16,13 @@ interface EventSubscription {
     callback: (event: EventStruct) => void;
 }
 
+interface KeyedEventSubscriptionGroup {
+    storeName: string;
+    eventName: string;
+    key: string;
+    subscriptions: Set<EventSubscription>;
+}
+
 export abstract class RPCStruct<RS extends RPCResponseStruct<RT>, RT> implements Serializable {
     constructor(public readonly rpcBoundName: string, public readonly responseType: Deserializable<RS>) { }
 
@@ -38,6 +45,8 @@ enum SocketEventNames {
     StoreSubscription = 'storesub',
 
     Event = 'event',
+    KeyedEvent = 'keyedevent',
+    KeyedEventSubscription = 'keyedeventsub',
 
     RPCCall = 'rpccall',
     RPCCallResponse = 'rpccallresp',
@@ -82,6 +91,21 @@ export interface EventMessage {
     event: ArrayBufferLike;
 }
 
+export interface KeyedEventSubscriptionMessage {
+    storeName: string;
+    eventName: string;
+    action: StoreSubscriptionAction;
+    key: string;
+}
+
+export interface KeyedEventMessage {
+    time: number;
+    storeName: string;
+    eventName: string;
+    key: string;
+    event: ArrayBufferLike;
+}
+
 export interface RPCCallMessage {
     callID: number;
     methodName: string;
@@ -108,6 +132,7 @@ export class ReStreamSocket {
     private _rpcCallID = 1;
     private _rpcCallsPending = new Map<number, RPCWaiting>();
     private _eventSubscriptions = new Map<string, Set<EventSubscription>>();
+    private _keyedEventSubscriptions = new Map<string, KeyedEventSubscriptionGroup>();
 
     constructor(socket: Socket) {
         this._socket = socket;
@@ -135,6 +160,21 @@ export class ReStreamSocket {
             }
 
             for (const subscription of [...subscriptions]) {
+                const event = subscription.eventType.deserialized(new BinaryReader(message.event), undefined);
+                subscription.callback(event);
+            }
+        });
+
+        socket.on(SocketEventNames.KeyedEvent, (message: KeyedEventMessage) => {
+            this._timestampOffset = Date.now() - message.time;
+
+            const identity = keyedEventSubscriptionIdentity(message.storeName, message.eventName, message.key);
+            const group = this._keyedEventSubscriptions.get(identity);
+            if (!group) {
+                return;
+            }
+
+            for (const subscription of [...group.subscriptions]) {
                 const event = subscription.eventType.deserialized(new BinaryReader(message.event), undefined);
                 subscription.callback(event);
             }
@@ -196,6 +236,10 @@ export class ReStreamSocket {
             };
             this._socket.emit(SocketEventNames.StoreSubscription, message);
         }
+
+        for (const group of this._keyedEventSubscriptions.values()) {
+            this._emitKeyedEventSubscription(group, StoreSubscriptionAction.Subscribe);
+        }
     }
 
     sendRPC<RS extends RPCResponseStruct<RT>, RT>(rpcStruct: RPCStruct<RS, RT>): Promise<RT> {
@@ -245,4 +289,68 @@ export class ReStreamSocket {
             }
         };
     }
+
+    subscribeToKeyedEvent<ES extends EventStruct>(
+        storeName: string,
+        eventType: EventStructType<ES>,
+        key: string,
+        callback: (event: ES) => void,
+    ): () => void {
+        if (!storeName) {
+            throw new Error("Keyed event store name is required");
+        }
+        if (!key) {
+            throw new Error("Keyed event key is required");
+        }
+
+        const eventName = eventType.eventBoundName;
+        const identity = keyedEventSubscriptionIdentity(storeName, eventName, key);
+        let group = this._keyedEventSubscriptions.get(identity);
+        if (!group) {
+            group = {
+                storeName,
+                eventName,
+                key,
+                subscriptions: new Set(),
+            };
+            this._keyedEventSubscriptions.set(identity, group);
+        }
+
+        const subscription: EventSubscription = {
+            eventType,
+            callback: (event) => callback(event as ES),
+        };
+        const first = group.subscriptions.size === 0;
+        group.subscriptions.add(subscription);
+        if (first && this._authenticated) {
+            this._emitKeyedEventSubscription(group, StoreSubscriptionAction.Subscribe);
+        }
+
+        return () => {
+            if (!group!.subscriptions.delete(subscription) || group!.subscriptions.size > 0) {
+                return;
+            }
+            if (this._authenticated) {
+                this._emitKeyedEventSubscription(group!, StoreSubscriptionAction.Unsubscribe);
+            }
+            this._keyedEventSubscriptions.delete(identity);
+        };
+    }
+
+    private _emitKeyedEventSubscription(
+        group: KeyedEventSubscriptionGroup,
+        action: StoreSubscriptionAction,
+    ): void {
+        const message: KeyedEventSubscriptionMessage = {
+            storeName: group.storeName,
+            eventName: group.eventName,
+            action,
+            key: group.key,
+        };
+        this._socket.emit(SocketEventNames.KeyedEventSubscription, message);
+    }
+}
+
+function keyedEventSubscriptionIdentity(storeName: string, eventName: string, key: string): string {
+    return JSON.stringify([storeName, eventName, key]);
 }

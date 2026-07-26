@@ -570,6 +570,114 @@ func TestViewerSocketEmitsEventDispatcherMessages(t *testing.T) {
 	}
 }
 
+func TestViewerSocketRefCountsAndFiltersKeyedEvents(t *testing.T) {
+	store := NewRelayStore[
+		viewerSocketTestState,
+		*viewerSocketTestState,
+		*viewerSocketTestPartial,
+	](viewerSocketTestStoreName, &viewerSocketTestState{}, AccessLevelPublic)
+	registry, err := NewStoreRegistry([]Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	eventd := NewEventDispatcher(nil)
+	socket := &socketTracker{
+		sr:                      registry,
+		ed:                      eventd,
+		emitQueue:               make(chan emitMessage, 1),
+		keyedEventSubscriptions: map[KeyedEventSubscription]int{},
+	}
+	subscription := KeyedEventSubscriptionMessage{
+		StoreName: viewerSocketTestStoreName,
+		EventName: "audio",
+		Action:    Subscribe,
+		Key:       "radio-a",
+	}
+
+	socket.onKeyedEventSubscription(subscription)
+	socket.onKeyedEventSubscription(subscription)
+	if !eventd.HasKeyedEventSubscribers(viewerSocketTestStoreName, "audio", "radio-a") {
+		t.Fatal("event dispatcher did not track the keyed websocket subscription")
+	}
+	if got := socket.keyedEventSubscriptions[KeyedEventSubscription{
+		StoreName: viewerSocketTestStoreName,
+		EventName: "audio",
+		Key:       "radio-a",
+	}]; got != 2 {
+		t.Fatalf("socket keyed event refcount = %d, want 2", got)
+	}
+
+	socket.KeyedEventCallback(viewerSocketTestStoreName, "audio", "radio-b", []byte{9})
+	select {
+	case emitted := <-socket.emitQueue:
+		t.Fatalf("unexpected keyed event for another key: %#v", emitted)
+	default:
+	}
+
+	socket.KeyedEventCallback(viewerSocketTestStoreName, "audio", "radio-a", []byte{1, 2, 3})
+	emitted := resolveEmitMessage(t, <-socket.emitQueue)
+	if emitted.Name != SocketEventNameKeyedEvent {
+		t.Fatalf("keyed event socket message name = %q, want %q", emitted.Name, SocketEventNameKeyedEvent)
+	}
+	message, ok := emitted.Message.(KeyedEventMessage)
+	if !ok {
+		t.Fatalf("keyed event message type = %T, want KeyedEventMessage", emitted.Message)
+	}
+	if message.StoreName != viewerSocketTestStoreName ||
+		message.EventName != "audio" ||
+		message.Key != "radio-a" ||
+		!bytes.Equal(message.Event.Bytes(), []byte{1, 2, 3}) {
+		t.Fatalf("keyed event message = %+v", message)
+	}
+
+	subscription.Action = Unsubscribe
+	socket.onKeyedEventSubscription(subscription)
+	if !eventd.HasKeyedEventSubscribers(viewerSocketTestStoreName, "audio", "radio-a") {
+		t.Fatal("first local unsubscribe stopped aggregate keyed event subscription")
+	}
+	socket.onKeyedEventSubscription(subscription)
+	if eventd.HasKeyedEventSubscribers(viewerSocketTestStoreName, "audio", "radio-a") {
+		t.Fatal("last local unsubscribe left aggregate keyed event subscription active")
+	}
+}
+
+func TestViewerSocketRejectsKeyedEventSubscriptionBelowStoreMinimumAccess(t *testing.T) {
+	store := NewRelayStore[
+		viewerSocketTestState,
+		*viewerSocketTestState,
+		*viewerSocketTestPartial,
+	](viewerSocketTestStoreName, &viewerSocketTestState{}, AccessLevel(2))
+	registry, err := NewStoreRegistry([]Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	log := logrus.New()
+	log.SetOutput(io.Discard)
+	eventd := NewEventDispatcher(nil)
+	socket := &socketTracker{
+		log:                     log,
+		sr:                      registry,
+		ed:                      eventd,
+		emitQueue:               make(chan emitMessage, 1),
+		keyedEventSubscriptions: map[KeyedEventSubscription]int{},
+		accessLookup:            func() (AccessLevel, error) { return AccessLevel(1), nil },
+	}
+
+	socket.onKeyedEventSubscription(KeyedEventSubscriptionMessage{
+		StoreName: viewerSocketTestStoreName,
+		EventName: "audio",
+		Action:    Subscribe,
+		Key:       "radio-a",
+	})
+
+	if len(socket.keyedEventSubscriptions) != 0 {
+		t.Fatalf("denied keyed event subscription was tracked: %+v", socket.keyedEventSubscriptions)
+	}
+	if eventd.HasKeyedEventSubscribers(viewerSocketTestStoreName, "audio", "radio-a") {
+		t.Fatal("denied keyed event subscription reached the event dispatcher")
+	}
+}
+
 func TestViewerSocketRelaysFullStateAppliesToSubscribedStore(t *testing.T) {
 	socket := &socketTracker{
 		emitQueue: make(chan emitMessage, 1),

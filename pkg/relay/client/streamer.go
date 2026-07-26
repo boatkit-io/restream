@@ -45,16 +45,18 @@ type Streamer struct {
 	gatherStart      map[string]time.Time
 	gatherGeneration map[string]uint64
 
-	partialSubID subscribableevent.SubscriptionId
-	eventSubID   subscribableevent.SubscriptionId
+	partialSubID    subscribableevent.SubscriptionId
+	eventSubID      subscribableevent.SubscriptionId
+	keyedEventSubID subscribableevent.SubscriptionId
 
-	relaySubscriptionMutex sync.Mutex
-	relaySubscriptions     map[relaySubscriptionKey]struct{}
-	relayStoreSubCount     map[string]int
-	relayStoreGeneration   map[string]uint64
-	relayStoreCatchingUp   map[string]bool
-	relayCatchupPartials   map[string]restream.Partial
-	onDemandStoreStreaming bool
+	relaySubscriptionMutex       sync.Mutex
+	relaySubscriptions           map[relaySubscriptionKey]struct{}
+	relayKeyedEventSubscriptions map[restream.KeyedEventSubscription]struct{}
+	relayStoreSubCount           map[string]int
+	relayStoreGeneration         map[string]uint64
+	relayStoreCatchingUp         map[string]bool
+	relayCatchupPartials         map[string]restream.Partial
+	onDemandStoreStreaming       bool
 }
 
 type relaySubscriptionKey struct {
@@ -98,14 +100,15 @@ func NewStreamer(
 
 		opts: opts,
 
-		gatheredPartials:     map[string]restream.Partial{},
-		gatherStart:          map[string]time.Time{},
-		gatherGeneration:     map[string]uint64{},
-		relaySubscriptions:   map[relaySubscriptionKey]struct{}{},
-		relayStoreSubCount:   map[string]int{},
-		relayStoreGeneration: map[string]uint64{},
-		relayStoreCatchingUp: map[string]bool{},
-		relayCatchupPartials: map[string]restream.Partial{},
+		gatheredPartials:             map[string]restream.Partial{},
+		gatherStart:                  map[string]time.Time{},
+		gatherGeneration:             map[string]uint64{},
+		relaySubscriptions:           map[relaySubscriptionKey]struct{}{},
+		relayKeyedEventSubscriptions: map[restream.KeyedEventSubscription]struct{}{},
+		relayStoreSubCount:           map[string]int{},
+		relayStoreGeneration:         map[string]uint64{},
+		relayStoreCatchingUp:         map[string]bool{},
+		relayCatchupPartials:         map[string]restream.Partial{},
 	}
 
 	if sr != nil {
@@ -114,6 +117,19 @@ func NewStreamer(
 	if ed != nil {
 		s.eventSubID = ed.SubscribeToEvents(func(eventName string, eventBytes []byte) {
 			if err := s.SendEvent(eventName, eventBytes); err != nil {
+				s.closeCurrentConnOnSendError(err)
+			}
+		})
+		s.keyedEventSubID = ed.SubscribeToKeyedEvents(func(
+			storeName string,
+			eventName string,
+			key string,
+			eventBytes []byte,
+		) {
+			if !s.isRelayedKeyedEventSubscribed(storeName, eventName, key) {
+				return
+			}
+			if err := s.SendKeyedEvent(storeName, eventName, key, eventBytes); err != nil {
 				s.closeCurrentConnOnSendError(err)
 			}
 		})
@@ -177,6 +193,9 @@ func (s *Streamer) Close() error {
 		if err := s.ed.UnsubscribeFromEvents(s.eventSubID); err != nil && retErr == nil {
 			retErr = err
 		}
+		if err := s.ed.UnsubscribeFromKeyedEvents(s.keyedEventSubID); err != nil && retErr == nil {
+			retErr = err
+		}
 	}
 	return retErr
 }
@@ -197,6 +216,26 @@ func (s *Streamer) SendEvent(eventName string, eventBytes []byte) error {
 	}
 
 	return s.enqueuePacket("event "+eventName, packetBytes)
+}
+
+// SendKeyedEvent sends a serialized store-owned keyed event to the relay server.
+func (s *Streamer) SendKeyedEvent(
+	storeName string,
+	eventName string,
+	key string,
+	eventBytes []byte,
+) error {
+	packetBytes, err := protocol.EncodePacket(&protocol.KeyedEventPacket{
+		StoreName: storeName,
+		EventName: eventName,
+		Key:       key,
+		Data:      eventBytes,
+	})
+	if err != nil {
+		return err
+	}
+
+	return s.enqueuePacket("keyed event "+storeName+"/"+eventName+"/"+key, packetBytes)
 }
 
 func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials Credentials) error {
@@ -266,6 +305,17 @@ func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials C
 			if err := s.handleStoreSubscription(packet); err != nil {
 				return fmt.Errorf("handle relay store subscription packet action %d for store %q key %q: %w",
 					packet.Action, packet.StoreName, packet.Key, err)
+			}
+		case *protocol.KeyedEventSubscriptionPacket:
+			if err := s.handleKeyedEventSubscription(packet); err != nil {
+				return fmt.Errorf(
+					"handle relay keyed event subscription packet action %d for store %q event %q key %q: %w",
+					packet.Action,
+					packet.StoreName,
+					packet.EventName,
+					packet.Key,
+					err,
+				)
 			}
 		case *protocol.StoreStatePacket:
 			if err := s.handleStoreState(packet); err != nil {
@@ -617,6 +667,74 @@ func (s *Streamer) handleStoreSubscription(packet *protocol.StoreSubscriptionPac
 	}
 }
 
+func (s *Streamer) handleKeyedEventSubscription(packet *protocol.KeyedEventSubscriptionPacket) error {
+	allowed, err := s.allowsRelayStoreTraffic(packet.StoreName)
+	if err != nil || !allowed {
+		return err
+	}
+	if s.ed == nil {
+		return fmt.Errorf("relay keyed event subscription received without an event dispatcher")
+	}
+
+	subscription := restream.KeyedEventSubscription{
+		StoreName: packet.StoreName,
+		EventName: packet.EventName,
+		Key:       packet.Key,
+	}
+	switch packet.Action {
+	case protocol.StoreSubscribe:
+		return s.startRelayedKeyedEventSubscription(subscription)
+	case protocol.StoreUnsubscribe:
+		return s.stopRelayedKeyedEventSubscription(subscription)
+	default:
+		return fmt.Errorf("invalid keyed event subscription action %d", packet.Action)
+	}
+}
+
+func (s *Streamer) startRelayedKeyedEventSubscription(subscription restream.KeyedEventSubscription) error {
+	s.relaySubscriptionMutex.Lock()
+	if s.relayKeyedEventSubscriptions == nil {
+		s.relayKeyedEventSubscriptions = map[restream.KeyedEventSubscription]struct{}{}
+	}
+	if _, exists := s.relayKeyedEventSubscriptions[subscription]; exists {
+		s.relaySubscriptionMutex.Unlock()
+		return nil
+	}
+	s.relayKeyedEventSubscriptions[subscription] = struct{}{}
+	s.relaySubscriptionMutex.Unlock()
+
+	if err := s.ed.ListeningToKeyedEvent(subscription.StoreName, subscription.EventName, subscription.Key); err != nil {
+		s.relaySubscriptionMutex.Lock()
+		delete(s.relayKeyedEventSubscriptions, subscription)
+		s.relaySubscriptionMutex.Unlock()
+		return err
+	}
+	return nil
+}
+
+func (s *Streamer) stopRelayedKeyedEventSubscription(subscription restream.KeyedEventSubscription) error {
+	s.relaySubscriptionMutex.Lock()
+	if _, exists := s.relayKeyedEventSubscriptions[subscription]; !exists {
+		s.relaySubscriptionMutex.Unlock()
+		return nil
+	}
+	delete(s.relayKeyedEventSubscriptions, subscription)
+	s.relaySubscriptionMutex.Unlock()
+	return s.ed.StopListeningToKeyedEvent(subscription.StoreName, subscription.EventName, subscription.Key)
+}
+
+func (s *Streamer) isRelayedKeyedEventSubscribed(storeName string, eventName string, key string) bool {
+	subscription := restream.KeyedEventSubscription{
+		StoreName: storeName,
+		EventName: eventName,
+		Key:       key,
+	}
+	s.relaySubscriptionMutex.Lock()
+	_, subscribed := s.relayKeyedEventSubscriptions[subscription]
+	s.relaySubscriptionMutex.Unlock()
+	return subscribed
+}
+
 func (s *Streamer) configureOnDemandStoreStreaming(packet *protocol.ConnectedPacket) bool {
 	enabled := s.opts.StorePolicy.OnDemand &&
 		packet.Capabilities.OnDemandStoreStreaming
@@ -815,18 +933,35 @@ func (s *Streamer) clearRelaySubscriptions() {
 	for key := range s.relaySubscriptions {
 		keys = append(keys, key)
 	}
+	keyedEventSubscriptions := make(
+		[]restream.KeyedEventSubscription,
+		0,
+		len(s.relayKeyedEventSubscriptions),
+	)
+	for subscription := range s.relayKeyedEventSubscriptions {
+		keyedEventSubscriptions = append(keyedEventSubscriptions, subscription)
+	}
 	s.relaySubscriptions = map[relaySubscriptionKey]struct{}{}
+	s.relayKeyedEventSubscriptions = map[restream.KeyedEventSubscription]struct{}{}
 	s.relayStoreSubCount = map[string]int{}
 	s.relayStoreCatchingUp = map[string]bool{}
 	s.relayCatchupPartials = map[string]restream.Partial{}
 	s.onDemandStoreStreaming = false
 	s.relaySubscriptionMutex.Unlock()
 
-	if s.sr == nil {
-		return
+	if s.sr != nil {
+		for _, key := range keys {
+			s.sr.StopListeningToStoreKey(key.storeName, key.key) //nolint:errcheck // Why: Cleanup is best effort on relay disconnect.
+		}
 	}
-	for _, key := range keys {
-		s.sr.StopListeningToStoreKey(key.storeName, key.key) //nolint:errcheck // Why: Cleanup is best effort on relay disconnect.
+	if s.ed != nil {
+		for _, subscription := range keyedEventSubscriptions {
+			s.ed.StopListeningToKeyedEvent( //nolint:errcheck // Why: Cleanup is best effort on relay disconnect.
+				subscription.StoreName,
+				subscription.EventName,
+				subscription.Key,
+			)
+		}
 	}
 }
 

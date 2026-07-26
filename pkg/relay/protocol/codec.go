@@ -104,6 +104,10 @@ func EncodePacket(packet Packet) ([]byte, error) {
 		if err := encodeNamedData(w, p.EventName, p.Data); err != nil {
 			return nil, err
 		}
+	case *KeyedEventPacket:
+		if err := encodeKeyedEventPacket(w, p); err != nil {
+			return nil, err
+		}
 	case *RPCCallPacket:
 		if err := encodeRPCCallPacket(w, p); err != nil {
 			return nil, err
@@ -114,6 +118,10 @@ func EncodePacket(packet Packet) ([]byte, error) {
 		}
 	case *StoreSubscriptionPacket:
 		if err := encodeStoreSubscriptionPacket(w, p); err != nil {
+			return nil, err
+		}
+	case *KeyedEventSubscriptionPacket:
+		if err := encodeKeyedEventSubscriptionPacket(w, p); err != nil {
 			return nil, err
 		}
 	case *CustomPacket:
@@ -184,6 +192,18 @@ func DecodePacket(data []byte) (Packet, error) {
 			return nil, err
 		}
 		return packet, ensureEOF(r, "store subscription packet")
+	case KindKeyedEvent:
+		packet, err := decodeKeyedEventPacket(r)
+		if err != nil {
+			return nil, err
+		}
+		return packet, ensureEOF(r, "keyed event packet")
+	case KindKeyedEventSubscription:
+		packet, err := decodeKeyedEventSubscriptionPacket(r)
+		if err != nil {
+			return nil, err
+		}
+		return packet, ensureEOF(r, "keyed event subscription packet")
 	case KindCustom:
 		packet, err := decodeCustomPacket(r)
 		if err != nil {
@@ -351,6 +371,96 @@ func decodeStoreSubscriptionPacket(r *binarystreams.Reader) (*StoreSubscriptionP
 	}
 	return &StoreSubscriptionPacket{
 		StoreName: storeName,
+		Key:       key,
+		Action:    action,
+	}, nil
+}
+
+func encodeKeyedEventPacket(w *binarystreams.Writer, packet *KeyedEventPacket) error {
+	if err := writeString(w, packet.StoreName); err != nil {
+		return err
+	}
+	if err := writeString(w, packet.EventName); err != nil {
+		return err
+	}
+	if err := writeString(w, packet.Key); err != nil {
+		return err
+	}
+	return writeBytes(w, packet.Data)
+}
+
+func decodeKeyedEventPacket(r *binarystreams.Reader) (*KeyedEventPacket, error) {
+	storeName, err := readString(r)
+	if err != nil {
+		return nil, err
+	}
+	eventName, err := readString(r)
+	if err != nil {
+		return nil, err
+	}
+	key, err := readString(r)
+	if err != nil {
+		return nil, err
+	}
+	data, err := readBytes(r)
+	if err != nil {
+		return nil, err
+	}
+	return &KeyedEventPacket{
+		StoreName: storeName,
+		EventName: eventName,
+		Key:       key,
+		Data:      data,
+	}, nil
+}
+
+func encodeKeyedEventSubscriptionPacket(
+	w *binarystreams.Writer,
+	packet *KeyedEventSubscriptionPacket,
+) error {
+	if err := writeString(w, packet.StoreName); err != nil {
+		return err
+	}
+	if err := writeString(w, packet.EventName); err != nil {
+		return err
+	}
+	if err := writeString(w, packet.Key); err != nil {
+		return err
+	}
+	switch packet.Action {
+	case StoreSubscribe, StoreUnsubscribe:
+	default:
+		return fmt.Errorf("invalid keyed event subscription action %d", packet.Action)
+	}
+	return w.WriteByte(byte(packet.Action))
+}
+
+func decodeKeyedEventSubscriptionPacket(r *binarystreams.Reader) (*KeyedEventSubscriptionPacket, error) {
+	storeName, err := readString(r)
+	if err != nil {
+		return nil, err
+	}
+	eventName, err := readString(r)
+	if err != nil {
+		return nil, err
+	}
+	key, err := readString(r)
+	if err != nil {
+		return nil, err
+	}
+	actionByte, err := r.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+	action := StoreSubscriptionAction(actionByte)
+	switch action {
+	case StoreSubscribe, StoreUnsubscribe:
+	default:
+		return nil, fmt.Errorf("invalid keyed event subscription action %d", action)
+	}
+	return &KeyedEventSubscriptionPacket{
+		StoreName: storeName,
+		EventName: eventName,
 		Key:       key,
 		Action:    action,
 	}, nil
