@@ -807,6 +807,12 @@ func (ft *FileTracking) buildTSRPCStructs(rpcn, rpctn string, reqFields []*restr
 	if len(respFields) > 1 {
 		rt = ft.getTSType(respFields[0].VarInfo)
 	}
+	requestDeps := map[string]struct{}{
+		rpctn + "Response": {},
+	}
+	for _, fi := range reqFields {
+		ft.documentTSSamePackageTypeDeps(fi.VarInfo, requestDeps)
+	}
 
 	outTS := fmt.Sprintf("export class %sRequest extends RPCStruct<%sResponse,%s> {\n", rpctn, rpctn, rt)
 	for _, fi := range reqFields {
@@ -820,13 +826,27 @@ func (ft *FileTracking) buildTSRPCStructs(rpcn, rpctn string, reqFields []*restr
 	outTS += genTSFieldInfo(reqFields)
 	outTS += ft.genTSNonFieldedStructSerializers(sirq, reqFields)
 	outTS += "}\n"
-	ft.tsGenEntries = append(ft.tsGenEntries, fdef{name: sirq.Name, defs: outTS, typ: fdefTypeOther})
+	ft.tsGenEntries = append(ft.tsGenEntries, fdef{
+		name: sirq.Name,
+		defs: outTS,
+		typ:  fdefTypeOther,
+		deps: lo.Keys(requestDeps),
+	})
 
 	sirs := StructInfo{
 		Name: rpctn + "Response",
 	}
 	respOut := ft.genTSClass(sirs, respFields, false)
-	ft.tsGenEntries = append(ft.tsGenEntries, fdef{name: sirs.Name, defs: respOut, typ: fdefTypeOther})
+	responseDeps := map[string]struct{}{}
+	for _, fi := range respFields {
+		ft.documentTSSamePackageTypeDeps(fi.VarInfo, responseDeps)
+	}
+	ft.tsGenEntries = append(ft.tsGenEntries, fdef{
+		name: sirs.Name,
+		defs: respOut,
+		typ:  fdefTypeOther,
+		deps: lo.Keys(responseDeps),
+	})
 
 	return nil
 }
@@ -838,6 +858,10 @@ func (ft *FileTracking) buildTSFFRPCStruct(
 	requestFields []*restream.FieldInfo,
 ) error {
 	structInfo := StructInfo{Name: rpcTypeName + "Request"}
+	deps := map[string]struct{}{}
+	for _, field := range requestFields {
+		ft.documentTSSamePackageTypeDeps(field.VarInfo, deps)
+	}
 	out := fmt.Sprintf("export class %s extends FFRPCStruct {\n", structInfo.Name)
 	for _, field := range requestFields {
 		out += fmt.Sprintf("    public %s!: %s;\n", getTSFieldName(field), ft.getTSType(field.VarInfo))
@@ -848,7 +872,12 @@ func (ft *FileTracking) buildTSFFRPCStruct(
 	out += ft.genTSNonFieldedStructSerializers(structInfo, requestFields)
 	out += "}\n"
 
-	ft.tsGenEntries = append(ft.tsGenEntries, fdef{name: structInfo.Name, defs: out, typ: fdefTypeOther})
+	ft.tsGenEntries = append(ft.tsGenEntries, fdef{
+		name: structInfo.Name,
+		defs: out,
+		typ:  fdefTypeOther,
+		deps: lo.Keys(deps),
+	})
 	return nil
 }
 

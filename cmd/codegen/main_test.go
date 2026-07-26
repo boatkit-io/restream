@@ -1590,6 +1590,40 @@ func TestWriteTSFileOrdersTransitiveDependencies(t *testing.T) {
 	}
 }
 
+func TestBuildTSRPCStructsDocumentsRuntimeDependencies(t *testing.T) {
+	ft := &FileTracking{
+		fPackage: &packages.Package{Name: "radio"},
+	}
+	payload := &restream.VarInfoStruct{Name: "TransmitLease", Package: "radio"}
+	if err := ft.buildTSRPCStructs(
+		"Radio.BeginTransmit",
+		"RadioBeginTransmit",
+		[]*restream.FieldInfo{{
+			Name:    "Options",
+			VarInfo: &restream.VarInfoStruct{Name: "TransmitOptions", Package: "radio"},
+		}},
+		[]*restream.FieldInfo{
+			{Name: "Result", VarInfo: payload},
+			{Name: "Error", VarInfo: &restream.VarInfoPrimitive{DataType: restream.SerializationTypeString}},
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(ft.tsGenEntries) != 2 {
+		t.Fatalf("generated entry count = %d, want 2", len(ft.tsGenEntries))
+	}
+	requestDeps := strings.Join(ft.tsGenEntries[0].deps, ",")
+	if !strings.Contains(requestDeps, "RadioBeginTransmitResponse") ||
+		!strings.Contains(requestDeps, "TransmitOptions") {
+		t.Fatalf("request dependencies = %q, want response and options", requestDeps)
+	}
+	responseDeps := strings.Join(ft.tsGenEntries[1].deps, ",")
+	if !strings.Contains(responseDeps, "TransmitLease") {
+		t.Fatalf("response dependencies = %q, want TransmitLease", responseDeps)
+	}
+}
+
 func TestGenTSFieldInfoUsesPublicReadonlyMetadata(t *testing.T) {
 	got := genTSFieldInfo([]*restream.FieldInfo{
 		{
