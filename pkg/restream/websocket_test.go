@@ -47,6 +47,15 @@ func resolveEmitMessage(t *testing.T, msg emitMessage) emitMessage {
 	return resolved
 }
 
+func TestAddSocketHandlersRejectsInvalidStoreDeliveryMode(t *testing.T) {
+	err := AddSocketHandlersWithOptions(nil, nil, nil, nil, nil, nil, SocketHandlerOptions{
+		StoreDeliveryMode: StoreDeliveryMode(255),
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid store delivery mode") {
+		t.Fatalf("invalid store delivery mode error = %v", err)
+	}
+}
+
 type viewerSocketTestState struct {
 	Values             map[string]int
 	Other              int
@@ -443,6 +452,7 @@ func TestViewerSocketKeyedCatchupUsesRelayStorePartial(t *testing.T) {
 	}
 	socket := &socketTracker{
 		sr:                 registry,
+		storeMode:          StoreDeliveryModeKeyed,
 		emitQueue:          make(chan emitMessage, 1),
 		storeSubscriptions: map[string]map[string]int{},
 	}
@@ -478,6 +488,119 @@ func TestViewerSocketKeyedCatchupUsesRelayStorePartial(t *testing.T) {
 	if _, subscribed := socket.storeSubscriptions[viewerSocketTestStoreName]["values%&"+sourceKey]; !subscribed {
 		t.Fatalf("expected socket to track keyed subscription for %s", sourceKey)
 	}
+}
+
+func TestViewerSocketRapidKeyedCatchupsRemainDeliverable(t *testing.T) {
+	const (
+		keyA = "a"
+		keyB = "b"
+		keyC = "c"
+	)
+	store := NewRelayStore[
+		viewerSocketTestState,
+		*viewerSocketTestState,
+		*viewerSocketTestPartial,
+	](viewerSocketTestStoreName, &viewerSocketTestState{
+		Values: map[string]int{
+			keyA: 1,
+			keyB: 2,
+			keyC: 3,
+		},
+	}, AccessLevelPublic)
+	registry, err := NewStoreRegistry([]Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	socket := &socketTracker{
+		sr:                  registry,
+		sessionManager:      &ViewerSessionManager{},
+		storeMode:           StoreDeliveryModeKeyed,
+		storeSubscriptions:  map[string]map[string]int{},
+		sessionStoreUpdates: map[string]*bufferedViewerStoreUpdate{},
+	}
+	initializeTestSocketRuntime(socket)
+
+	for _, key := range []string{keyA, keyB, keyC} {
+		socket.onStoreSubscription(StoreSubscriptionMessage{
+			StoreName: viewerSocketTestStoreName,
+			Action:    Subscribe,
+			Key:       "values%&" + key,
+		})
+	}
+
+	socket.sessionBufferMutex.Lock()
+	update := socket.sessionStoreUpdates[viewerSocketTestStoreName]
+	if update == nil || update.partial == nil {
+		socket.sessionBufferMutex.Unlock()
+		t.Fatalf("rapid keyed catch-ups did not produce a buffered partial: %#v", update)
+	}
+	partial := update.partial
+	socket.sessionBufferMutex.Unlock()
+
+	clientState := &viewerSocketTestState{Values: map[string]int{}}
+	partial.ApplyTo(clientState)
+	assertMapEqual(t, map[string]int{keyA: 1, keyB: 2, keyC: 3}, clientState.Values)
+}
+
+func TestViewerSocketFullStoreModeKeepsCompleteClientState(t *testing.T) {
+	store := NewRelayStore[
+		viewerSocketTestState,
+		*viewerSocketTestState,
+		*viewerSocketTestPartial,
+	](viewerSocketTestStoreName, &viewerSocketTestState{
+		Values: map[string]int{
+			"a": 1,
+			"b": 2,
+		},
+	}, AccessLevelPublic)
+	registry, err := NewStoreRegistry([]Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	socket := &socketTracker{
+		sr:                  registry,
+		sessionManager:      &ViewerSessionManager{},
+		storeMode:           StoreDeliveryModeFullStore,
+		storeSubscriptions:  map[string]map[string]int{},
+		sessionStoreUpdates: map[string]*bufferedViewerStoreUpdate{},
+	}
+	initializeTestSocketRuntime(socket)
+
+	socket.onStoreSubscription(StoreSubscriptionMessage{
+		StoreName: viewerSocketTestStoreName,
+		Action:    Subscribe,
+		Key:       "values%&a",
+	})
+
+	socket.sessionBufferMutex.Lock()
+	baseline := socket.sessionStoreUpdates[viewerSocketTestStoreName]
+	if baseline == nil || baseline.fullState == nil || baseline.partial != nil {
+		socket.sessionBufferMutex.Unlock()
+		t.Fatalf("first field subscription did not produce a full baseline: %#v", baseline)
+	}
+	fullState := baseline.fullState.(*viewerSocketTestState)
+	socket.sessionStoreUpdates = map[string]*bufferedViewerStoreUpdate{}
+	socket.sessionStoreUpdateBytes = 0
+	socket.sessionBufferMutex.Unlock()
+	assertMapEqual(t, map[string]int{"a": 1, "b": 2}, fullState.Values)
+
+	unsubscribedUpdate := &viewerSocketTestPartial{
+		Values: NewPartialMap[string, int]().Set("b", 20),
+	}
+	fields := unsubscribedUpdate.ApplyTo(&viewerSocketTestState{Values: map[string]int{}})
+	socket.PartialCallback(viewerSocketTestStoreName, fields, unsubscribedUpdate)
+
+	socket.sessionBufferMutex.Lock()
+	buffered := socket.sessionStoreUpdates[viewerSocketTestStoreName]
+	if buffered == nil || buffered.partial == nil {
+		socket.sessionBufferMutex.Unlock()
+		t.Fatalf("full-store mode omitted an update outside the active field key: %#v", buffered)
+	}
+	bufferedPartial := buffered.partial
+	socket.sessionBufferMutex.Unlock()
+	clientState := &viewerSocketTestState{Values: map[string]int{}}
+	bufferedPartial.ApplyTo(clientState)
+	assertMapEqual(t, map[string]int{"b": 20}, clientState.Values)
 }
 
 func TestViewerSocketQueuesKeyedCatchupBeforeConcurrentLiveUpdate(t *testing.T) {

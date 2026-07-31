@@ -217,14 +217,13 @@ const (
 
 // emitMessage is a struct for storing queued message to be emitted through the websocket
 type emitMessage struct {
-	Name            string
-	Message         any
-	Build           func() (emitMessage, error)
-	StoreName       string
-	StoreGeneration uint64
-	StoreFull       Serializable
-	StorePartial    Partial
-	Bytes           int
+	Name         string
+	Message      any
+	Build        func() (emitMessage, error)
+	StoreName    string
+	StoreFull    Serializable
+	StorePartial Partial
+	Bytes        int
 }
 
 func (m emitMessage) resolve() (emitMessage, error) {
@@ -236,12 +235,26 @@ func (m emitMessage) resolve() (emitMessage, error) {
 
 type AccessLookupFunc func() (AccessLevel, error)
 
+// StoreDeliveryMode controls whether a viewer receives only its subscribed
+// field paths or complete store state while any field in that store is in use.
+type StoreDeliveryMode uint8
+
+const (
+	// StoreDeliveryModeKeyed filters catch-ups and live updates to the
+	// viewer's exact field subscriptions. This is appropriate for cloud relays.
+	StoreDeliveryModeKeyed StoreDeliveryMode = iota
+	// StoreDeliveryModeFullStore sends one full baseline when a store first
+	// becomes active and all store updates until its final subscription stops.
+	StoreDeliveryModeFullStore
+)
+
 // SocketHandlerOptions configures optional Restream websocket surfaces.
 type SocketHandlerOptions struct {
 	FFRPCHandler          FFRPCHandlerFunc
 	DataStreamBroker      DataStreamBroker
 	SessionManager        *ViewerSessionManager
 	SessionIdentityLookup ViewerSessionIdentityLookupFunc
+	StoreDeliveryMode     StoreDeliveryMode
 	Limits                SocketHandlerLimits
 }
 
@@ -313,10 +326,9 @@ type trackedDataStreamSubscription struct {
 }
 
 type bufferedViewerStoreUpdate struct {
-	generation uint64
-	fullState  Serializable
-	partial    Partial
-	bytes      int
+	fullState Serializable
+	partial   Partial
+	bytes     int
 }
 
 type socketTrackerConfig struct {
@@ -327,6 +339,7 @@ type socketTrackerConfig struct {
 	ed           *EventDispatcher
 	dataStreams  DataStreamBroker
 	accessLookup AccessLookupFunc
+	storeMode    StoreDeliveryMode
 	limits       SocketHandlerLimits
 }
 
@@ -338,6 +351,7 @@ type socketTracker struct {
 	ffrpch      FFRPCHandlerFunc
 	ed          *EventDispatcher
 	dataStreams DataStreamBroker
+	storeMode   StoreDeliveryMode
 	limits      SocketHandlerLimits
 	lifetimeCtx context.Context
 	cancel      context.CancelFunc
@@ -367,7 +381,6 @@ type socketTracker struct {
 	keyedEventSubID     subscribableevent.SubscriptionId
 
 	storeSubscriptions          map[string]map[string]int
-	storeSubscriptionGeneration map[string]uint64
 	keyedEventSubscriptions     map[KeyedEventSubscription]int
 	dataStreamSubscriptions     map[string]trackedDataStreamSubscription
 	storeSubscriptionCount      int
@@ -397,19 +410,19 @@ func newSocketTracker(config socketTrackerConfig) *socketTracker {
 		ed:           config.ed,
 		dataStreams:  config.dataStreams,
 		accessLookup: config.accessLookup,
+		storeMode:    config.storeMode,
 		limits:       limits,
 		lifetimeCtx:  lifetimeCtx,
 		cancel:       cancel,
 		rpcSlots:     make(chan struct{}, limits.MaxInFlightRPCs),
 		ffrpcSlots:   make(chan struct{}, limits.MaxInFlightFFRPCs),
 
-		emitQueue:                   make(chan emitMessage, max(100, limits.MaxBufferedSessionStores)),
-		subscriptionMutex:           smartmutex.SmartMutex{Name: "restream.socketTracker.subscriptionMutex"},
-		storeSubscriptions:          map[string]map[string]int{},
-		storeSubscriptionGeneration: map[string]uint64{},
-		keyedEventSubscriptions:     map[KeyedEventSubscription]int{},
-		dataStreamSubscriptions:     map[string]trackedDataStreamSubscription{},
-		sessionStoreUpdates:         map[string]*bufferedViewerStoreUpdate{},
+		emitQueue:               make(chan emitMessage, max(100, limits.MaxBufferedSessionStores)),
+		subscriptionMutex:       smartmutex.SmartMutex{Name: "restream.socketTracker.subscriptionMutex"},
+		storeSubscriptions:      map[string]map[string]int{},
+		keyedEventSubscriptions: map[KeyedEventSubscription]int{},
+		dataStreamSubscriptions: map[string]trackedDataStreamSubscription{},
+		sessionStoreUpdates:     map[string]*bufferedViewerStoreUpdate{},
 	}
 	tracker.subscribeToSources()
 	tracker.handleEmitQueue()
@@ -459,6 +472,10 @@ func AddSocketHandlersWithOptions(
 	accessLookup AccessLookupFunc,
 	options SocketHandlerOptions,
 ) error {
+	if options.StoreDeliveryMode != StoreDeliveryModeKeyed &&
+		options.StoreDeliveryMode != StoreDeliveryModeFullStore {
+		return fmt.Errorf("invalid store delivery mode %d", options.StoreDeliveryMode)
+	}
 	config := socketTrackerConfig{
 		log:          log,
 		sr:           sr,
@@ -467,6 +484,7 @@ func AddSocketHandlersWithOptions(
 		ed:           ed,
 		dataStreams:  options.DataStreamBroker,
 		accessLookup: accessLookup,
+		storeMode:    options.StoreDeliveryMode,
 		limits:       options.Limits.withDefaults(),
 	}
 	if options.SessionManager != nil {
@@ -720,7 +738,8 @@ func (st *socketTracker) isCurrentAttachment(conn *socket.Socket, generation uin
 func (st *socketTracker) isCompatibleSessionConfig(config socketTrackerConfig) bool {
 	return st.sr == config.sr &&
 		st.ed == config.ed &&
-		st.dataStreams == config.dataStreams
+		st.dataStreams == config.dataStreams &&
+		st.storeMode == config.storeMode
 }
 
 func (st *socketTracker) updateSessionConfig(
@@ -815,7 +834,6 @@ func buildBufferedStoreUpdateMessage(
 	} else if update.partial != nil {
 		message, err = buildPartialStoreUpdateMessage(storeName, update.partial)
 	}
-	message.StoreGeneration = update.generation
 	return message, err
 }
 
@@ -881,7 +899,6 @@ func (s *socketTracker) cleanupDisconnect() {
 		s.dataStreamSubscriptions,
 	)
 	s.storeSubscriptions = map[string]map[string]int{}
-	s.storeSubscriptionGeneration = map[string]uint64{}
 	s.keyedEventSubscriptions = map[KeyedEventSubscription]int{}
 	s.dataStreamSubscriptions = map[string]trackedDataStreamSubscription{}
 	s.storeSubscriptionCount = 0
@@ -977,11 +994,6 @@ func (st *socketTracker) handleEmitQueue() {
 				st.abortSessionForError("build viewer emit message", err)
 				continue
 			}
-			if msg.StoreName != "" &&
-				msg.StoreGeneration != st.currentStoreSubscriptionGeneration(msg.StoreName) {
-				continue
-			}
-
 			st.attachmentMutex.RLock()
 			conn := st.conn
 			ready := st.attachmentReady
@@ -1019,10 +1031,6 @@ func (st *socketTracker) emitMessage(name string, arg any) {
 }
 
 func (st *socketTracker) queueEmitMessage(msg emitMessage) {
-	if msg.StoreName != "" &&
-		msg.StoreGeneration != st.currentStoreSubscriptionGeneration(msg.StoreName) {
-		return
-	}
 	st.deliveryMutex.Lock()
 	defer st.deliveryMutex.Unlock()
 
@@ -1114,9 +1122,6 @@ func (st *socketTracker) bufferDetachedMessage(msg emitMessage) error {
 }
 
 func (st *socketTracker) bufferDetachedStoreUpdateLocked(msg emitMessage) error {
-	if msg.StoreGeneration != st.currentStoreSubscriptionGeneration(msg.StoreName) {
-		return nil
-	}
 	update := st.sessionStoreUpdates[msg.StoreName]
 	if update == nil {
 		if len(st.sessionStoreUpdates) >= st.limits.MaxBufferedSessionStores {
@@ -1125,15 +1130,7 @@ func (st *socketTracker) bufferDetachedStoreUpdateLocked(msg emitMessage) error 
 				st.limits.MaxBufferedSessionStores,
 			)
 		}
-		update = &bufferedViewerStoreUpdate{
-			generation: msg.StoreGeneration,
-		}
-		st.sessionStoreUpdates[msg.StoreName] = update
-	} else if update.generation != msg.StoreGeneration {
-		st.sessionStoreUpdateBytes -= update.bytes
-		update = &bufferedViewerStoreUpdate{
-			generation: msg.StoreGeneration,
-		}
+		update = &bufferedViewerStoreUpdate{}
 		st.sessionStoreUpdates[msg.StoreName] = update
 	}
 	st.sessionStoreUpdateBytes -= update.bytes
@@ -1303,24 +1300,6 @@ func (st *socketTracker) lookupAccessLevel() (AccessLevel, error) {
 	return lookup()
 }
 
-func (st *socketTracker) bumpStoreSubscriptionGenerationLocked(storeName string) uint64 {
-	if st.storeSubscriptionGeneration == nil {
-		st.storeSubscriptionGeneration = map[string]uint64{}
-	}
-	generation := st.storeSubscriptionGeneration[storeName] + 1
-	if generation == 0 {
-		generation = 1
-	}
-	st.storeSubscriptionGeneration[storeName] = generation
-	return generation
-}
-
-func (st *socketTracker) currentStoreSubscriptionGeneration(storeName string) uint64 {
-	st.subscriptionMutex.RLock()
-	defer st.subscriptionMutex.RUnlock()
-	return st.storeSubscriptionGeneration[storeName]
-}
-
 func (st *socketTracker) removeTrackedStoreSubscription(storeName string, key string) {
 	st.storeUpdateQueueMutex.Lock()
 	defer st.storeUpdateQueueMutex.Unlock()
@@ -1339,7 +1318,6 @@ func (st *socketTracker) removeTrackedStoreSubscription(storeName string, key st
 		return
 	}
 	delete(keySubs, key)
-	st.bumpStoreSubscriptionGenerationLocked(storeName)
 	if len(keySubs) == 0 {
 		delete(st.storeSubscriptions, storeName)
 	}
@@ -1435,6 +1413,7 @@ func (st *socketTracker) subscribeStoreKeyWithCatchup(
 		return fmt.Errorf("store subscription limit exceeded (%d)", st.limits.MaxStoreSubscriptions)
 	}
 	keySubs := st.storeSubscriptions[storeName]
+	firstStore := len(keySubs) == 0
 	if keySubs == nil {
 		keySubs = map[string]int{}
 		st.storeSubscriptions[storeName] = keySubs
@@ -1442,10 +1421,9 @@ func (st *socketTracker) subscribeStoreKeyWithCatchup(
 	keySubs[key]++
 	st.storeSubscriptionCount++
 	firstKey := keySubs[key] == 1
-	if firstKey {
-		st.bumpStoreSubscriptionGenerationLocked(storeName)
-	}
-	if firstKey && catchup {
+	catchupNeeded := firstKey && catchup &&
+		(st.storeMode == StoreDeliveryModeKeyed || firstStore)
+	if catchupNeeded {
 		if st.pendingStoreCatchups == nil {
 			st.pendingStoreCatchups = map[string]int{}
 		}
@@ -1458,13 +1436,13 @@ func (st *socketTracker) subscribeStoreKeyWithCatchup(
 	}
 
 	if err := st.sr.ListeningToStoreKey(storeName, key, accessLevel); err != nil {
-		if catchup {
+		if catchupNeeded {
 			st.cancelSubscriptionCatchup(storeName)
 		}
 		st.removeTrackedStoreSubscription(storeName, key)
 		return err
 	}
-	if catchup {
+	if catchupNeeded {
 		if err := st.emitSubscriptionCatchup(storeName, key, accessLevel); err != nil {
 			st.cancelSubscriptionCatchup(storeName)
 			st.removeTrackedStoreSubscription(storeName, key)
@@ -1490,7 +1468,6 @@ func (st *socketTracker) unsubscribeStoreKey(storeName string, key string) error
 	last := keySubs[key] == 0
 	if last {
 		delete(keySubs, key)
-		st.bumpStoreSubscriptionGenerationLocked(storeName)
 		if len(keySubs) == 0 {
 			delete(st.storeSubscriptions, storeName)
 		}
@@ -2041,12 +2018,10 @@ func (st *socketTracker) emitDataStreamError(subscriptionID string, message stri
 }
 
 func (st *socketTracker) emitSubscriptionCatchup(storeName string, key string, accessLevel AccessLevel) error {
-	generation := st.currentStoreSubscriptionGeneration(storeName)
 	message, err := st.buildSubscriptionCatchupMessage(storeName, key, accessLevel)
 	if err != nil {
 		return err
 	}
-	message.StoreGeneration = generation
 	st.completeSubscriptionCatchup(storeName, message)
 	return nil
 }
@@ -2056,13 +2031,19 @@ func (st *socketTracker) queueSessionManifestBaseline(
 	keys []string,
 	accessLevel AccessLevel,
 ) error {
-	generation := st.currentStoreSubscriptionGeneration(storeName)
+	if st.storeMode == StoreDeliveryModeFullStore {
+		message, err := st.buildSubscriptionCatchupMessage(storeName, "", accessLevel)
+		if err != nil {
+			return err
+		}
+		st.queueLiveStoreUpdate(storeName, message)
+		return nil
+	}
 	for _, key := range keys {
 		message, err := st.buildSubscriptionCatchupMessage(storeName, key, accessLevel)
 		if err != nil {
 			return err
 		}
-		message.StoreGeneration = generation
 		st.queueLiveStoreUpdate(storeName, message)
 		if message.StoreFull != nil {
 			return nil
@@ -2076,7 +2057,7 @@ func (st *socketTracker) buildSubscriptionCatchupMessage(
 	key string,
 	accessLevel AccessLevel,
 ) (emitMessage, error) {
-	if key != "" {
+	if st.storeMode == StoreDeliveryModeKeyed && key != "" {
 		partialSnapshot, exists, err := st.sr.GetPartialSnapshotForSubscriptionKey(storeName, key, accessLevel)
 		if err != nil {
 			return emitMessage{}, err
@@ -2159,11 +2140,7 @@ func buildPartialStoreUpdateMessage(storeName string, partial Serializable) (emi
 	return message, nil
 }
 
-func (st *socketTracker) emitPartialStoreUpdateSnapshot(
-	storeName string,
-	partial Serializable,
-	generation uint64,
-) {
+func (st *socketTracker) emitPartialStoreUpdateSnapshot(storeName string, partial Serializable) {
 	message, err := buildPartialStoreUpdateMessage(storeName, partial)
 	if err != nil {
 		if st.log != nil {
@@ -2172,20 +2149,11 @@ func (st *socketTracker) emitPartialStoreUpdateSnapshot(
 		st.disconnect()
 		return
 	}
-	message.StoreGeneration = generation
 	st.queueLiveStoreUpdate(storeName, message)
 }
 
 func (st *socketTracker) queueLiveStoreUpdate(storeName string, message emitMessage) {
 	st.storeUpdateQueueMutex.Lock()
-	st.subscriptionMutex.RLock()
-	currentGeneration := st.storeSubscriptionGeneration[storeName]
-	st.subscriptionMutex.RUnlock()
-	if message.StoreGeneration != currentGeneration {
-		st.storeUpdateQueueMutex.Unlock()
-		return
-	}
-
 	if st.pendingStoreCatchups[storeName] > 0 {
 		if st.bufferedStoreUpdateCount >= st.limits.MaxBufferedStoreUpdates {
 			st.storeUpdateQueueMutex.Unlock()
@@ -2416,11 +2384,7 @@ func (st *socketTracker) onFFRPCCall(params ...any) {
 // PartialCallback is a callback registered with subscribed stores, which is called back in the event of any SetField
 // calls on those stores, so we can relay the field update to the connected websocket client
 func (st *socketTracker) PartialCallback(storeName string, fields [][]any, partial Partial) {
-	filteredPartial, ok, generation := st.partialForSubscriptionsWithGeneration(
-		storeName,
-		fields,
-		partial,
-	)
+	filteredPartial, ok := st.partialForSubscriptions(storeName, fields, partial)
 	if !ok {
 		return
 	}
@@ -2439,14 +2403,13 @@ func (st *socketTracker) PartialCallback(storeName string, fields [][]any, parti
 		}
 	}
 
-	st.emitPartialStoreUpdateSnapshot(storeName, filteredPartial, generation)
+	st.emitPartialStoreUpdateSnapshot(storeName, filteredPartial)
 }
 
 // FullStateCallback relays a full-state replacement to viewers currently subscribed to that store.
 func (st *socketTracker) FullStateCallback(storeName string, stateBytes []byte) {
 	st.subscriptionMutex.RLock()
 	keySubs, subscribed := st.storeSubscriptions[storeName]
-	generation := st.storeSubscriptionGeneration[storeName]
 	keys := make([]string, 0, len(keySubs))
 	for key, count := range keySubs {
 		if count > 0 {
@@ -2477,7 +2440,7 @@ func (st *socketTracker) FullStateCallback(storeName string, stateBytes []byte) 
 
 	// A whole-store subscription needs the replacement verbatim. Keyed subscriptions instead get fresh keyed
 	// snapshots rebuilt from the newly applied state so a device reconnect does not bypass field filtering.
-	if st.sr != nil && keys[0] != "" {
+	if st.storeMode == StoreDeliveryModeKeyed && st.sr != nil && keys[0] != "" {
 		keyedMessages := make([]emitMessage, 0, len(keys))
 		for _, key := range keys {
 			partial, exists, err := st.sr.GetPartialSnapshotForSubscriptionKey(storeName, key, userAccessLevel)
@@ -2500,7 +2463,6 @@ func (st *socketTracker) FullStateCallback(storeName string, stateBytes []byte) 
 				st.disconnect()
 				return
 			}
-			message.StoreGeneration = generation
 			keyedMessages = append(keyedMessages, message)
 		}
 		if keyedMessages != nil {
@@ -2531,26 +2493,15 @@ func (st *socketTracker) FullStateCallback(storeName string, stateBytes []byte) 
 		st.disconnect()
 		return
 	}
-	message.StoreGeneration = generation
 	st.queueLiveStoreUpdate(storeName, message)
 }
 
 func (st *socketTracker) partialForSubscriptions(storeName string, fields [][]any, partial Partial) (Partial, bool) {
-	filtered, ok, _ := st.partialForSubscriptionsWithGeneration(storeName, fields, partial)
-	return filtered, ok
-}
-
-func (st *socketTracker) partialForSubscriptionsWithGeneration(
-	storeName string,
-	fields [][]any,
-	partial Partial,
-) (Partial, bool, uint64) {
 	st.subscriptionMutex.RLock()
 	keySubs, exists := st.storeSubscriptions[storeName]
-	generation := st.storeSubscriptionGeneration[storeName]
 	hasWholeSub := exists && keySubs[""] > 0
 	subscriptionKeys := []string{}
-	if exists && !hasWholeSub {
+	if st.storeMode == StoreDeliveryModeKeyed && exists && !hasWholeSub {
 		for key, subCount := range keySubs {
 			if key == "" || subCount == 0 {
 				continue
@@ -2562,9 +2513,9 @@ func (st *socketTracker) partialForSubscriptionsWithGeneration(
 
 	if !exists {
 		// no sub, no care
-		return nil, false, generation
+		return nil, false
 	}
-	if !hasWholeSub {
+	if st.storeMode == StoreDeliveryModeKeyed && !hasWholeSub {
 		matchingFields := [][]any{}
 		for _, key := range subscriptionKeys {
 			subscribedField := FieldPathFromSubscriptionKey(key)
@@ -2576,14 +2527,14 @@ func (st *socketTracker) partialForSubscriptionsWithGeneration(
 			}
 		}
 		if len(matchingFields) == 0 {
-			return nil, false, generation
+			return nil, false
 		}
 		filteredPartial, ok := FilterPartialToFields(partial, matchingFields)
 		if !ok {
-			return nil, false, generation
+			return nil, false
 		}
 		partial = filteredPartial
 	}
 
-	return partial, true, generation
+	return partial, true
 }

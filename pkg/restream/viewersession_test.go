@@ -42,6 +42,13 @@ func TestViewerSessionManagerCreatesAndResumesUUIDSession(t *testing.T) {
 	if !resumed || resumedTracker != tracker {
 		t.Fatal("session resume did not retain the original tracker")
 	}
+	changedConfig := config
+	changedConfig.storeMode = StoreDeliveryModeFullStore
+	if _, _, err := manager.attach(ViewerSessionAttachRequest{
+		SessionID: tracker.sessionID,
+	}, identity, changedConfig); err == nil {
+		t.Fatal("session resumed after its store subscription mode changed")
+	}
 
 	changedAccess := identity
 	changedAccess.AccessLevel--
@@ -58,6 +65,52 @@ func TestViewerSessionManagerCreatesAndResumesUUIDSession(t *testing.T) {
 	}, otherIdentity, config); err == nil {
 		t.Fatal("different authenticated owner resumed the session")
 	}
+}
+
+func TestViewerSessionFullStoreModeManifestBuffersCompleteBaseline(t *testing.T) {
+	store := NewRelayStore[
+		viewerSocketTestState,
+		*viewerSocketTestState,
+		*viewerSocketTestPartial,
+	](viewerSocketTestStoreName, &viewerSocketTestState{
+		Values: map[string]int{"a": 1, "b": 2},
+	}, AccessLevelPublic)
+	registry, err := NewStoreRegistry([]Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	manager := NewViewerSessionManager(ViewerSessionManagerOptions{})
+	t.Cleanup(manager.Close)
+	tracker, _, err := manager.attach(
+		ViewerSessionAttachRequest{},
+		ViewerSessionIdentity{OwnerID: "viewer-a", ScopeID: "boat-a"},
+		socketTrackerConfig{
+			sr:        registry,
+			storeMode: StoreDeliveryModeFullStore,
+			limits:    SocketHandlerLimits{}.withDefaults(),
+		},
+	)
+	if err != nil {
+		t.Fatalf("manager.attach failed: %v", err)
+	}
+	if err := tracker.reconcileSessionManifest(ViewerSessionAttachRequest{
+		StoreSubscriptions: []ViewerSessionStoreSubscription{{
+			StoreName: viewerSocketTestStoreName,
+			Key:       "values%&a",
+		}},
+	}, AccessLevelPublic); err != nil {
+		t.Fatalf("manifest failed: %v", err)
+	}
+
+	tracker.sessionBufferMutex.Lock()
+	update := tracker.sessionStoreUpdates[viewerSocketTestStoreName]
+	if update == nil || update.fullState == nil || update.partial != nil {
+		tracker.sessionBufferMutex.Unlock()
+		t.Fatalf("field-key manifest did not buffer a complete store baseline: %#v", update)
+	}
+	state := update.fullState.(*viewerSocketTestState)
+	tracker.sessionBufferMutex.Unlock()
+	assertMapEqual(t, map[string]int{"a": 1, "b": 2}, state.Values)
 }
 
 func TestViewerSessionDetachedStoreAccumulatorTransitions(t *testing.T) {
@@ -220,7 +273,6 @@ func TestViewerSessionManifestChangeRebuildsRetainedKeyBaseline(t *testing.T) {
 			Set("a", 10).
 			Set("b", 20),
 	})
-	staleGeneration := tracker.currentStoreSubscriptionGeneration(viewerSocketTestStoreName)
 	if err := tracker.reconcileSessionManifest(ViewerSessionAttachRequest{
 		StoreSubscriptions: []ViewerSessionStoreSubscription{{
 			StoreName: viewerSocketTestStoreName,
@@ -228,19 +280,6 @@ func TestViewerSessionManifestChangeRebuildsRetainedKeyBaseline(t *testing.T) {
 		}},
 	}, AccessLevelPublic); err != nil {
 		t.Fatalf("resumed manifest failed: %v", err)
-	}
-	staleMessage, err := buildPartialStoreUpdateMessage(
-		viewerSocketTestStoreName,
-		&viewerSocketTestPartial{
-			Values: NewPartialMap[string, int]().Set("a", 999),
-		},
-	)
-	if err != nil {
-		t.Fatalf("build stale partial failed: %v", err)
-	}
-	staleMessage.StoreGeneration = staleGeneration
-	if err := tracker.bufferDetachedMessage(staleMessage); err != nil {
-		t.Fatalf("buffer stale partial failed: %v", err)
 	}
 
 	tracker.sessionBufferMutex.Lock()
@@ -256,8 +295,7 @@ func TestViewerSessionManifestChangeRebuildsRetainedKeyBaseline(t *testing.T) {
 	assertMapEqual(t, map[string]int{"b": 20}, state.Values)
 }
 
-func TestViewerSessionBufferedStoreUpdatesRetainSubscriptionGeneration(t *testing.T) {
-	const generation = 7
+func TestViewerSessionBuildsBufferedStoreUpdates(t *testing.T) {
 	tests := []struct {
 		name   string
 		update *bufferedViewerStoreUpdate
@@ -265,7 +303,6 @@ func TestViewerSessionBufferedStoreUpdatesRetainSubscriptionGeneration(t *testin
 		{
 			name: "full state",
 			update: &bufferedViewerStoreUpdate{
-				generation: generation,
 				fullState: &viewerSocketTestState{
 					Values: map[string]int{"a": 1},
 				},
@@ -274,7 +311,6 @@ func TestViewerSessionBufferedStoreUpdatesRetainSubscriptionGeneration(t *testin
 		{
 			name: "partial",
 			update: &bufferedViewerStoreUpdate{
-				generation: generation,
 				partial: &viewerSocketTestPartial{
 					Values: NewPartialMap[string, int]().Set("a", 1),
 				},
@@ -293,8 +329,8 @@ func TestViewerSessionBufferedStoreUpdatesRetainSubscriptionGeneration(t *testin
 			if message.StoreName != viewerSocketTestStoreName {
 				t.Fatalf("store name = %q, want %q", message.StoreName, viewerSocketTestStoreName)
 			}
-			if message.StoreGeneration != generation {
-				t.Fatalf("store generation = %d, want %d", message.StoreGeneration, generation)
+			if message.Name != SocketEventNameStoreUpdate {
+				t.Fatalf("message name = %q, want %q", message.Name, SocketEventNameStoreUpdate)
 			}
 		})
 	}

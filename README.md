@@ -51,6 +51,25 @@ getCAN0RxCount() {
 
 Struct field names in nested paths are normalized the same way, but map keys are exact. In the example above, `CAN0` is a map key and will not match `can0`. Full-store subscriptions still update for any store change, while field-keyed subscriptions update only when the generated partial reports that exact field path or one of its parent/child paths.
 
+Viewer sockets use keyed delivery by default. For a direct local viewer where
+bandwidth is inexpensive and the client should retain complete store state,
+select full-store delivery. Subscription lifecycle callbacks still receive the
+exact field keys, but the first active key receives a full baseline and all
+store partials flow until the last key stops:
+
+```go
+restream.AddSocketHandlersWithOptions(
+    conn, log, stores, rpcHandler, events, accessLookup,
+    restream.SocketHandlerOptions{
+        StoreDeliveryMode: restream.StoreDeliveryModeFullStore,
+    },
+)
+```
+
+Cloud viewer sockets should retain the default
+`StoreDeliveryModeKeyed`, allowing relay-side subscription refcounting and
+on-demand catch-up to limit device uplink traffic.
+
 ## Resumable Viewer Sessions
 
 Viewer sessions retain Restream state across transient Socket.IO disconnects.
