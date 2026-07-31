@@ -18,6 +18,13 @@ export const SerializationTypeInvalid = 0;
 
 export const SocketEventNameStoreUpdate = "storeupdate";
 
+export enum StoreDeliveryMode {
+    Keyed = 0,
+    FullStore = 1,
+}
+
+export const StoreDeliveryModeKeyed = 0;
+
 export enum StoreSubscriptionAction {
     Subscribe = 0,
     Unsubscribe = 1,
