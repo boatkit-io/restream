@@ -2,7 +2,10 @@ package restream
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +39,17 @@ func (s DataStreamSubscription) Validate() error {
 	default:
 		return nil
 	}
+}
+
+// DataPlaneStreamID returns the deterministic opaque stream identity used in
+// high-bandwidth envelopes. Length-prefixing the control-plane fields keeps
+// the hash unambiguous even when a source key contains separator characters.
+func (s DataStreamSubscription) DataPlaneStreamID() string {
+	identity := strconv.Itoa(len(s.StoreName)) + ":" + s.StoreName +
+		strconv.Itoa(len(s.StreamName)) + ":" + s.StreamName +
+		strconv.Itoa(len(s.Key)) + ":" + s.Key
+	sum := sha256.Sum256([]byte(identity))
+	return "restream:" + hex.EncodeToString(sum[:])
 }
 
 // DataStreamEndpoint is an authenticated, viewer-specific lease returned by a

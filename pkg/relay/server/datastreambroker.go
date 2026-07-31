@@ -119,16 +119,6 @@ func (b *DeviceDataStreamBroker) open(
 		b.mu.Unlock()
 	}()
 
-	// Source transitions have their own bounded acknowledgement timeout. Do not
-	// let a viewer cancellation abandon an already queued device-side startup;
-	// a canceled allocation below rolls the completed startup back normally.
-	if err := b.device.ListeningToDataStream(
-		context.Background(),
-		subscription,
-		accessLevel,
-	); err != nil {
-		return restream.DataStreamEndpoint{}, err
-	}
 	endpoint, err := b.allocator.AllocateViewer(
 		ctx,
 		sessionID,
@@ -136,13 +126,29 @@ func (b *DeviceDataStreamBroker) open(
 		subscription,
 	)
 	if err != nil {
-		b.stopSourceOrRetry(subscription)
 		return restream.DataStreamEndpoint{}, err
 	}
 	if endpoint.LeaseID == "" || endpoint.URL == "" || endpoint.Token == "" {
 		_ = b.allocator.ReleaseViewer(ctx, endpoint)
-		b.stopSourceOrRetry(subscription)
 		return restream.DataStreamEndpoint{}, fmt.Errorf("data stream allocator returned an incomplete endpoint")
+	}
+
+	// Allocate the viewer lease before asking the device to start. The endpoint
+	// is not disclosed to the viewer until Open returns, but an in-process data
+	// plane can already buffer the source's first recovery frame while startup
+	// is being acknowledged. This avoids making every new viewer wait for the
+	// next video keyframe.
+	//
+	// Source transitions have their own bounded acknowledgement timeout. Do not
+	// let a viewer cancellation abandon an already queued device-side startup;
+	// a canceled open below rolls the completed startup back normally.
+	if err := b.device.ListeningToDataStream(
+		context.Background(),
+		subscription,
+		accessLevel,
+	); err != nil {
+		_ = b.allocator.ReleaseViewer(context.Background(), endpoint)
+		return restream.DataStreamEndpoint{}, err
 	}
 
 	b.mu.Lock()

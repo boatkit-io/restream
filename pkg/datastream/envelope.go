@@ -134,37 +134,69 @@ func (e Envelope) Validate(maxPayloadBytes int) error {
 
 // Encode serializes one validated envelope.
 func Encode(envelope Envelope) ([]byte, error) {
-	if err := envelope.Validate(defaultMaxPayload); err != nil {
+	buf := bytes.NewBuffer(make([]byte, 0, encodedSize(envelope)))
+	if err := Write(buf, envelope); err != nil {
 		return nil, err
 	}
-	if len(envelope.StreamID) > math.MaxUint16 || len(envelope.Format) > math.MaxUint16 {
-		return nil, fmt.Errorf("data stream string exceeds wire length")
-	}
-
-	totalSize := fixedHeaderSize + len(envelope.StreamID) + len(envelope.Format) + len(envelope.Payload)
-	buf := bytes.NewBuffer(make([]byte, 0, totalSize))
-	buf.WriteString(wireMagic)
-	buf.WriteByte(byte(envelope.PayloadType))
-	buf.WriteByte(byte(envelope.Flags))
-	_ = binary.Write(buf, binary.LittleEndian, uint16(0))
-	_ = binary.Write(buf, binary.LittleEndian, envelope.Generation)
-	_ = binary.Write(buf, binary.LittleEndian, envelope.Sequence)
-	_ = binary.Write(buf, binary.LittleEndian, envelope.TimestampUnixNano)
-	_ = binary.Write(buf, binary.LittleEndian, envelope.FrameID)
-	_ = binary.Write(buf, binary.LittleEndian, envelope.FirstIndex)
-	_ = binary.Write(buf, binary.LittleEndian, envelope.ItemCount)
-	_ = binary.Write(buf, binary.LittleEndian, envelope.TotalItemCount)
-	_ = binary.Write(buf, binary.LittleEndian, uint16(len(envelope.StreamID)))
-	_ = binary.Write(buf, binary.LittleEndian, uint16(len(envelope.Format)))
-	_ = binary.Write(buf, binary.LittleEndian, uint32(len(envelope.Payload)))
-	buf.WriteString(envelope.StreamID)
-	buf.WriteString(envelope.Format)
-	buf.Write(envelope.Payload)
 	return buf.Bytes(), nil
+}
+
+// Write serializes one validated envelope directly to w. Publishers should
+// prefer this over Encode when their transport exposes a streaming message
+// writer, avoiding an additional full-payload allocation and copy.
+func Write(w io.Writer, envelope Envelope) error {
+	if err := envelope.Validate(defaultMaxPayload); err != nil {
+		return err
+	}
+	if len(envelope.StreamID) > math.MaxUint16 || len(envelope.Format) > math.MaxUint16 {
+		return fmt.Errorf("data stream string exceeds wire length")
+	}
+	if _, err := io.WriteString(w, wireMagic); err != nil {
+		return err
+	}
+	fields := []any{
+		byte(envelope.PayloadType),
+		byte(envelope.Flags),
+		uint16(0),
+		envelope.Generation,
+		envelope.Sequence,
+		envelope.TimestampUnixNano,
+		envelope.FrameID,
+		envelope.FirstIndex,
+		envelope.ItemCount,
+		envelope.TotalItemCount,
+		uint16(len(envelope.StreamID)),
+		uint16(len(envelope.Format)),
+		uint32(len(envelope.Payload)),
+	}
+	for _, field := range fields {
+		if err := binary.Write(w, binary.LittleEndian, field); err != nil {
+			return err
+		}
+	}
+	if _, err := io.WriteString(w, envelope.StreamID); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, envelope.Format); err != nil {
+		return err
+	}
+	_, err := w.Write(envelope.Payload)
+	return err
 }
 
 // Decode deserializes and validates one complete envelope.
 func Decode(data []byte, maxPayloadBytes int) (Envelope, error) {
+	return decode(data, maxPayloadBytes, true)
+}
+
+// DecodeBorrowed deserializes and validates one complete envelope without
+// copying its payload. The returned Payload aliases data and is only valid
+// while the caller keeps data alive and immutable.
+func DecodeBorrowed(data []byte, maxPayloadBytes int) (Envelope, error) {
+	return decode(data, maxPayloadBytes, false)
+}
+
+func decode(data []byte, maxPayloadBytes int, copyPayload bool) (Envelope, error) {
 	if len(data) < fixedHeaderSize {
 		return Envelope{}, fmt.Errorf("data stream envelope is truncated")
 	}
@@ -235,9 +267,13 @@ func Decode(data []byte, maxPayloadBytes int) (Envelope, error) {
 	}
 	var payload []byte
 	if payloadLength > 0 {
-		payload = make([]byte, payloadLength)
-		if _, err := io.ReadFull(reader, payload); err != nil {
-			return Envelope{}, err
+		if copyPayload {
+			payload = make([]byte, payloadLength)
+			if _, err := io.ReadFull(reader, payload); err != nil {
+				return Envelope{}, err
+			}
+		} else {
+			payload = data[len(data)-int(payloadLength):]
 		}
 	}
 	envelope.StreamID = string(streamID)

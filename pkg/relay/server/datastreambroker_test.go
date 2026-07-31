@@ -19,6 +19,7 @@ type testDataStreamAllocator struct {
 	released          []restream.DataStreamEndpoint
 	releaseCalls      int
 	releaseFailures   int
+	onAllocate        func()
 }
 
 func (a *testDataStreamAllocator) AllocateViewer(
@@ -27,6 +28,9 @@ func (a *testDataStreamAllocator) AllocateViewer(
 	_ string,
 	_ restream.DataStreamSubscription,
 ) (restream.DataStreamEndpoint, error) {
+	if a.onAllocate != nil {
+		a.onAllocate()
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	endpoint := restream.DataStreamEndpoint{
@@ -71,6 +75,10 @@ func TestDeviceDataStreamBrokerAuthorizesAndRefCountsViewerLeases(t *testing.T) 
 	device := NewDevice("device-a", registry, DeviceManagerConfig{})
 	allocator := &testDataStreamAllocator{}
 	broker := NewDeviceDataStreamBroker(device, allocator)
+	allocatedBeforeSourceStart := false
+	allocator.onAllocate = func() {
+		allocatedBeforeSourceStart = len(device.ActiveDataStreamSubscriptions()) == 0
+	}
 	subscription := restream.DataStreamSubscription{
 		StoreName:  "CameraMedia",
 		StreamName: "CameraMedia.Video",
@@ -120,6 +128,9 @@ func TestDeviceDataStreamBrokerAuthorizesAndRefCountsViewerLeases(t *testing.T) 
 	)
 	if err != nil {
 		t.Fatalf("first Open failed: %v", err)
+	}
+	if !allocatedBeforeSourceStart {
+		t.Fatal("viewer endpoint was not allocated before source startup")
 	}
 	if len(allocator.allocatedSessions) != 1 || allocator.allocatedSessions[0] != "session-a" {
 		t.Fatalf("allocator session IDs = %#v, want session-a", allocator.allocatedSessions)

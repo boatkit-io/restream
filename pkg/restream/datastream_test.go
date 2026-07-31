@@ -74,3 +74,19 @@ func TestDataStreamDispatcherRegistrationIncludesStoreName(t *testing.T) {
 		t.Fatal("CheckAccess accepted an unregistered store/stream pair")
 	}
 }
+
+func TestDataStreamSubscriptionDataPlaneIDIsStableAndUnambiguous(t *testing.T) {
+	first := DataStreamSubscription{StoreName: "ab", StreamName: "c", Key: "camera"}
+	second := DataStreamSubscription{StoreName: "a", StreamName: "bc", Key: "camera"}
+	if first.DataPlaneStreamID() == second.DataPlaneStreamID() {
+		t.Fatal("field boundaries produced the same data-plane stream ID")
+	}
+	if first.DataPlaneStreamID() != (DataStreamSubscription{
+		StoreName: "ab", StreamName: "c", Key: "camera",
+	}).DataPlaneStreamID() {
+		t.Fatal("equal subscriptions produced different data-plane stream IDs")
+	}
+	if !strings.HasPrefix(first.DataPlaneStreamID(), "restream:") {
+		t.Fatalf("data-plane stream ID = %q, want restream prefix", first.DataPlaneStreamID())
+	}
+}

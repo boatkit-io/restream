@@ -109,6 +109,30 @@ func TestDecodeRejectsTrailingOrOversizedPayload(t *testing.T) {
 	}
 }
 
+func TestDecodeBorrowedAliasesPayloadWhileDecodeOwnsIt(t *testing.T) {
+	envelope := testFrameEnvelope("camera", 1)
+	envelope.Payload = []byte{1, 2, 3}
+	encoded, err := Encode(envelope)
+	if err != nil {
+		t.Fatalf("Encode failed: %v", err)
+	}
+	owned, err := Decode(encoded, 1024)
+	if err != nil {
+		t.Fatalf("Decode failed: %v", err)
+	}
+	borrowed, err := DecodeBorrowed(encoded, 1024)
+	if err != nil {
+		t.Fatalf("DecodeBorrowed failed: %v", err)
+	}
+	encoded[len(encoded)-1] = 9
+	if got := owned.Payload[len(owned.Payload)-1]; got != 3 {
+		t.Fatalf("Decode payload changed with source buffer: %d", got)
+	}
+	if got := borrowed.Payload[len(borrowed.Payload)-1]; got != 9 {
+		t.Fatalf("DecodeBorrowed payload did not alias source buffer: %d", got)
+	}
+}
+
 func TestSchedulerFallsBackToNewestRecoveryFrame(t *testing.T) {
 	now := time.Unix(100, 0)
 	scheduler := NewScheduler(SchedulerConfig{
