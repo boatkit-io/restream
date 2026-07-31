@@ -1,9 +1,11 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/boatkit-io/restream/pkg/relay/protocol"
 	"github.com/boatkit-io/restream/pkg/restream"
@@ -15,7 +17,13 @@ const (
 	duplicateRelayConnectionReason               = "replaced by a newer relay connection for this device"
 	storeSubscriptionForwardingFailedReason      = "store subscription forwarding failed; reconnect required"
 	keyedEventSubscriptionForwardingFailedReason = "keyed event subscription forwarding failed; reconnect required"
+	dataStreamSubscriptionForwardingFailedReason = "data stream subscription forwarding failed; reconnect required"
 	relayStateForwardingFailedReason             = "relay state forwarding failed; reconnect required"
+	defaultDataStreamTransitionTimeout           = 35 * time.Second
+	maxActiveDataStreamIdentities                = 1024
+	maxPendingDataStreamOperations               = 2048
+	maxPendingDeviceRPCs                         = 4096
+	defaultDeviceRPCTimeout                      = 30 * time.Second
 )
 
 // Device stores aggregated relay data for one device.
@@ -35,6 +43,12 @@ type Device struct {
 	connMutex sync.RWMutex
 	conn      *Connection
 
+	dataStreamSubscriptionMutex sync.Mutex
+	dataStreamSubscriptions     map[restream.DataStreamSubscription]*dataStreamSerial
+	dataStreamOperationMutex    sync.Mutex
+	dataStreamOperationNext     uint32
+	dataStreamOperations        map[uint32]pendingDataStreamOperation
+
 	rpcMutex    sync.Mutex
 	rpcNextID   uint32
 	rpcsPending map[uint32]pendingRPC
@@ -43,6 +57,18 @@ type Device struct {
 type pendingRPC struct {
 	conn   *Connection
 	respCh chan []byte
+}
+
+type dataStreamSerial struct {
+	mutex       sync.Mutex
+	count       int
+	refs        int
+	accessLevel restream.AccessLevel
+}
+
+type pendingDataStreamOperation struct {
+	conn   *Connection
+	result chan error
 }
 
 // NewDevice creates a Device around an existing store registry.
@@ -54,8 +80,11 @@ func NewDevice(deviceID string, sr *restream.StoreRegistry, config DeviceManager
 
 		config: config,
 
-		rpcNextID:   1,
-		rpcsPending: map[uint32]pendingRPC{},
+		dataStreamSubscriptions: map[restream.DataStreamSubscription]*dataStreamSerial{},
+		dataStreamOperationNext: 1,
+		dataStreamOperations:    map[uint32]pendingDataStreamOperation{},
+		rpcNextID:               1,
+		rpcsPending:             map[uint32]pendingRPC{},
 	}
 }
 
@@ -99,6 +128,7 @@ func (d *Device) DeviceDisconnected(conn *Connection) {
 	}
 
 	d.closePendingRPCsForConn(conn)
+	d.closePendingDataStreamOperationsForConn(conn)
 }
 
 func (d *Device) configureRelaySubscriptionForwarding() {
@@ -205,6 +235,335 @@ func (d *Device) sendActiveKeyedEventSubscriptions(conn *Connection) error {
 		}
 	}
 	return nil
+}
+
+// ListeningToDataStream records one cloud consumer of a high-bandwidth stream.
+// The device receives only the aggregate 0-to-1 transition.
+func (d *Device) ListeningToDataStream(
+	ctx context.Context,
+	subscription restream.DataStreamSubscription,
+	accessLevel restream.AccessLevel,
+) error {
+	if err := subscription.Validate(); err != nil {
+		return err
+	}
+	if d.StoreRegistry == nil {
+		return fmt.Errorf("data stream subscription received without a store registry")
+	}
+	if err := d.StoreRegistry.CheckStoreAccess(subscription.StoreName, accessLevel); err != nil {
+		return err
+	}
+	allowed, err := d.StoreRegistry.StoreAcceptsDeviceRelayUpdates(subscription.StoreName)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return fmt.Errorf("store %q does not accept device relay data streams", subscription.StoreName)
+	}
+
+	serial, err := d.acquireDataStreamSerial(subscription, true)
+	if err != nil {
+		return err
+	}
+	defer d.releaseDataStreamSerial(subscription, serial)
+
+	serial.mutex.Lock()
+	defer serial.mutex.Unlock()
+	if serial.count > 0 {
+		serial.count++
+		if accessLevel > serial.accessLevel {
+			serial.accessLevel = accessLevel
+		}
+		return nil
+	}
+
+	if err := d.performDataStreamTransition(ctx, subscription, accessLevel, true); err != nil {
+		return err
+	}
+	serial.count = 1
+	serial.accessLevel = accessLevel
+	return nil
+}
+
+// StopListeningToDataStream removes one cloud consumer. The device receives
+// only the aggregate 1-to-0 transition.
+func (d *Device) StopListeningToDataStream(
+	ctx context.Context,
+	subscription restream.DataStreamSubscription,
+) error {
+	if err := subscription.Validate(); err != nil {
+		return err
+	}
+
+	serial, err := d.acquireDataStreamSerial(subscription, false)
+	if err != nil {
+		return err
+	}
+	if serial == nil {
+		return nil
+	}
+	defer d.releaseDataStreamSerial(subscription, serial)
+
+	serial.mutex.Lock()
+	defer serial.mutex.Unlock()
+	if serial.count == 0 {
+		return nil
+	}
+	if serial.count > 1 {
+		serial.count--
+		return nil
+	}
+	if err := d.performDataStreamTransition(ctx, subscription, serial.accessLevel, false); err != nil {
+		return err
+	}
+	serial.count = 0
+	return nil
+}
+
+// ActiveDataStreamSubscriptions returns the aggregate active stream identities.
+func (d *Device) ActiveDataStreamSubscriptions() []restream.DataStreamSubscription {
+	d.dataStreamSubscriptionMutex.Lock()
+	subscriptions := make([]restream.DataStreamSubscription, 0, len(d.dataStreamSubscriptions))
+	for subscription, serial := range d.dataStreamSubscriptions {
+		serial.mutex.Lock()
+		if serial.count > 0 {
+			subscriptions = append(subscriptions, subscription)
+		}
+		serial.mutex.Unlock()
+	}
+	d.dataStreamSubscriptionMutex.Unlock()
+	sort.Slice(subscriptions, func(i int, j int) bool {
+		left := subscriptions[i]
+		right := subscriptions[j]
+		if left.StoreName != right.StoreName {
+			return left.StoreName < right.StoreName
+		}
+		if left.StreamName != right.StreamName {
+			return left.StreamName < right.StreamName
+		}
+		return left.Key < right.Key
+	})
+	return subscriptions
+}
+
+func (d *Device) restoreActiveDataStreamSubscriptions(conn *Connection) {
+	if !conn.Capabilities.DataStreams {
+		return
+	}
+	for _, subscription := range d.ActiveDataStreamSubscriptions() {
+		go d.restoreDataStreamSubscription(conn, subscription)
+	}
+}
+
+func (d *Device) restoreDataStreamSubscription(
+	conn *Connection,
+	subscription restream.DataStreamSubscription,
+) {
+	delay := time.Second
+	for {
+		d.connMutex.RLock()
+		currentConn := d.conn
+		d.connMutex.RUnlock()
+		if currentConn != conn {
+			return
+		}
+
+		serial, err := d.acquireDataStreamSerial(subscription, false)
+		if err != nil || serial == nil {
+			return
+		}
+		serial.mutex.Lock()
+		if serial.count == 0 {
+			serial.mutex.Unlock()
+			d.releaseDataStreamSerial(subscription, serial)
+			return
+		}
+		accessLevel := serial.accessLevel
+		err = d.performDataStreamTransition(
+			context.Background(),
+			subscription,
+			accessLevel,
+			true,
+		)
+		serial.mutex.Unlock()
+		d.releaseDataStreamSerial(subscription, serial)
+		if err == nil {
+			return
+		}
+
+		timer := time.NewTimer(delay)
+		select {
+		case <-timer.C:
+		case <-conn.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return
+		}
+		if delay < 30*time.Second {
+			delay *= 2
+			if delay > 30*time.Second {
+				delay = 30 * time.Second
+			}
+		}
+	}
+}
+
+func (d *Device) acquireDataStreamSerial(
+	subscription restream.DataStreamSubscription,
+	create bool,
+) (*dataStreamSerial, error) {
+	d.dataStreamSubscriptionMutex.Lock()
+	defer d.dataStreamSubscriptionMutex.Unlock()
+	serial := d.dataStreamSubscriptions[subscription]
+	if serial == nil && create {
+		if len(d.dataStreamSubscriptions) >= maxActiveDataStreamIdentities {
+			return nil, fmt.Errorf("too many active data stream identities")
+		}
+		serial = &dataStreamSerial{}
+		d.dataStreamSubscriptions[subscription] = serial
+	}
+	if serial != nil {
+		serial.refs++
+	}
+	return serial, nil
+}
+
+func (d *Device) releaseDataStreamSerial(
+	subscription restream.DataStreamSubscription,
+	serial *dataStreamSerial,
+) {
+	d.dataStreamSubscriptionMutex.Lock()
+	serial.refs--
+	if serial.refs == 0 {
+		serial.mutex.Lock()
+		idle := serial.count == 0
+		serial.mutex.Unlock()
+		if idle && d.dataStreamSubscriptions[subscription] == serial {
+			delete(d.dataStreamSubscriptions, subscription)
+		}
+	}
+	d.dataStreamSubscriptionMutex.Unlock()
+}
+
+func (d *Device) performDataStreamTransition(
+	ctx context.Context,
+	subscription restream.DataStreamSubscription,
+	accessLevel restream.AccessLevel,
+	subscribe bool,
+) error {
+	d.connMutex.RLock()
+	conn := d.conn
+	d.connMutex.RUnlock()
+	if conn == nil {
+		return fmt.Errorf("device is disconnected")
+	}
+	if !conn.Capabilities.DataStreams {
+		return fmt.Errorf("connected device does not advertise data-stream support")
+	}
+
+	operationID, result, err := d.registerDataStreamOperation(conn)
+	if err != nil {
+		return err
+	}
+	if err := conn.SendDataStreamSubscription(
+		operationID,
+		subscription,
+		accessLevel,
+		subscribe,
+	); err != nil {
+		d.cancelDataStreamOperation(operationID, conn)
+		_ = conn.CloseWithReason(gws.CloseGoingAway, dataStreamSubscriptionForwardingFailedReason)
+		return err
+	}
+
+	waitCtx := ctx
+	if waitCtx == nil {
+		waitCtx = context.Background()
+	}
+	if _, hasDeadline := waitCtx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(waitCtx, defaultDataStreamTransitionTimeout)
+		defer cancel()
+	}
+	select {
+	case err, open := <-result:
+		if !open {
+			return fmt.Errorf("device disconnected while changing data stream subscription")
+		}
+		return err
+	case <-waitCtx.Done():
+		d.cancelDataStreamOperation(operationID, conn)
+		return fmt.Errorf("data stream subscription transition: %w", waitCtx.Err())
+	}
+}
+
+func (d *Device) registerDataStreamOperation(
+	conn *Connection,
+) (uint32, <-chan error, error) {
+	d.dataStreamOperationMutex.Lock()
+	if len(d.dataStreamOperations) >= maxPendingDataStreamOperations {
+		d.dataStreamOperationMutex.Unlock()
+		return 0, nil, fmt.Errorf("too many pending device data stream operations")
+	}
+	operationID := d.nextDataStreamOperationIDLocked()
+	result := make(chan error, 1)
+	d.dataStreamOperations[operationID] = pendingDataStreamOperation{
+		conn:   conn,
+		result: result,
+	}
+	d.dataStreamOperationMutex.Unlock()
+	return operationID, result, nil
+}
+
+func (d *Device) nextDataStreamOperationIDLocked() uint32 {
+	for {
+		operationID := d.dataStreamOperationNext
+		d.dataStreamOperationNext++
+		if d.dataStreamOperationNext == 0 {
+			d.dataStreamOperationNext = 1
+		}
+		if operationID != 0 {
+			if _, exists := d.dataStreamOperations[operationID]; !exists {
+				return operationID
+			}
+		}
+	}
+}
+
+func (d *Device) cancelDataStreamOperation(operationID uint32, conn *Connection) {
+	d.dataStreamOperationMutex.Lock()
+	pending, exists := d.dataStreamOperations[operationID]
+	if exists && pending.conn == conn {
+		delete(d.dataStreamOperations, operationID)
+	}
+	d.dataStreamOperationMutex.Unlock()
+}
+
+// HandleDataStreamSubscriptionResult completes one asynchronous source
+// transition without coupling failures to the main relay read loop.
+func (d *Device) HandleDataStreamSubscriptionResult(
+	conn *Connection,
+	packet *protocol.DataStreamSubscriptionResultPacket,
+) {
+	d.dataStreamOperationMutex.Lock()
+	pending, exists := d.dataStreamOperations[packet.OperationID]
+	if exists && pending.conn == conn {
+		delete(d.dataStreamOperations, packet.OperationID)
+	}
+	d.dataStreamOperationMutex.Unlock()
+	if !exists || pending.conn != conn {
+		return
+	}
+	if packet.Error != "" {
+		pending.result <- fmt.Errorf("%s", packet.Error)
+	} else {
+		pending.result <- nil
+	}
+	close(pending.result)
 }
 
 func (d *Device) sendRelayFullStates(conn *Connection) error {
@@ -387,7 +746,8 @@ func (d *Device) CompleteRPCResponse(rpcID uint32, rpcData []byte) error {
 	pending, ok := d.rpcsPending[rpcID]
 	if !ok {
 		d.rpcMutex.Unlock()
-		return fmt.Errorf("no pending RPC found for ID %d", rpcID)
+		// Timed-out and disconnected RPC responses are harmlessly stale.
+		return nil
 	}
 	pending.respCh <- rpcData
 	close(pending.respCh)
@@ -429,6 +789,10 @@ func (d *Device) RPCHandler(name string, accessLevel restream.AccessLevel, binar
 	}
 
 	d.rpcMutex.Lock()
+	if len(d.rpcsPending) >= maxPendingDeviceRPCs {
+		d.rpcMutex.Unlock()
+		return nil, false, fmt.Errorf("too many pending device RPCs")
+	}
 	respCh := make(chan []byte, 1)
 	rpcID := d.rpcNextID
 	d.rpcNextID++
@@ -442,9 +806,20 @@ func (d *Device) RPCHandler(name string, accessLevel restream.AccessLevel, binar
 		return nil, false, fmt.Errorf("error sending RPC: %w", err)
 	}
 
-	resp, open := <-respCh
-	if !open {
-		return nil, false, fmt.Errorf("device disconnected while waiting for response")
+	timer := time.NewTimer(defaultDeviceRPCTimeout)
+	defer timer.Stop()
+	var resp []byte
+	select {
+	case varResp, open := <-respCh:
+		if !open {
+			return nil, false, fmt.Errorf("device disconnected while waiting for response")
+		}
+		resp = varResp
+	case <-timer.C:
+		d.rpcMutex.Lock()
+		delete(d.rpcsPending, rpcID)
+		d.rpcMutex.Unlock()
+		return nil, true, fmt.Errorf("timed out waiting for device RPC response")
 	}
 
 	d.rpcMutex.Lock()
@@ -486,6 +861,18 @@ func (d *Device) closePendingRPCsForConn(conn *Connection) {
 		delete(d.rpcsPending, rpcID)
 	}
 	d.rpcMutex.Unlock()
+}
+
+func (d *Device) closePendingDataStreamOperationsForConn(conn *Connection) {
+	d.dataStreamOperationMutex.Lock()
+	for operationID, pending := range d.dataStreamOperations {
+		if pending.conn != conn {
+			continue
+		}
+		close(pending.result)
+		delete(d.dataStreamOperations, operationID)
+	}
+	d.dataStreamOperationMutex.Unlock()
 }
 
 func (d *Device) handleUnknownStore(storeName string) error {

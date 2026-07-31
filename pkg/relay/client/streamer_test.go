@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -903,6 +904,159 @@ func TestOnDemandStoreStreamingSendsOnlyWhileStoreSubscribed(t *testing.T) {
 	s.partialCallback("TestStore", nil, &streamerTestPartial{})
 	if len(sendQueue) != 0 {
 		t.Fatalf("partial after last unsubscribe queued %d packets", len(sendQueue))
+	}
+}
+
+func TestDataStreamSubscriptionsAreExactIdempotentAndClearedOnDisconnect(t *testing.T) {
+	store := newStreamerTypedRelayStore("TestStore", restream.StoreTypeDeviceWithRelay)
+	registry, err := restream.NewStoreRegistry([]restream.Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	type transition struct {
+		subscription restream.DataStreamSubscription
+		subscribed   bool
+	}
+	transitions := make(chan transition, 4)
+	dispatcher := restream.NewDataStreamDispatcher()
+	dispatcher.RegisterDataStream(
+		"TestStore",
+		"Test.Video",
+		restream.AccessLevelPublic,
+		func(_ context.Context, key string, subscribed bool) error {
+			transitions <- transition{
+				subscription: restream.DataStreamSubscription{
+					StoreName:  "TestStore",
+					StreamName: "Test.Video",
+					Key:        key,
+				},
+				subscribed: subscribed,
+			}
+			return nil
+		},
+	)
+	streamer := NewStreamer(registry, nil, nil, Config{
+		DataStreams: dispatcher,
+	})
+	conn := &gws.Conn{}
+	streamer.conn = conn
+	streamer.sendDone = make(chan struct{})
+	streamer.sendQueue = make(chan outboundPacket, 8)
+	subscribePacket := &protocol.DataStreamSubscriptionRequestPacket{
+		OperationID: 1,
+		StoreName:   "TestStore",
+		StreamName:  "Test.Video",
+		Key:         "camera-a",
+		Action:      protocol.StoreSubscribe,
+	}
+	if err := streamer.handleDataStreamSubscription(context.Background(), conn, subscribePacket); err != nil {
+		t.Fatalf("first subscribe failed: %v", err)
+	}
+	subscribePacket.OperationID++
+	if err := streamer.handleDataStreamSubscription(context.Background(), conn, subscribePacket); err != nil {
+		t.Fatalf("duplicate subscribe failed: %v", err)
+	}
+	select {
+	case got := <-transitions:
+		if !got.subscribed {
+			t.Fatalf("first transition = %#v, want start", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for asynchronous stream start")
+	}
+
+	streamer.clearRelaySubscriptions()
+	select {
+	case got := <-transitions:
+		if got.subscribed {
+			t.Fatalf("disconnect transition = %#v, want stop", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for asynchronous disconnect stop")
+	}
+}
+
+func TestDataStreamStateCommitsInSerializedCompletionOrder(t *testing.T) {
+	store := newStreamerTypedRelayStore("TestStore", restream.StoreTypeDeviceWithRelay)
+	registry, err := restream.NewStoreRegistry([]restream.Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	transitions := make(chan bool, 4)
+	releaseFirst := make(chan struct{})
+	var transitionCount atomic.Int32
+	dispatcher := restream.NewDataStreamDispatcher()
+	dispatcher.RegisterDataStream(
+		"TestStore",
+		"Test.Video",
+		restream.AccessLevelPublic,
+		func(_ context.Context, _ string, subscribe bool) error {
+			count := transitionCount.Add(1)
+			transitions <- subscribe
+			if count == 1 {
+				<-releaseFirst
+			}
+			return nil
+		},
+	)
+	streamer := NewStreamer(registry, nil, nil, Config{DataStreams: dispatcher})
+	conn := &gws.Conn{}
+	streamer.conn = conn
+	streamer.sendDone = make(chan struct{})
+	streamer.sendQueue = make(chan outboundPacket, 8)
+
+	for operationID, action := range []protocol.StoreSubscriptionAction{
+		protocol.StoreSubscribe,
+		protocol.StoreUnsubscribe,
+		protocol.StoreSubscribe,
+	} {
+		err := streamer.handleDataStreamSubscription(
+			context.Background(),
+			conn,
+			&protocol.DataStreamSubscriptionRequestPacket{
+				OperationID: uint32(operationID + 1),
+				StoreName:   "TestStore",
+				StreamName:  "Test.Video",
+				Key:         "camera-a",
+				Action:      action,
+			},
+		)
+		if err != nil {
+			t.Fatalf("operation %d enqueue failed: %v", operationID+1, err)
+		}
+	}
+
+	if started := <-transitions; !started {
+		t.Fatal("first serialized transition was not a start")
+	}
+	select {
+	case transition := <-transitions:
+		t.Fatalf("second transition ran before the first completed: %t", transition)
+	default:
+	}
+	close(releaseFirst)
+	if stopped := <-transitions; stopped {
+		t.Fatal("second serialized transition was not a stop")
+	}
+	if started := <-transitions; !started {
+		t.Fatal("final serialized transition was not a start")
+	}
+
+	subscription := restream.DataStreamSubscription{
+		StoreName:  "TestStore",
+		StreamName: "Test.Video",
+		Key:        "camera-a",
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		_, active := streamer.relayedDataStreamState(subscription)
+		if active {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("final successful start was not committed as active")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 

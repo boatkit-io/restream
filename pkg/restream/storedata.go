@@ -141,6 +141,18 @@ func (d *StoreData[S, SP, PS]) GetFullStateSnapshot() (Serializable, error) {
 	return ret, retError
 }
 
+// DecodeFullStateSnapshot decodes bytes into a detached typed state without
+// replacing the live store. Session buffers use this when a full state
+// supersedes an accumulated partial and later partials must be applied to that
+// retained snapshot.
+func (d *StoreData[S, SP, PS]) DecodeFullStateSnapshot(b []byte) (Serializable, error) {
+	state := new(S)
+	if err := SP(state).Deserialize(binarystreams.NewReaderFromBytes(b), nil); err != nil {
+		return nil, err
+	}
+	return SP(state), nil
+}
+
 // GetSerializedFullState returns the full state from a StoreData.
 // Generated states are cloned under a read lock and serialized after the lock is released.
 func (d *StoreData[S, SP, PS]) GetSerializedFullState() ([]byte, error) {

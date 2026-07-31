@@ -128,6 +128,18 @@ func EncodePacket(packet Packet) ([]byte, error) {
 		if err := encodeKeyedEventSubscriptionPacket(w, p); err != nil {
 			return nil, err
 		}
+	case *DataStreamSubscriptionPacket:
+		if err := encodeDataStreamSubscriptionPacket(w, p); err != nil {
+			return nil, err
+		}
+	case *DataStreamSubscriptionRequestPacket:
+		if err := encodeDataStreamSubscriptionRequestPacket(w, p); err != nil {
+			return nil, err
+		}
+	case *DataStreamSubscriptionResultPacket:
+		if err := encodeDataStreamSubscriptionResultPacket(w, p); err != nil {
+			return nil, err
+		}
 	case *CustomPacket:
 		if err := encodeCustomPacket(w, p); err != nil {
 			return nil, err
@@ -214,6 +226,24 @@ func DecodePacket(data []byte) (Packet, error) {
 			return nil, err
 		}
 		return packet, ensureEOF(r, "keyed event subscription packet")
+	case KindDataStreamSubscription:
+		packet, err := decodeDataStreamSubscriptionPacket(r)
+		if err != nil {
+			return nil, err
+		}
+		return packet, ensureEOF(r, "data stream subscription packet")
+	case KindDataStreamSubscriptionResult:
+		packet, err := decodeDataStreamSubscriptionResultPacket(r)
+		if err != nil {
+			return nil, err
+		}
+		return packet, ensureEOF(r, "data stream subscription result packet")
+	case KindDataStreamSubscriptionRequest:
+		packet, err := decodeDataStreamSubscriptionRequestPacket(r)
+		if err != nil {
+			return nil, err
+		}
+		return packet, ensureEOF(r, "data stream subscription request packet")
 	case KindCustom:
 		packet, err := decodeCustomPacket(r)
 		if err != nil {
@@ -503,6 +533,167 @@ func decodeKeyedEventSubscriptionPacket(r *binarystreams.Reader) (*KeyedEventSub
 		EventName: eventName,
 		Key:       key,
 		Action:    action,
+	}, nil
+}
+
+func encodeDataStreamSubscriptionPacket(
+	w *binarystreams.Writer,
+	packet *DataStreamSubscriptionPacket,
+) error {
+	if err := writeString(w, packet.StoreName); err != nil {
+		return err
+	}
+	if err := writeString(w, packet.StreamName); err != nil {
+		return err
+	}
+	if err := writeString(w, packet.Key); err != nil {
+		return err
+	}
+	switch packet.Action {
+	case StoreSubscribe, StoreUnsubscribe:
+	default:
+		return fmt.Errorf("invalid data stream subscription action %d", packet.Action)
+	}
+	return w.WriteByte(byte(packet.Action))
+}
+
+func decodeDataStreamSubscriptionPacket(r *binarystreams.Reader) (*DataStreamSubscriptionPacket, error) {
+	storeName, err := readString(r)
+	if err != nil {
+		return nil, err
+	}
+	streamName, err := readString(r)
+	if err != nil {
+		return nil, err
+	}
+	key, err := readString(r)
+	if err != nil {
+		return nil, err
+	}
+	actionByte, err := r.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+	action := StoreSubscriptionAction(actionByte)
+	switch action {
+	case StoreSubscribe, StoreUnsubscribe:
+	default:
+		return nil, fmt.Errorf("invalid data stream subscription action %d", action)
+	}
+	return &DataStreamSubscriptionPacket{
+		StoreName:  storeName,
+		StreamName: streamName,
+		Key:        key,
+		Action:     action,
+	}, nil
+}
+
+func encodeDataStreamSubscriptionRequestPacket(
+	w *binarystreams.Writer,
+	packet *DataStreamSubscriptionRequestPacket,
+) error {
+	if packet.OperationID == 0 {
+		return fmt.Errorf("data stream subscription operation ID is zero")
+	}
+	if err := w.WriteUInt32(packet.OperationID); err != nil {
+		return err
+	}
+	if err := writeString(w, packet.StoreName); err != nil {
+		return err
+	}
+	if err := writeString(w, packet.StreamName); err != nil {
+		return err
+	}
+	if err := writeString(w, packet.Key); err != nil {
+		return err
+	}
+	if err := w.WriteByte(packet.AccessLevel); err != nil {
+		return err
+	}
+	switch packet.Action {
+	case StoreSubscribe, StoreUnsubscribe:
+	default:
+		return fmt.Errorf("invalid data stream subscription action %d", packet.Action)
+	}
+	return w.WriteByte(byte(packet.Action))
+}
+
+func decodeDataStreamSubscriptionRequestPacket(
+	r *binarystreams.Reader,
+) (*DataStreamSubscriptionRequestPacket, error) {
+	operationID, err := r.ReadUInt32()
+	if err != nil {
+		return nil, err
+	}
+	if operationID == 0 {
+		return nil, fmt.Errorf("data stream subscription operation ID is zero")
+	}
+	storeName, err := readString(r)
+	if err != nil {
+		return nil, err
+	}
+	streamName, err := readString(r)
+	if err != nil {
+		return nil, err
+	}
+	key, err := readString(r)
+	if err != nil {
+		return nil, err
+	}
+	accessLevel, err := r.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+	actionByte, err := r.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+	action := StoreSubscriptionAction(actionByte)
+	switch action {
+	case StoreSubscribe, StoreUnsubscribe:
+	default:
+		return nil, fmt.Errorf("invalid data stream subscription action %d", action)
+	}
+	return &DataStreamSubscriptionRequestPacket{
+		OperationID: operationID,
+		StoreName:   storeName,
+		StreamName:  streamName,
+		Key:         key,
+		AccessLevel: accessLevel,
+		Action:      action,
+	}, nil
+}
+
+func encodeDataStreamSubscriptionResultPacket(
+	w *binarystreams.Writer,
+	packet *DataStreamSubscriptionResultPacket,
+) error {
+	if packet.OperationID == 0 {
+		return fmt.Errorf("data stream subscription result operation ID is zero")
+	}
+	if err := w.WriteUInt32(packet.OperationID); err != nil {
+		return err
+	}
+	return writeString(w, packet.Error)
+}
+
+func decodeDataStreamSubscriptionResultPacket(
+	r *binarystreams.Reader,
+) (*DataStreamSubscriptionResultPacket, error) {
+	operationID, err := r.ReadUInt32()
+	if err != nil {
+		return nil, err
+	}
+	if operationID == 0 {
+		return nil, fmt.Errorf("data stream subscription result operation ID is zero")
+	}
+	errorMessage, err := readString(r)
+	if err != nil {
+		return nil, err
+	}
+	return &DataStreamSubscriptionResultPacket{
+		OperationID: operationID,
+		Error:       errorMessage,
 	}, nil
 }
 

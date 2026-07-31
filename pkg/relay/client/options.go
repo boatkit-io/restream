@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/boatkit-io/restream/pkg/relay/protocol"
+	"github.com/boatkit-io/restream/pkg/restream"
 	gws "github.com/gorilla/websocket"
 )
 
@@ -12,6 +13,7 @@ const (
 	defaultReconnectDelay = time.Second
 	defaultWriteTimeout   = 5 * time.Second
 	defaultSendQueueSize  = 1000
+	defaultMaxReadBytes   = int64(64 * 1024 * 1024)
 )
 
 // Credentials are sent in the device hello packet when connecting to a relay server.
@@ -89,11 +91,17 @@ type Config struct {
 	Credentials Credentials
 
 	StorePolicy StorePolicy
+	// DataStreams owns independently authorized high-bandwidth stream
+	// registrations. Its presence is advertised as an optional relay capability.
+	DataStreams *restream.DataStreamDispatcher
 
 	ReconnectDelay time.Duration
 	WriteTimeout   time.Duration
 	SendQueueSize  int
-	Dialer         *gws.Dialer
+	// MaxReadMessageBytes bounds one relay websocket message. High-bandwidth
+	// payloads belong on the separate data plane, not this control socket.
+	MaxReadMessageBytes int64
+	Dialer              *gws.Dialer
 
 	Callbacks Callbacks
 }
@@ -104,10 +112,11 @@ func DefaultConfig() Config {
 		EnableCompression: true,
 	}
 	return Config{
-		ReconnectDelay: defaultReconnectDelay,
-		WriteTimeout:   defaultWriteTimeout,
-		SendQueueSize:  defaultSendQueueSize,
-		Dialer:         &dialer,
+		ReconnectDelay:      defaultReconnectDelay,
+		WriteTimeout:        defaultWriteTimeout,
+		SendQueueSize:       defaultSendQueueSize,
+		MaxReadMessageBytes: defaultMaxReadBytes,
+		Dialer:              &dialer,
 	}
 }
 
@@ -121,6 +130,9 @@ func applyDefaults(config Config) Config {
 	}
 	if config.SendQueueSize <= 0 {
 		config.SendQueueSize = defaults.SendQueueSize
+	}
+	if config.MaxReadMessageBytes <= 0 {
+		config.MaxReadMessageBytes = defaults.MaxReadMessageBytes
 	}
 	if config.Dialer == nil {
 		config.Dialer = defaults.Dialer

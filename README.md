@@ -51,6 +51,76 @@ getCAN0RxCount() {
 
 Struct field names in nested paths are normalized the same way, but map keys are exact. In the example above, `CAN0` is a map key and will not match `can0`. Full-store subscriptions still update for any store change, while field-keyed subscriptions update only when the generated partial reports that exact field path or one of its parent/child paths.
 
+## Resumable Viewer Sessions
+
+Viewer sessions retain Restream state across transient Socket.IO disconnects.
+The session owns store, keyed-event, and data-stream subscriptions while a
+socket is merely attached to it. A random UUIDv4 session ID is kept only in the
+live TypeScript `ReStreamSocket`; it is a correlation identifier, never an
+authentication credential. Every attachment authenticates normally and the
+server verifies that the resulting owner and scope match the session.
+
+Create one manager for the lifetime of the store/device scope:
+
+```go
+sessions := restream.NewViewerSessionManager(restream.ViewerSessionManagerOptions{
+    DetachedTimeout: 60 * time.Second,
+})
+defer sessions.Close()
+
+err := restream.AddSocketHandlersWithOptions(
+    conn,
+    log,
+    stores,
+    rpcHandler,
+    events,
+    accessLookup,
+    restream.SocketHandlerOptions{
+        SessionManager: sessions,
+        SessionIdentityLookup: func() (restream.ViewerSessionIdentity, error) {
+            return restream.ViewerSessionIdentity{
+                OwnerID:     authenticatedSubject,
+                ScopeID:     deviceID,
+                AccessLevel: currentAccessLevel,
+            }, nil
+        },
+    },
+)
+```
+
+Negotiate the optional capability in the application's normal login response,
+then enable the corresponding client handshake and wait for it after
+authentication succeeds. Keeping the constructor in legacy mode until the
+server replies allows new clients to roll out before new servers without a base
+protocol-version bump:
+
+```typescript
+const restreamSocket = new ReStreamSocket(socket);
+restreamSocket.setViewerSessionsEnabled(loginResponse.viewerSessions === true);
+await restreamSocket.markAuthenticated();
+```
+
+Socket reconnections reuse the in-memory session ID. Refreshing or replacing
+the page creates a new JavaScript client with no session ID, so the server
+creates a fresh session and sends normal subscription baselines. Applications
+may call `closeSession()` during page teardown as a best-effort optimization;
+the configured detached timeout is authoritative.
+
+While detached, each subscribed store retains at most one outbound update:
+
+- partial followed by partial merges through `Partial.MergeOntoPartial`;
+- a full state discards the retained partial;
+- partials following a full state apply directly to the detached full-state
+  snapshot;
+- another full state replaces the earlier full state.
+
+Reattachment emits that single accumulated update before switching back to
+live delivery. Keyed store filtering happens before accumulation. Ordered
+events and pending responses use a separately bounded queue, while
+high-bandwidth media is never buffered by Restream. Subscription manifests on
+attachment are authoritative, allowing subscriptions changed while offline to
+be reconciled without duplicate refcounts.
+
 ## Keyed Events
 
 Keyed events are transient, typed messages delivered only while a client is subscribed to one exact `{store, event, key}` tuple. They are useful for relatively expensive or high-volume sources such as a radio audio stream, camera frames, debug traces, or device logs. Unlike a field-keyed store subscription, a keyed event does not fetch state or match parent and child field paths: its key is an opaque exact-match identifier.

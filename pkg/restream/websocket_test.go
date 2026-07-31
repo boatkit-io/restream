@@ -2,6 +2,7 @@ package restream
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"strings"
 	"testing"
@@ -10,6 +11,32 @@ import (
 	"github.com/boatkit-io/restream/pkg/binarystreams"
 	"github.com/sirupsen/logrus"
 )
+
+type viewerSocketDataStreamBroker struct {
+	opened chan DataStreamSubscription
+	closed chan DataStreamEndpoint
+}
+
+func (b *viewerSocketDataStreamBroker) Open(
+	_ context.Context,
+	subscription DataStreamSubscription,
+	_ AccessLevel,
+) (DataStreamEndpoint, error) {
+	b.opened <- subscription
+	return DataStreamEndpoint{
+		LeaseID: "lease-a",
+		URL:     "wss://stream.example/viewer",
+		Token:   "token-a",
+	}, nil
+}
+
+func (b *viewerSocketDataStreamBroker) Close(
+	_ context.Context,
+	endpoint DataStreamEndpoint,
+) error {
+	b.closed <- endpoint
+	return nil
+}
 
 func resolveEmitMessage(t *testing.T, msg emitMessage) emitMessage {
 	t.Helper()
@@ -419,6 +446,7 @@ func TestViewerSocketKeyedCatchupUsesRelayStorePartial(t *testing.T) {
 		emitQueue:          make(chan emitMessage, 1),
 		storeSubscriptions: map[string]map[string]int{},
 	}
+	initializeTestSocketRuntime(socket)
 
 	socket.onStoreSubscription(StoreSubscriptionMessage{
 		StoreName: viewerSocketTestStoreName,
@@ -469,6 +497,7 @@ func TestViewerSocketQueuesKeyedCatchupBeforeConcurrentLiveUpdate(t *testing.T) 
 		emitQueue:          make(chan emitMessage, 2),
 		storeSubscriptions: map[string]map[string]int{},
 	}
+	initializeTestSocketRuntime(socket)
 	partialSubID := registry.SubscribeToPartialApplies(socket.PartialCallback)
 	defer registry.UnsubscribeFromPartialApplies(partialSubID) //nolint:errcheck // Test cleanup.
 
@@ -526,6 +555,7 @@ func TestViewerSocketRejectsSubscriptionBelowStoreMinimumAccess(t *testing.T) {
 			return AccessLevel(1), nil
 		},
 	}
+	initializeTestSocketRuntime(socket)
 
 	socket.onStoreSubscription(StoreSubscriptionMessage{
 		StoreName: viewerSocketTestStoreName,
@@ -587,6 +617,7 @@ func TestViewerSocketRefCountsAndFiltersKeyedEvents(t *testing.T) {
 		emitQueue:               make(chan emitMessage, 1),
 		keyedEventSubscriptions: map[KeyedEventSubscription]int{},
 	}
+	initializeTestSocketRuntime(socket)
 	subscription := KeyedEventSubscriptionMessage{
 		StoreName: viewerSocketTestStoreName,
 		EventName: "audio",
@@ -662,6 +693,7 @@ func TestViewerSocketRejectsKeyedEventSubscriptionBelowStoreMinimumAccess(t *tes
 		keyedEventSubscriptions: map[KeyedEventSubscription]int{},
 		accessLookup:            func() (AccessLevel, error) { return AccessLevel(1), nil },
 	}
+	initializeTestSocketRuntime(socket)
 
 	socket.onKeyedEventSubscription(KeyedEventSubscriptionMessage{
 		StoreName: viewerSocketTestStoreName,
@@ -675,6 +707,113 @@ func TestViewerSocketRejectsKeyedEventSubscriptionBelowStoreMinimumAccess(t *tes
 	}
 	if eventd.HasKeyedEventSubscribers(viewerSocketTestStoreName, "audio", "radio-a") {
 		t.Fatal("denied keyed event subscription reached the event dispatcher")
+	}
+}
+
+func TestViewerSocketAllocatesAndReleasesDataStreamEndpoint(t *testing.T) {
+	store := NewRelayStore[
+		viewerSocketTestState,
+		*viewerSocketTestState,
+		*viewerSocketTestPartial,
+	](viewerSocketTestStoreName, &viewerSocketTestState{}, AccessLevel(2))
+	registry, err := NewStoreRegistry([]Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	broker := &viewerSocketDataStreamBroker{
+		opened: make(chan DataStreamSubscription, 1),
+		closed: make(chan DataStreamEndpoint, 1),
+	}
+	socket := &socketTracker{
+		sr:                      registry,
+		dataStreams:             broker,
+		emitQueue:               make(chan emitMessage, 1),
+		dataStreamSubscriptions: map[string]trackedDataStreamSubscription{},
+		accessLookup:            func() (AccessLevel, error) { return AccessLevel(2), nil },
+	}
+	initializeTestSocketRuntime(socket)
+	message := DataStreamSubscriptionMessage{
+		SubscriptionID: "subscription-a",
+		StoreName:      viewerSocketTestStoreName,
+		StreamName:     "CameraMedia.Video",
+		Action:         Subscribe,
+		Key:            "camera-a",
+	}
+	socket.onDataStreamSubscription(message)
+
+	select {
+	case opened := <-broker.opened:
+		if opened.StoreName != viewerSocketTestStoreName ||
+			opened.StreamName != "CameraMedia.Video" ||
+			opened.Key != "camera-a" {
+			t.Fatalf("opened subscription = %#v", opened)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("data stream broker was not opened")
+	}
+	select {
+	case emitted := <-socket.emitQueue:
+		endpointMessage, ok := emitted.Message.(DataStreamEndpointMessage)
+		if emitted.Name != SocketEventNameDataStreamEndpoint || !ok ||
+			endpointMessage.Endpoint == nil ||
+			endpointMessage.Endpoint.LeaseID != "lease-a" {
+			t.Fatalf("endpoint message = %#v", emitted)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("data stream endpoint was not emitted")
+	}
+
+	message.Action = Unsubscribe
+	socket.onDataStreamSubscription(message)
+	select {
+	case endpoint := <-broker.closed:
+		if endpoint.LeaseID != "lease-a" {
+			t.Fatalf("closed endpoint = %#v", endpoint)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("data stream endpoint was not released")
+	}
+}
+
+func TestViewerSocketRejectsDataStreamBelowStoreMinimumAccessBeforeAllocation(t *testing.T) {
+	store := NewRelayStore[
+		viewerSocketTestState,
+		*viewerSocketTestState,
+		*viewerSocketTestPartial,
+	](viewerSocketTestStoreName, &viewerSocketTestState{}, AccessLevel(3))
+	registry, err := NewStoreRegistry([]Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	broker := &viewerSocketDataStreamBroker{
+		opened: make(chan DataStreamSubscription, 1),
+		closed: make(chan DataStreamEndpoint, 1),
+	}
+	socket := &socketTracker{
+		sr:                      registry,
+		dataStreams:             broker,
+		emitQueue:               make(chan emitMessage, 1),
+		dataStreamSubscriptions: map[string]trackedDataStreamSubscription{},
+		accessLookup:            func() (AccessLevel, error) { return AccessLevel(2), nil },
+	}
+	initializeTestSocketRuntime(socket)
+	socket.onDataStreamSubscription(DataStreamSubscriptionMessage{
+		SubscriptionID: "subscription-a",
+		StoreName:      viewerSocketTestStoreName,
+		StreamName:     "CameraMedia.Video",
+		Action:         Subscribe,
+		Key:            "camera-a",
+	})
+
+	select {
+	case opened := <-broker.opened:
+		t.Fatalf("unauthorized subscription reached broker: %#v", opened)
+	default:
+	}
+	emitted := <-socket.emitQueue
+	endpointMessage, ok := emitted.Message.(DataStreamEndpointMessage)
+	if !ok || endpointMessage.Error != "data stream access denied" {
+		t.Fatalf("denied endpoint message = %#v", emitted)
 	}
 }
 
@@ -989,6 +1128,13 @@ func testSocketWithSubs(keys ...string) *socketTracker {
 			viewerSocketTestStoreName: keySubs,
 		},
 	}
+}
+
+func initializeTestSocketRuntime(socket *socketTracker) {
+	socket.limits = SocketHandlerLimits{}.withDefaults()
+	socket.lifetimeCtx, socket.cancel = context.WithCancel(context.Background())
+	socket.rpcSlots = make(chan struct{}, socket.limits.MaxInFlightRPCs)
+	socket.ffrpcSlots = make(chan struct{}, socket.limits.MaxInFlightFFRPCs)
 }
 
 func assertFieldsContainOnly(t *testing.T, actual [][]any, expected []any) {

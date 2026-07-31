@@ -5,12 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/boatkit-io/restream/pkg/binarystreams"
 	"github.com/boatkit-io/restream/pkg/relay/protocol"
 	"github.com/boatkit-io/restream/pkg/restream"
 	"github.com/boatkit-io/tugboat/pkg/subscribableevent"
@@ -22,6 +20,17 @@ var (
 	ErrDisconnected = errors.New("relay streamer disconnected")
 	// ErrSendQueueFull is returned when the bounded outbound send queue is full.
 	ErrSendQueueFull = errors.New("relay streamer send queue full")
+)
+
+const (
+	maxDataStreamWorkers           = 1024
+	maxPendingDataStreamOperations = 4096
+	maxRelayedStoreSubscriptions   = 4096
+	maxRelayedKeyedSubscriptions   = 4096
+	maxInFlightRelayFFRPCs         = 256
+	dataStreamOperationQueueSize   = 64
+	maxDataStreamResultErrorBytes  = 4096
+	dataStreamTransitionTimeout    = 30 * time.Second
 )
 
 // Streamer streams local Restream state to a relay server.
@@ -53,11 +62,17 @@ type Streamer struct {
 	relaySubscriptionMutex       sync.Mutex
 	relaySubscriptions           map[relaySubscriptionKey]struct{}
 	relayKeyedEventSubscriptions map[restream.KeyedEventSubscription]struct{}
+	relayDataStreamSubscriptions map[restream.DataStreamSubscription]restream.AccessLevel
 	relayStoreSubCount           map[string]int
 	relayStoreGeneration         map[string]uint64
 	relayStoreCatchingUp         map[string]bool
 	relayCatchupPartials         map[string]restream.Partial
 	onDemandStoreStreaming       bool
+
+	dataStreamWorkerMutex sync.Mutex
+	dataStreamWorkers     map[restream.DataStreamSubscription]*dataStreamWorker
+	dataStreamPending     int
+	ffrpcSlots            chan struct{}
 }
 
 type relaySubscriptionKey struct {
@@ -72,6 +87,25 @@ type outboundPacket struct {
 	generation  uint64
 	bytes       []byte
 	build       func() ([]byte, error)
+}
+
+type dataStreamOperation struct {
+	ctx          context.Context
+	cancel       context.CancelFunc
+	conn         *gws.Conn
+	operationID  uint32
+	subscription restream.DataStreamSubscription
+	accessLevel  restream.AccessLevel
+	subscribe    bool
+}
+
+type dataStreamWorker struct {
+	operations chan dataStreamOperation
+}
+
+type activeRelayDataStream struct {
+	subscription restream.DataStreamSubscription
+	accessLevel  restream.AccessLevel
 }
 
 func (p outboundPacket) buildBytes() ([]byte, error) {
@@ -115,10 +149,13 @@ func NewStreamer(
 		gatherGeneration:             map[string]uint64{},
 		relaySubscriptions:           map[relaySubscriptionKey]struct{}{},
 		relayKeyedEventSubscriptions: map[restream.KeyedEventSubscription]struct{}{},
+		relayDataStreamSubscriptions: map[restream.DataStreamSubscription]restream.AccessLevel{},
 		relayStoreSubCount:           map[string]int{},
 		relayStoreGeneration:         map[string]uint64{},
 		relayStoreCatchingUp:         map[string]bool{},
 		relayCatchupPartials:         map[string]restream.Partial{},
+		dataStreamWorkers:            map[restream.DataStreamSubscription]*dataStreamWorker{},
+		ffrpcSlots:                   make(chan struct{}, maxInFlightRelayFFRPCs),
 	}
 
 	if sr != nil {
@@ -249,7 +286,13 @@ func (s *Streamer) SendKeyedEvent(
 }
 
 func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials Credentials) error {
+	connCtx, cancelConn := context.WithCancel(ctx)
+	conn.SetReadLimit(s.opts.MaxReadMessageBytes)
 	defer func() {
+		// Cancel transition handlers before snapshotting active streams. A
+		// successful start and disconnect cleanup are committed under the same
+		// subscription mutex, so cleanup cannot miss a just-completed start.
+		cancelConn()
 		// Make local subscription callbacks observe a disconnected streamer while relay keys are unwound.
 		s.closeConn(conn)
 		s.clearRelaySubscriptions()
@@ -270,7 +313,12 @@ func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials C
 		DeviceID:        credentials.DeviceID,
 		AuthType:        credentials.AuthType,
 		AuthData:        credentials.AuthData,
-		Metadata:        credentials.Metadata,
+		Metadata: protocol.DeviceMetadataWithCapabilities(
+			credentials.Metadata,
+			protocol.DeviceCapabilities{
+				DataStreams: s.opts.DataStreams != nil && s.opts.DataStreams.HasRegistrations(),
+			},
+		),
 	})
 	if err != nil {
 		return err
@@ -312,7 +360,13 @@ func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials C
 					packet.MethodName, len(packet.Request), err)
 			}
 		case *protocol.FFRPCCallPacket:
+			select {
+			case s.ffrpcSlots <- struct{}{}:
+			default:
+				return fmt.Errorf("too many in-flight relay FFRPCs")
+			}
 			go func(ffrpcPacket *protocol.FFRPCCallPacket) {
+				defer func() { <-s.ffrpcSlots }()
 				_ = s.handleFFRPCCall(ffrpcPacket)
 			}(packet)
 		case *protocol.StoreSubscriptionPacket:
@@ -327,6 +381,20 @@ func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials C
 					packet.Action,
 					packet.StoreName,
 					packet.EventName,
+					packet.Key,
+					err,
+				)
+			}
+		case *protocol.DataStreamSubscriptionPacket:
+			// This legacy optional form has no capability or acknowledgement.
+			// Ignore it without disturbing the base relay connection.
+		case *protocol.DataStreamSubscriptionRequestPacket:
+			if err := s.handleDataStreamSubscription(connCtx, conn, packet); err != nil {
+				return fmt.Errorf(
+					"handle relay data stream subscription packet action %d for store %q stream %q key %q: %w",
+					packet.Action,
+					packet.StoreName,
+					packet.StreamName,
 					packet.Key,
 					err,
 				)
@@ -393,7 +461,7 @@ func (s *Streamer) partialCallback(storeName string, _ [][]any, partial restream
 		}
 		generation = s.relayStoreGeneration[storeName]
 		if s.relayStoreCatchingUp[storeName] {
-			partialSnapshot, snapshotErr := snapshotPartial(partial)
+			partialSnapshot, snapshotErr := restream.ClonePartial(partial)
 			if snapshotErr != nil {
 				s.relaySubscriptionMutex.Unlock()
 				s.closeCurrentConnOnSendError(snapshotErr)
@@ -465,7 +533,7 @@ func (s *Streamer) gatherPartial(
 	debounce time.Duration,
 	generation uint64,
 ) error {
-	partialSnapshot, err := snapshotPartial(partial)
+	partialSnapshot, err := restream.ClonePartial(partial)
 	if err != nil {
 		return err
 	}
@@ -612,31 +680,6 @@ func (s *Streamer) sendPartialForGeneration(
 	})
 }
 
-// snapshotPartial detaches a retained partial from values that ApplyTo may have installed directly into live store state.
-func snapshotPartial(partial restream.Partial) (restream.Partial, error) {
-	partialType := reflect.TypeOf(partial)
-	if partialType == nil || partialType.Kind() != reflect.Pointer {
-		return nil, fmt.Errorf("relay partial type %T is not a pointer", partial)
-	}
-	partialValue := reflect.ValueOf(partial)
-	if partialValue.IsNil() {
-		return nil, fmt.Errorf("relay partial type %T is nil", partial)
-	}
-
-	partialBytes, err := restream.SerializeToBytes(partial, nil)
-	if err != nil {
-		return nil, err
-	}
-	snapshot, ok := reflect.New(partialType.Elem()).Interface().(restream.Partial)
-	if !ok {
-		return nil, fmt.Errorf("relay partial snapshot type %s does not implement restream.Partial", partialType)
-	}
-	if err := snapshot.Deserialize(binarystreams.NewReaderFromBytes(partialBytes), nil); err != nil {
-		return nil, err
-	}
-	return snapshot, nil
-}
-
 func (s *Streamer) sendRPCResponse(rpcID uint32, resp []byte) error {
 	packetBytes, err := protocol.EncodePacket(&protocol.RPCResponsePacket{
 		RPCID:    rpcID,
@@ -728,6 +771,10 @@ func (s *Streamer) startRelayedKeyedEventSubscription(subscription restream.Keye
 		s.relaySubscriptionMutex.Unlock()
 		return nil
 	}
+	if len(s.relayKeyedEventSubscriptions) >= maxRelayedKeyedSubscriptions {
+		s.relaySubscriptionMutex.Unlock()
+		return fmt.Errorf("too many relayed keyed event subscriptions")
+	}
 	s.relayKeyedEventSubscriptions[subscription] = struct{}{}
 	s.relaySubscriptionMutex.Unlock()
 
@@ -763,6 +810,249 @@ func (s *Streamer) isRelayedKeyedEventSubscribed(storeName string, eventName str
 	return subscribed
 }
 
+func (s *Streamer) handleDataStreamSubscription(
+	ctx context.Context,
+	conn *gws.Conn,
+	packet *protocol.DataStreamSubscriptionRequestPacket,
+) error {
+	allowed, err := s.allowsRelayStoreTraffic(packet.StoreName)
+	if err != nil {
+		return s.sendDataStreamSubscriptionResult(conn, packet.OperationID, err)
+	}
+	if !allowed {
+		return s.sendDataStreamSubscriptionResult(
+			conn,
+			packet.OperationID,
+			fmt.Errorf("store %q does not allow relay stream traffic", packet.StoreName),
+		)
+	}
+	if s.opts.DataStreams == nil {
+		return s.sendDataStreamSubscriptionResult(
+			conn,
+			packet.OperationID,
+			fmt.Errorf("relay data stream subscription received without a dispatcher"),
+		)
+	}
+
+	subscription := restream.DataStreamSubscription{
+		StoreName:  packet.StoreName,
+		StreamName: packet.StreamName,
+		Key:        packet.Key,
+	}
+	if err := subscription.Validate(); err != nil {
+		return s.sendDataStreamSubscriptionResult(conn, packet.OperationID, err)
+	}
+	accessLevel := restream.AccessLevel(packet.AccessLevel)
+	if err := s.opts.DataStreams.CheckAccess(subscription, accessLevel); err != nil {
+		return s.sendDataStreamSubscriptionResult(conn, packet.OperationID, err)
+	}
+
+	operation := dataStreamOperation{
+		ctx:          ctx,
+		conn:         conn,
+		operationID:  packet.OperationID,
+		subscription: subscription,
+		accessLevel:  accessLevel,
+	}
+	switch packet.Action {
+	case protocol.StoreSubscribe:
+		operation.subscribe = true
+	case protocol.StoreUnsubscribe:
+	default:
+		return s.sendDataStreamSubscriptionResult(
+			conn,
+			packet.OperationID,
+			fmt.Errorf("invalid data stream subscription action %d", packet.Action),
+		)
+	}
+	if err := s.enqueueDataStreamOperation(operation); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Streamer) relayedDataStreamState(
+	subscription restream.DataStreamSubscription,
+) (restream.AccessLevel, bool) {
+	s.relaySubscriptionMutex.Lock()
+	defer s.relaySubscriptionMutex.Unlock()
+	activeAccessLevel, exists := s.relayDataStreamSubscriptions[subscription]
+	return activeAccessLevel, exists
+}
+
+func (s *Streamer) commitRelayedDataStreamState(
+	ctx context.Context,
+	subscription restream.DataStreamSubscription,
+	accessLevel restream.AccessLevel,
+	active bool,
+) bool {
+	s.relaySubscriptionMutex.Lock()
+	if active && ctx.Err() != nil {
+		s.relaySubscriptionMutex.Unlock()
+		return false
+	}
+	if active {
+		s.relayDataStreamSubscriptions[subscription] = accessLevel
+	} else {
+		delete(s.relayDataStreamSubscriptions, subscription)
+	}
+	s.relaySubscriptionMutex.Unlock()
+	return true
+}
+
+func (s *Streamer) enqueueDataStreamOperation(operation dataStreamOperation) error {
+	s.dataStreamWorkerMutex.Lock()
+	if s.dataStreamPending >= maxPendingDataStreamOperations {
+		s.dataStreamWorkerMutex.Unlock()
+		return fmt.Errorf("too many pending data stream operations")
+	}
+	worker := s.dataStreamWorkers[operation.subscription]
+	if worker == nil {
+		s.relaySubscriptionMutex.Lock()
+		_, alreadyActive := s.relayDataStreamSubscriptions[operation.subscription]
+		identityCount := len(s.relayDataStreamSubscriptions)
+		for workerSubscription := range s.dataStreamWorkers {
+			if _, active := s.relayDataStreamSubscriptions[workerSubscription]; !active {
+				identityCount++
+			}
+		}
+		s.relaySubscriptionMutex.Unlock()
+		if !alreadyActive && identityCount >= maxDataStreamWorkers {
+			s.dataStreamWorkerMutex.Unlock()
+			return fmt.Errorf("too many relayed data stream identities")
+		}
+		if len(s.dataStreamWorkers) >= maxDataStreamWorkers {
+			s.dataStreamWorkerMutex.Unlock()
+			return fmt.Errorf("too many active data stream operation workers")
+		}
+		worker = &dataStreamWorker{
+			operations: make(chan dataStreamOperation, dataStreamOperationQueueSize),
+		}
+		s.dataStreamWorkers[operation.subscription] = worker
+		go s.runDataStreamWorker(operation.subscription, worker)
+	}
+	select {
+	case worker.operations <- operation:
+		s.dataStreamPending++
+		s.dataStreamWorkerMutex.Unlock()
+		return nil
+	default:
+		s.dataStreamWorkerMutex.Unlock()
+		return fmt.Errorf("data stream operation queue is full")
+	}
+}
+
+func (s *Streamer) runDataStreamWorker(
+	subscription restream.DataStreamSubscription,
+	worker *dataStreamWorker,
+) {
+	for {
+		operation := <-worker.operations
+		activeAccessLevel, active := s.relayedDataStreamState(operation.subscription)
+		var err error
+		switch {
+		case operation.subscribe && active:
+			// Starts are idempotent. Preserve the access level that authorized
+			// the actual active source transition.
+		case !operation.subscribe && !active:
+			// Stops are idempotent, including disconnect cleanup racing a
+			// viewer unsubscribe.
+		default:
+			if !operation.subscribe {
+				operation.accessLevel = activeAccessLevel
+			}
+			operationCtx, cancelOperation := context.WithTimeout(
+				operation.ctx,
+				dataStreamTransitionTimeout,
+			)
+			err = s.opts.DataStreams.Dispatch(
+				operationCtx,
+				operation.subscription,
+				operation.accessLevel,
+				operation.subscribe,
+			)
+			cancelOperation()
+			if err == nil {
+				committed := s.commitRelayedDataStreamState(
+					operation.ctx,
+					operation.subscription,
+					operation.accessLevel,
+					operation.subscribe,
+				)
+				if operation.subscribe && !committed {
+					cleanupCtx, cancelCleanup := context.WithTimeout(
+						context.Background(),
+						dataStreamTransitionTimeout,
+					)
+					err = s.opts.DataStreams.Dispatch(
+						cleanupCtx,
+						operation.subscription,
+						operation.accessLevel,
+						false,
+					)
+					cancelCleanup()
+					if err == nil {
+						err = operation.ctx.Err()
+					} else {
+						// The source did start and its compensating stop failed.
+						// Keep that fact so a reconnect or later cleanup can
+						// issue another idempotent stop.
+						s.commitRelayedDataStreamState(
+							context.Background(),
+							operation.subscription,
+							operation.accessLevel,
+							true,
+						)
+					}
+				}
+			}
+		}
+		if operation.cancel != nil {
+			operation.cancel()
+		}
+		if operation.conn != nil && operation.operationID != 0 {
+			if sendErr := s.sendDataStreamSubscriptionResult(
+				operation.conn,
+				operation.operationID,
+				err,
+			); sendErr != nil {
+				s.closeCurrentConnOnSendError(sendErr)
+			}
+		}
+
+		s.dataStreamWorkerMutex.Lock()
+		s.dataStreamPending--
+		if len(worker.operations) == 0 && s.dataStreamWorkers[subscription] == worker {
+			delete(s.dataStreamWorkers, subscription)
+			s.dataStreamWorkerMutex.Unlock()
+			return
+		}
+		s.dataStreamWorkerMutex.Unlock()
+	}
+}
+
+func (s *Streamer) sendDataStreamSubscriptionResult(
+	conn *gws.Conn,
+	operationID uint32,
+	operationErr error,
+) error {
+	errorMessage := ""
+	if operationErr != nil {
+		errorMessage = operationErr.Error()
+		if len(errorMessage) > maxDataStreamResultErrorBytes {
+			errorMessage = errorMessage[:maxDataStreamResultErrorBytes]
+		}
+	}
+	packetBytes, err := protocol.EncodePacket(&protocol.DataStreamSubscriptionResultPacket{
+		OperationID: operationID,
+		Error:       errorMessage,
+	})
+	if err != nil {
+		return err
+	}
+	return s.enqueuePacketForConn(conn, "data stream subscription result", packetBytes)
+}
+
 func (s *Streamer) configureOnDemandStoreStreaming(packet *protocol.ConnectedPacket) bool {
 	enabled := s.opts.StorePolicy.OnDemand &&
 		packet.Capabilities.OnDemandStoreStreaming
@@ -786,6 +1076,10 @@ func (s *Streamer) startRelayedStoreSubscription(storeName string, key string) e
 	if _, exists := s.relaySubscriptions[subKey]; exists {
 		s.relaySubscriptionMutex.Unlock()
 		return nil
+	}
+	if len(s.relaySubscriptions) >= maxRelayedStoreSubscriptions {
+		s.relaySubscriptionMutex.Unlock()
+		return fmt.Errorf("too many relayed store subscriptions")
 	}
 	s.relaySubscriptions[subKey] = struct{}{}
 	s.relayStoreSubCount[storeName]++
@@ -969,6 +1263,17 @@ func (s *Streamer) clearRelaySubscriptions() {
 	for subscription := range s.relayKeyedEventSubscriptions {
 		keyedEventSubscriptions = append(keyedEventSubscriptions, subscription)
 	}
+	dataStreamSubscriptions := make(
+		[]activeRelayDataStream,
+		0,
+		len(s.relayDataStreamSubscriptions),
+	)
+	for subscription, accessLevel := range s.relayDataStreamSubscriptions {
+		dataStreamSubscriptions = append(dataStreamSubscriptions, activeRelayDataStream{
+			subscription: subscription,
+			accessLevel:  accessLevel,
+		})
+	}
 	s.relaySubscriptions = map[relaySubscriptionKey]struct{}{}
 	s.relayKeyedEventSubscriptions = map[restream.KeyedEventSubscription]struct{}{}
 	s.relayStoreSubCount = map[string]int{}
@@ -991,6 +1296,23 @@ func (s *Streamer) clearRelaySubscriptions() {
 			)
 		}
 	}
+	if s.opts.DataStreams != nil {
+		for _, active := range dataStreamSubscriptions {
+			cleanupCtx, cancel := context.WithTimeout(
+				context.Background(),
+				defaultWriteTimeout*6,
+			)
+			if err := s.enqueueDataStreamOperation(dataStreamOperation{
+				ctx:          cleanupCtx,
+				cancel:       cancel,
+				subscription: active.subscription,
+				accessLevel:  active.accessLevel,
+				subscribe:    false,
+			}); err != nil {
+				cancel()
+			}
+		}
+	}
 }
 
 func (s *Streamer) closeCurrentConnOnSendError(err error) {
@@ -1005,6 +1327,33 @@ func (s *Streamer) enqueuePacket(packetDescription string, b []byte) error {
 		description: packetDescription,
 		bytes:       b,
 	})
+}
+
+func (s *Streamer) enqueuePacketForConn(
+	conn *gws.Conn,
+	packetDescription string,
+	b []byte,
+) error {
+	packet := outboundPacket{description: packetDescription, bytes: b}
+	s.connMutex.RLock()
+	if s.conn != conn {
+		s.connMutex.RUnlock()
+		return ErrDisconnected
+	}
+	sendQueue := s.sendQueue
+	sendDone := s.sendDone
+	s.connMutex.RUnlock()
+	if sendQueue == nil || sendDone == nil {
+		return ErrDisconnected
+	}
+	select {
+	case <-sendDone:
+		return ErrDisconnected
+	case sendQueue <- packet:
+		return nil
+	default:
+		return ErrSendQueueFull
+	}
 }
 
 func (s *Streamer) enqueueStorePacketBuilder(

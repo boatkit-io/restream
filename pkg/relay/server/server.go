@@ -18,6 +18,7 @@ import (
 const (
 	defaultRPCWriteTimeout       = 5 * time.Second
 	defaultCloseWriteTimeout     = time.Second
+	defaultMaxReadMessageBytes   = int64(64 * 1024 * 1024)
 	maxWebsocketCloseReasonBytes = 123
 	relayServerShutdownReason    = "relay server shutting down"
 )
@@ -32,6 +33,9 @@ type Config struct {
 	Capabilities       protocol.RelayCapabilities
 	Metadata           map[string]string
 	RPCWriteTimeout    time.Duration
+	// MaxReadMessageBytes bounds one device control-plane websocket message.
+	// High-bandwidth payloads must use the separate data plane.
+	MaxReadMessageBytes int64
 }
 
 // Server accepts device relay websocket connections.
@@ -43,6 +47,9 @@ type Server struct {
 func New(config Config) *Server {
 	if config.RPCWriteTimeout <= 0 {
 		config.RPCWriteTimeout = defaultRPCWriteTimeout
+	}
+	if config.MaxReadMessageBytes <= 0 {
+		config.MaxReadMessageBytes = defaultMaxReadMessageBytes
 	}
 	return &Server{config: config}
 }
@@ -57,10 +64,12 @@ func (s *Server) AcceptConn(ctx context.Context, conn *gws.Conn) (retErr error) 
 	}
 
 	conn.EnableWriteCompression(true)
+	conn.SetReadLimit(s.config.MaxReadMessageBytes)
 	c := &Connection{
 		conn:            conn,
 		rpcWriteTimeout: s.config.RPCWriteTimeout,
 		streamStarted:   time.Now(),
+		closed:          make(chan struct{}),
 	}
 	closeOnReturn := true
 	defer func() {
@@ -105,7 +114,9 @@ func (s *Server) AcceptConn(ctx context.Context, conn *gws.Conn) (retErr error) 
 	if err := device.sendActiveKeyedEventSubscriptions(c); err != nil {
 		return err
 	}
-
+	// Recovery waits for device acknowledgements, so begin it only once the
+	// packet reader below is able to deliver completion packets.
+	device.restoreActiveDataStreamSubscriptions(c)
 	return s.readPackets(c, device)
 }
 
@@ -127,6 +138,7 @@ func (s *Server) acceptHello(ctx context.Context, c *Connection) (*Device, error
 	}
 
 	c.DeviceID = hello.DeviceID
+	c.Capabilities = protocol.CapabilitiesFromDeviceMetadata(hello.Metadata)
 	accessLevel, err := s.config.AuthenticateDevice(ctx, hello, c)
 	if err != nil {
 		return nil, err
@@ -216,6 +228,8 @@ func (s *Server) readPackets(c *Connection, device *Device) error {
 				return fmt.Errorf("handle relay RPC response packet id %d (%d bytes): %w",
 					packet.RPCID, len(packet.Response), err)
 			}
+		case *protocol.DataStreamSubscriptionResultPacket:
+			device.HandleDataStreamSubscriptionResult(c, packet)
 		case *protocol.CustomPacket:
 			if err := device.HandleCustomPacket(c, packet); err != nil {
 				return fmt.Errorf("handle relay custom packet %q (%d bytes): %w", packet.Name, len(packet.Payload), err)
@@ -233,12 +247,15 @@ func (s *Server) readPackets(c *Connection, device *Device) error {
 
 // Connection represents one authenticated device websocket.
 type Connection struct {
-	DeviceID    string
-	AccessLevel restream.AccessLevel
+	DeviceID     string
+	AccessLevel  restream.AccessLevel
+	Capabilities protocol.DeviceCapabilities
 
 	conn            *gws.Conn
 	rpcWriteMutex   sync.Mutex
 	rpcWriteTimeout time.Duration
+	closeOnce       sync.Once
+	closed          chan struct{}
 
 	streamStarted   time.Time
 	packetCount     uint64
@@ -250,7 +267,12 @@ type Connection struct {
 
 // NewConnection creates a Connection around an existing websocket.
 func NewConnection(conn *gws.Conn) *Connection {
-	return &Connection{conn: conn, rpcWriteTimeout: defaultRPCWriteTimeout, streamStarted: time.Now()}
+	return &Connection{
+		conn:            conn,
+		rpcWriteTimeout: defaultRPCWriteTimeout,
+		streamStarted:   time.Now(),
+		closed:          make(chan struct{}),
+	}
 }
 
 // RemoteAddr returns the underlying websocket remote address.
@@ -266,6 +288,7 @@ func (c *Connection) Close() error {
 	if c == nil || c.conn == nil {
 		return nil
 	}
+	defer c.markClosed()
 	return c.conn.Close()
 }
 
@@ -274,6 +297,7 @@ func (c *Connection) CloseWithReason(code int, reason string) error {
 	if c == nil || c.conn == nil {
 		return nil
 	}
+	defer c.markClosed()
 
 	var retErr error
 	deadline := time.Now().Add(defaultCloseWriteTimeout)
@@ -289,6 +313,25 @@ func (c *Connection) CloseWithReason(code int, reason string) error {
 		retErr = err
 	}
 	return retErr
+}
+
+// Done closes when the underlying relay connection is closed.
+func (c *Connection) Done() <-chan struct{} {
+	if c == nil || c.closed == nil {
+		closed := make(chan struct{})
+		close(closed)
+		return closed
+	}
+	return c.closed
+}
+
+func (c *Connection) markClosed() {
+	if c == nil || c.closed == nil {
+		return
+	}
+	c.closeOnce.Do(func() {
+		close(c.closed)
+	})
 }
 
 // SendRPC sends an RPC command to the connected device.
@@ -379,6 +422,38 @@ func (c *Connection) SendKeyedEventSubscription(
 		return err
 	}
 
+	return c.sendPacket(packetBytes)
+}
+
+// SendDataStreamSubscription sends a high-bandwidth stream lifecycle change to
+// the connected device over the Restream control plane.
+func (c *Connection) SendDataStreamSubscription(
+	operationID uint32,
+	subscription restream.DataStreamSubscription,
+	accessLevel restream.AccessLevel,
+	subscribe bool,
+) error {
+	if !c.Capabilities.DataStreams {
+		return fmt.Errorf("connected device does not advertise data-stream support")
+	}
+	if err := subscription.Validate(); err != nil {
+		return err
+	}
+	action := protocol.StoreUnsubscribe
+	if subscribe {
+		action = protocol.StoreSubscribe
+	}
+	packetBytes, err := protocol.EncodePacket(&protocol.DataStreamSubscriptionRequestPacket{
+		OperationID: operationID,
+		StoreName:   subscription.StoreName,
+		StreamName:  subscription.StreamName,
+		Key:         subscription.Key,
+		AccessLevel: byte(accessLevel),
+		Action:      action,
+	})
+	if err != nil {
+		return err
+	}
 	return c.sendPacket(packetBytes)
 }
 

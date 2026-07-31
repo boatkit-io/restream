@@ -5,6 +5,9 @@ import BinaryReader from '../utils/BinaryReader.js';
 import BinaryWriter from '../utils/BinaryWriter.js';
 import type { VarInfoStruct } from '../utils/SerializationTypes.js';
 import {
+    DataStreamEndpoint,
+    DataStreamEndpointMessage,
+    DataStreamSubscriptionMessage,
     EventStruct,
     FFRPCCallMessage,
     FFRPCStruct,
@@ -12,6 +15,8 @@ import {
     KeyedEventSubscriptionMessage,
     ReStreamSocket,
     StoreSubscriptionAction,
+    ViewerSessionAttachRequest,
+    ViewerSessionAttachResponse,
 } from './SocketHelper.js';
 
 class TestFFRPC extends FFRPCStruct {
@@ -69,6 +74,173 @@ function keyedSubscriptionMessages(socket: FakeSocket): KeyedEventSubscriptionMe
         .filter(({ name }) => name === 'keyedeventsub')
         .map(({ message }) => message as KeyedEventSubscriptionMessage);
 }
+
+function dataStreamSubscriptionMessages(socket: FakeSocket): DataStreamSubscriptionMessage[] {
+    return socket.emitted
+        .filter(({ name }) => name === 'datastreamsub')
+        .map(({ message }) => message as DataStreamSubscriptionMessage);
+}
+
+function viewerSessionAttachMessages(socket: FakeSocket): ViewerSessionAttachRequest[] {
+    return socket.emitted
+        .filter(({ name }) => name === 'viewersessionattach')
+        .map(({ message }) => message as ViewerSessionAttachRequest);
+}
+
+describe('ReStreamSocket viewer sessions', () => {
+    test('can be enabled after server capability negotiation but before authentication', () => {
+        const socket = new FakeSocket();
+        const restreamSocket = new ReStreamSocket(socket as unknown as Socket);
+
+        restreamSocket.enableViewerSessions();
+        void restreamSocket.markAuthenticated();
+
+        expect(viewerSessionAttachMessages(socket)).toHaveLength(1);
+    });
+
+    test('falls back to legacy authentication when the negotiated server lacks sessions', async () => {
+        const socket = new FakeSocket();
+        const restreamSocket = new ReStreamSocket(socket as unknown as Socket, {
+            viewerSessions: true,
+        });
+
+        restreamSocket.setViewerSessionsEnabled(false);
+        await restreamSocket.markAuthenticated();
+
+        expect(viewerSessionAttachMessages(socket)).toHaveLength(0);
+    });
+
+    test('keeps the session in memory and resumes without replaying individual subscriptions', async () => {
+        const socket = new FakeSocket();
+        const restreamSocket = new ReStreamSocket(socket as unknown as Socket, {
+            viewerSessions: true,
+        });
+        const streamErrors: string[] = [];
+        restreamSocket.subscribeToKeyedEvent(
+            'IcomRadioStore',
+            TestKeyedEvent,
+            'radio-a',
+            () => undefined,
+        );
+        restreamSocket.subscribeToDataStream(
+            'CameraStore',
+            'Camera.Video',
+            'camera-a',
+            (_endpoint, error) => {
+                if (error) {
+                    streamErrors.push(error.message);
+                }
+            },
+        );
+
+        const attached = restreamSocket.markAuthenticated();
+        const firstAttach = viewerSessionAttachMessages(socket);
+        expect(firstAttach).toHaveLength(1);
+        expect(firstAttach[0]).toEqual(expect.objectContaining({
+            sessionID: '',
+            keyedEventSubscriptions: [
+                expect.objectContaining({ key: 'radio-a' }),
+            ],
+            dataStreamSubscriptions: [
+                expect.objectContaining({ key: 'camera-a' }),
+            ],
+        }));
+        socket.fire('viewersessionattached', {
+            sessionID: '70f183b6-932a-46c2-a38a-6bcd496d8fe8',
+            resumed: false,
+            capabilities: { dataStreams: true },
+        } satisfies ViewerSessionAttachResponse);
+        await attached;
+        expect(restreamSocket.getSessionID()).toBe('70f183b6-932a-46c2-a38a-6bcd496d8fe8');
+        expect(restreamSocket.getCapabilities()).toEqual({ dataStreams: true });
+        expect(keyedSubscriptionMessages(socket)).toEqual([]);
+        expect(dataStreamSubscriptionMessages(socket)).toEqual([]);
+
+        socket.emitted.length = 0;
+        socket.fire('disconnect');
+        expect(streamErrors).toEqual([]);
+
+        const resumed = restreamSocket.markAuthenticated();
+        expect(viewerSessionAttachMessages(socket)).toEqual([
+            expect.objectContaining({
+                sessionID: '70f183b6-932a-46c2-a38a-6bcd496d8fe8',
+            }),
+        ]);
+        socket.fire('viewersessionattached', {
+            sessionID: '70f183b6-932a-46c2-a38a-6bcd496d8fe8',
+            resumed: true,
+            capabilities: { dataStreams: true },
+        } satisfies ViewerSessionAttachResponse);
+        await resumed;
+        expect(keyedSubscriptionMessages(socket)).toEqual([]);
+        expect(dataStreamSubscriptionMessages(socket)).toEqual([]);
+    });
+
+    test('explicit close forgets the in-memory session', async () => {
+        const socket = new FakeSocket();
+        const restreamSocket = new ReStreamSocket(socket as unknown as Socket, {
+            viewerSessions: true,
+        });
+        const attached = restreamSocket.markAuthenticated();
+        socket.fire('viewersessionattached', {
+            sessionID: '46a70c24-c622-4d10-a25d-66e427b36620',
+            resumed: false,
+            capabilities: { dataStreams: false },
+        } satisfies ViewerSessionAttachResponse);
+        await attached;
+
+        restreamSocket.closeSession();
+        expect(restreamSocket.getSessionID()).toBeUndefined();
+        expect(socket.emitted).toContainEqual({
+            name: 'viewersessionclose',
+            message: { sessionID: '46a70c24-c622-4d10-a25d-66e427b36620' },
+        });
+    });
+
+    test('replays subscriptions added while the session attachment is in flight', async () => {
+        const socket = new FakeSocket();
+        const restreamSocket = new ReStreamSocket(socket as unknown as Socket, {
+            viewerSessions: true,
+        });
+
+        const attached = restreamSocket.markAuthenticated();
+        restreamSocket.subscribeToKeyedEvent(
+            'IcomRadioStore',
+            TestKeyedEvent,
+            'radio-a',
+            () => undefined,
+        );
+        restreamSocket.subscribeToDataStream(
+            'CameraStore',
+            'Camera.Video',
+            'camera-a',
+            () => undefined,
+        );
+        expect(keyedSubscriptionMessages(socket)).toEqual([]);
+        expect(dataStreamSubscriptionMessages(socket)).toEqual([]);
+
+        socket.fire('viewersessionattached', {
+            sessionID: '0806513f-8b37-43d4-9397-9b4cfb518e70',
+            resumed: false,
+            capabilities: { dataStreams: true },
+        } satisfies ViewerSessionAttachResponse);
+        await attached;
+
+        expect(keyedSubscriptionMessages(socket)).toEqual([{
+            storeName: 'IcomRadioStore',
+            eventName: TestKeyedEvent.eventBoundName,
+            action: StoreSubscriptionAction.Subscribe,
+            key: 'radio-a',
+        }]);
+        expect(dataStreamSubscriptionMessages(socket)).toEqual([{
+            subscriptionID: 'stream-1',
+            storeName: 'CameraStore',
+            streamName: 'Camera.Video',
+            action: StoreSubscriptionAction.Subscribe,
+            key: 'camera-a',
+        }]);
+    });
+});
 
 describe('ReStreamSocket keyed event subscriptions', () => {
     test('refcounts exact subscriptions and routes only matching events', () => {
@@ -166,5 +338,97 @@ describe('ReStreamSocket FFRPC calls', () => {
 
         expect(() => restreamSocket.sendFFRPC(new TestFFRPC(42))).toThrow('Server is disconnected');
         expect(socket.emitted).toEqual([]);
+    });
+});
+
+describe('ReStreamSocket data stream subscriptions', () => {
+    test('refcounts one endpoint lease and routes endpoint responses', () => {
+        const socket = new FakeSocket();
+        const restreamSocket = new ReStreamSocket(socket as unknown as Socket);
+        const receivedA: Array<DataStreamEndpoint | undefined> = [];
+        const receivedB: Array<DataStreamEndpoint | undefined> = [];
+        const unsubscribeA = restreamSocket.subscribeToDataStream(
+            'CameraMedia',
+            'CameraMedia.Video',
+            'camera-a',
+            endpoint => receivedA.push(endpoint),
+        );
+        const unsubscribeB = restreamSocket.subscribeToDataStream(
+            'CameraMedia',
+            'CameraMedia.Video',
+            'camera-a',
+            endpoint => receivedB.push(endpoint),
+        );
+
+        restreamSocket.markAuthenticated();
+        const subscriptions = dataStreamSubscriptionMessages(socket);
+        expect(subscriptions).toHaveLength(1);
+        expect(subscriptions[0]).toEqual(expect.objectContaining({
+            storeName: 'CameraMedia',
+            streamName: 'CameraMedia.Video',
+            key: 'camera-a',
+            action: StoreSubscriptionAction.Subscribe,
+        }));
+
+        const endpoint: DataStreamEndpoint = {
+            leaseID: 'lease-a',
+            url: 'wss://stream.example/viewer',
+            token: 'token-a',
+            expiresAtUnixMilli: 0,
+        };
+        socket.fire('datastreamendpoint', {
+            subscriptionID: subscriptions[0]!.subscriptionID,
+            endpoint,
+        } satisfies DataStreamEndpointMessage);
+        expect(receivedA).toEqual([endpoint]);
+        expect(receivedB).toEqual([endpoint]);
+        const receivedLate: Array<DataStreamEndpoint | undefined> = [];
+        const unsubscribeLate = restreamSocket.subscribeToDataStream(
+            'CameraMedia',
+            'CameraMedia.Video',
+            'camera-a',
+            lateEndpoint => receivedLate.push(lateEndpoint),
+        );
+        expect(receivedLate).toEqual([endpoint]);
+
+        unsubscribeA();
+        expect(dataStreamSubscriptionMessages(socket)).toHaveLength(1);
+        unsubscribeLate();
+        expect(dataStreamSubscriptionMessages(socket)).toHaveLength(1);
+        unsubscribeB();
+        expect(dataStreamSubscriptionMessages(socket)).toEqual([
+            expect.objectContaining({ action: StoreSubscriptionAction.Subscribe }),
+            expect.objectContaining({ action: StoreSubscriptionAction.Unsubscribe }),
+        ]);
+    });
+
+    test('replays active subscriptions after reconnect and reports disconnect', () => {
+        const socket = new FakeSocket();
+        const restreamSocket = new ReStreamSocket(socket as unknown as Socket);
+        const errors: string[] = [];
+        restreamSocket.subscribeToDataStream(
+            'CameraMedia',
+            'CameraMedia.Video',
+            'camera-a',
+            (_endpoint, error) => {
+                if (error) {
+                    errors.push(error.message);
+                }
+            },
+        );
+        restreamSocket.markAuthenticated();
+        socket.emitted.length = 0;
+
+        socket.fire('disconnect');
+        expect(errors).toEqual(['Server is disconnected']);
+        expect(dataStreamSubscriptionMessages(socket)).toEqual([]);
+
+        restreamSocket.markAuthenticated();
+        expect(dataStreamSubscriptionMessages(socket)).toEqual([
+            expect.objectContaining({
+                key: 'camera-a',
+                action: StoreSubscriptionAction.Subscribe,
+            }),
+        ]);
     });
 });

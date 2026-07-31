@@ -50,6 +50,33 @@ type Partial interface {
 	ApplyTo(any) [][]any
 }
 
+// ClonePartial serializes and deserializes a partial into a detached value.
+// Store callbacks may expose values that were installed directly into live
+// state, so any partial retained beyond the callback must first be cloned.
+func ClonePartial(partial Partial) (Partial, error) {
+	partialType := reflect.TypeOf(partial)
+	if partialType == nil || partialType.Kind() != reflect.Pointer {
+		return nil, errors.New("restream partial is not a pointer")
+	}
+	partialValue := reflect.ValueOf(partial)
+	if partialValue.IsNil() {
+		return nil, errors.New("restream partial is nil")
+	}
+
+	partialBytes, err := SerializeToBytes(partial, nil)
+	if err != nil {
+		return nil, err
+	}
+	snapshot, ok := reflect.New(partialType.Elem()).Interface().(Partial)
+	if !ok {
+		return nil, errors.New("restream partial snapshot does not implement Partial")
+	}
+	if err := snapshot.Deserialize(binarystreams.NewReaderFromBytes(partialBytes), nil); err != nil {
+		return nil, err
+	}
+	return snapshot, nil
+}
+
 // PrunablePartial can remove operations by comparing them with a target. PruneAgainst reports whether any operations
 // remain after pruning.
 type PrunablePartial interface {

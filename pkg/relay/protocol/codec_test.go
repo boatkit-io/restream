@@ -129,6 +129,36 @@ func TestPacketRoundTrips(t *testing.T) {
 			kind: KindKeyedEventSubscription,
 		},
 		{
+			name: "data stream subscription",
+			in: &DataStreamSubscriptionPacket{
+				StoreName:  "CameraMedia",
+				StreamName: "CameraMedia.Video",
+				Key:        "camera-a",
+				Action:     StoreSubscribe,
+			},
+			kind: KindDataStreamSubscription,
+		},
+		{
+			name: "data stream subscription request",
+			in: &DataStreamSubscriptionRequestPacket{
+				OperationID: 7,
+				StoreName:   "CameraStore",
+				StreamName:  "Video",
+				Key:         "camera-a",
+				AccessLevel: 3,
+				Action:      StoreSubscribe,
+			},
+			kind: KindDataStreamSubscriptionRequest,
+		},
+		{
+			name: "data stream subscription result",
+			in: &DataStreamSubscriptionResultPacket{
+				OperationID: 7,
+				Error:       "camera unavailable",
+			},
+			kind: KindDataStreamSubscriptionResult,
+		},
+		{
 			name: "named custom",
 			in:   &CustomPacket{Name: "com.example.metrics", Payload: []byte{14, 15, 16}},
 			kind: KindCustom,
@@ -200,6 +230,22 @@ func TestConnectedPacketCapabilitiesUseBackwardCompatibleMetadataEncoding(t *tes
 	}
 	if _, leaked := connected.Metadata[onDemandStoreStreamingCapabilityKey]; leaked {
 		t.Fatalf("Restream capability leaked into application metadata: %#v", connected.Metadata)
+	}
+}
+
+func TestDeviceCapabilitiesUseHelloMetadataWithoutChangingBaseVersion(t *testing.T) {
+	metadata := DeviceMetadataWithCapabilities(
+		map[string]string{"app": "goatkit"},
+		DeviceCapabilities{DataStreams: true},
+	)
+	if metadata[DeviceDataStreamsCapabilityMetadataKey] != enabledCapabilityMetadataValue {
+		t.Fatalf("capability metadata = %#v", metadata)
+	}
+	if got := CapabilitiesFromDeviceMetadata(metadata); !got.DataStreams {
+		t.Fatal("data-stream capability did not round trip")
+	}
+	if CurrentVersion != 8 {
+		t.Fatalf("optional data-stream capability changed base protocol version to %d", CurrentVersion)
 	}
 }
 
@@ -303,6 +349,31 @@ func TestKeyedEventSubscriptionRejectsInvalidAction(t *testing.T) {
 	}
 }
 
+func TestDataStreamSubscriptionRejectsInvalidAction(t *testing.T) {
+	if _, err := EncodePacket(&DataStreamSubscriptionPacket{
+		StoreName:  "CameraMedia",
+		StreamName: "CameraMedia.Video",
+		Key:        "camera-a",
+		Action:     StoreSubscriptionAction(99),
+	}); err == nil {
+		t.Fatal("EncodePacket accepted an invalid data stream subscription action")
+	}
+
+	encoded, err := EncodePacket(&DataStreamSubscriptionPacket{
+		StoreName:  "CameraMedia",
+		StreamName: "CameraMedia.Video",
+		Key:        "camera-a",
+		Action:     StoreSubscribe,
+	})
+	if err != nil {
+		t.Fatalf("EncodePacket valid data stream subscription failed: %v", err)
+	}
+	encoded[len(encoded)-1] = 99
+	if _, err := DecodePacket(encoded); err == nil {
+		t.Fatal("DecodePacket accepted an invalid data stream subscription action")
+	}
+}
+
 func TestOversizedStringsAreRejected(t *testing.T) {
 	oversizedName := strings.Repeat("a", maxUint16+1)
 
@@ -323,6 +394,10 @@ func TestPacketKindHelpers(t *testing.T) {
 	}
 	if IsStandardKind(FirstApplicationPacketKind) {
 		t.Fatal("FirstApplicationPacketKind should not be standard")
+	}
+	if !IsStandardKind(KindDataStreamSubscriptionRequest) ||
+		!IsStandardKind(KindDataStreamSubscriptionResult) {
+		t.Fatal("data-stream control packets should be standard kinds")
 	}
 	if !IsApplicationKind(FirstApplicationPacketKind) {
 		t.Fatal("FirstApplicationPacketKind should be application-defined")

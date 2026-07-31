@@ -67,6 +67,10 @@ type fullStateSnapshotStoreData interface {
 	GetFullStateSnapshot() (Serializable, error)
 }
 
+type fullStateSnapshotDecoderStoreData interface {
+	DecodeFullStateSnapshot([]byte) (Serializable, error)
+}
+
 type subscriptionKeySnapshotStoreData interface {
 	GetPartialSnapshotForSubscriptionKey(key string) (Serializable, bool, error)
 }
@@ -188,6 +192,27 @@ func (s *StoreRegistry) GetSerializedFullState(storeName string, accessLevel Acc
 		return nil, err
 	}
 	return SerializeToBytes(snapshot, nil)
+}
+
+// DecodeFullStateSnapshot decodes an exact full-state payload into a detached,
+// typed state value suitable for applying later partials.
+func (s *StoreRegistry) DecodeFullStateSnapshot(
+	storeName string,
+	stateBytes []byte,
+	accessLevel AccessLevel,
+) (Serializable, error) {
+	si, has := s.storeMap[storeName]
+	if !has {
+		return nil, fmt.Errorf("no store found (%s) in DecodeFullStateSnapshot", storeName)
+	}
+	if err := requireStoreAccess(si, accessLevel); err != nil {
+		return nil, err
+	}
+	provider, ok := si.StoreData.(fullStateSnapshotDecoderStoreData)
+	if !ok {
+		return nil, fmt.Errorf("store %s cannot decode detached full-state snapshots", storeName)
+	}
+	return provider.DecodeFullStateSnapshot(append([]byte(nil), stateBytes...))
 }
 
 // GetPartialSnapshotForSubscriptionKey returns an initial keyed partial snapshot for a store, when the store supports it.
