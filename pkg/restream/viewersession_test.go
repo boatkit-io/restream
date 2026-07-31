@@ -256,6 +256,50 @@ func TestViewerSessionManifestChangeRebuildsRetainedKeyBaseline(t *testing.T) {
 	assertMapEqual(t, map[string]int{"b": 20}, state.Values)
 }
 
+func TestViewerSessionBufferedStoreUpdatesRetainSubscriptionGeneration(t *testing.T) {
+	const generation = 7
+	tests := []struct {
+		name   string
+		update *bufferedViewerStoreUpdate
+	}{
+		{
+			name: "full state",
+			update: &bufferedViewerStoreUpdate{
+				generation: generation,
+				fullState: &viewerSocketTestState{
+					Values: map[string]int{"a": 1},
+				},
+			},
+		},
+		{
+			name: "partial",
+			update: &bufferedViewerStoreUpdate{
+				generation: generation,
+				partial: &viewerSocketTestPartial{
+					Values: NewPartialMap[string, int]().Set("a", 1),
+				},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			message, err := buildBufferedStoreUpdateMessage(
+				viewerSocketTestStoreName,
+				test.update,
+			)
+			if err != nil {
+				t.Fatalf("build buffered store update failed: %v", err)
+			}
+			if message.StoreName != viewerSocketTestStoreName {
+				t.Fatalf("store name = %q, want %q", message.StoreName, viewerSocketTestStoreName)
+			}
+			if message.StoreGeneration != generation {
+				t.Fatalf("store generation = %d, want %d", message.StoreGeneration, generation)
+			}
+		})
+	}
+}
+
 func applyViewerSessionTestPartial(
 	t *testing.T,
 	registry *StoreRegistry,

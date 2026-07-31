@@ -45,7 +45,18 @@ export enum StoreUpdateMessageKind {
 
 export const Subscribe = 0;
 
+export const ViewerSessionCreated = "created";
+
+export enum ViewerSessionLifecycleKind {
+    ViewerSessionAttached = "attached",
+    ViewerSessionClosed = "closed",
+    ViewerSessionCreated = "created",
+    ViewerSessionDetached = "detached",
+}
+
 export const compoundKeyJoinerString = "%&";
+
+export const maxSocketMethodNameBytes = 512;
 
 export class PartialArray<V> {
     public dataSets!: Map<number,V>;

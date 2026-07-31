@@ -760,15 +760,7 @@ func (st *socketTracker) finishAttach() bool {
 	sort.Strings(storeNames)
 	for _, storeName := range storeNames {
 		update := storeUpdates[storeName]
-		var (
-			message emitMessage
-			err     error
-		)
-		if update.fullState != nil {
-			message, err = buildFullStoreUpdateMessage(storeName, update.fullState)
-		} else if update.partial != nil {
-			message, err = buildPartialStoreUpdateMessage(storeName, update.partial)
-		}
+		message, err := buildBufferedStoreUpdateMessage(storeName, update)
 		if err != nil {
 			st.abortSessionForError("build resumed store update", err)
 			return false
@@ -808,6 +800,23 @@ func (st *socketTracker) finishAttach() bool {
 		}
 	}
 	return true
+}
+
+func buildBufferedStoreUpdateMessage(
+	storeName string,
+	update *bufferedViewerStoreUpdate,
+) (emitMessage, error) {
+	var (
+		message emitMessage
+		err     error
+	)
+	if update.fullState != nil {
+		message, err = buildFullStoreUpdateMessage(storeName, update.fullState)
+	} else if update.partial != nil {
+		message, err = buildPartialStoreUpdateMessage(storeName, update.partial)
+	}
+	message.StoreGeneration = update.generation
+	return message, err
 }
 
 func (st *socketTracker) abortSessionForError(operation string, err error) {
