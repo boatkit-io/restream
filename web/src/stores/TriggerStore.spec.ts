@@ -135,6 +135,26 @@ describe('TriggerStore keyed subscriptions', () => {
         expect(TriggerStore.getStoreSubs().filter(sub => sub.storeName === store.testStoreName)).toEqual([]);
     });
 
+    test('refcounts subscriptions across same-named replacement store instances', () => {
+        const storeName = uniqueStoreName();
+        const originalStore = new TriggerStoreSpecStore(storeName);
+        const replacementStore = new TriggerStoreSpecStore(storeName);
+        const originalToken = originalStore.subscribe(vi.fn(), 'values%&a');
+        const replacementToken = replacementStore.subscribe(vi.fn(), 'values%&a');
+
+        expect(TriggerStore.getStoreSubs().filter(sub => sub.storeName === storeName)).toEqual([
+            { storeName, key: 'values%&a' },
+        ]);
+
+        originalStore.unsubscribe(originalToken);
+        expect(TriggerStore.getStoreSubs().filter(sub => sub.storeName === storeName)).toEqual([
+            { storeName, key: 'values%&a' },
+        ]);
+
+        replacementStore.unsubscribe(replacementToken);
+        expect(TriggerStore.getStoreSubs().filter(sub => sub.storeName === storeName)).toEqual([]);
+    });
+
     test('narrow updates only trigger matching keyed subscriptions', () => {
         const store = new TriggerStoreSpecStore(uniqueStoreName());
         const allCallback = vi.fn();

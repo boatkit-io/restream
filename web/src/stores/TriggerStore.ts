@@ -34,7 +34,7 @@ export default abstract class TriggerStore<S extends object> extends StoreBase {
 
     static eventSubscriptionStarted = new SubscribableEvent<(storeName: string, key?: string) => void>();
     static eventSubscriptionStopped = new SubscribableEvent<(storeName: string, key?: string) => void>();
-    private static _storeSubs = new Map<string, Set<string>>();
+    private static _storeSubs = new Map<string, Map<string, Set<TriggerStore<object>>>>();
 
     static handleUpdateMessage(message: StoreUpdateMessage) {
         const store = this._storeMap[message.storeName];
@@ -48,7 +48,7 @@ export default abstract class TriggerStore<S extends object> extends StoreBase {
     static getStoreSubs() {
         const ret: { storeName: string, key: string|undefined }[] = [];
         for (const [storeName, keys] of this._storeSubs.entries()) {
-            for (const key of keys) {
+            for (const key of keys.keys()) {
                 ret.push({ storeName, key: key === "" ? undefined : key });
             }
         }
@@ -86,15 +86,23 @@ export default abstract class TriggerStore<S extends object> extends StoreBase {
         const wireKey = this._canonicalSubscriptionKey(key);
         let keys = TriggerStore._storeSubs.get(this._storeName);
         if (!keys) {
-            keys = new Set();
+            keys = new Map();
             TriggerStore._storeSubs.set(this._storeName, keys);
         }
-        if (keys.has(wireKey)) {
+        let stores = keys.get(wireKey);
+        if (!stores) {
+            stores = new Set();
+            keys.set(wireKey, stores);
+        }
+        if (stores.has(this)) {
             return;
         }
 
-        keys.add(wireKey);
-        TriggerStore.eventSubscriptionStarted.fire(this._storeName, wireKey === "" ? undefined : wireKey);
+        const firstStore = stores.size === 0;
+        stores.add(this);
+        if (firstStore) {
+            TriggerStore.eventSubscriptionStarted.fire(this._storeName, wireKey === "" ? undefined : wireKey);
+        }
     }
 
     protected override _stoppedTrackingSub(key?: string) {
@@ -104,8 +112,18 @@ export default abstract class TriggerStore<S extends object> extends StoreBase {
         }
 
         const keys = TriggerStore._storeSubs.get(this._storeName);
-        if (!keys?.has(wireKey)) {
+        if (!keys) {
             throw new Error('Got _stoppedTrackingKey without _hasAnySubscriptions: ' + this._storeName + "/" + wireKey);
+            return;
+        }
+        const stores = keys.get(wireKey);
+        if (!stores?.has(this)) {
+            throw new Error('Got _stoppedTrackingKey without _hasAnySubscriptions: ' + this._storeName + "/" + wireKey);
+            return;
+        }
+
+        stores.delete(this);
+        if (stores.size > 0) {
             return;
         }
 
