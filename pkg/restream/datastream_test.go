@@ -75,6 +75,30 @@ func TestDataStreamDispatcherRegistrationIncludesStoreName(t *testing.T) {
 	}
 }
 
+func TestDataStreamDispatcherEvaluatesMinimumAccessForEveryCheck(t *testing.T) {
+	dispatcher := NewDataStreamDispatcher()
+	minimumAccess := AccessLevel(3)
+	dispatcher.RegisterDataStreamWithMinimumAccess(
+		"SonarStore",
+		"Echogram",
+		func() AccessLevel { return minimumAccess },
+		func(context.Context, string, bool) error { return nil },
+	)
+	subscription := DataStreamSubscription{
+		StoreName:  "SonarStore",
+		StreamName: "Echogram",
+		Key:        "sonar-a",
+	}
+
+	if err := dispatcher.CheckAccess(subscription, AccessLevel(2)); err == nil {
+		t.Fatal("CheckAccess below initial minimum succeeded")
+	}
+	minimumAccess = AccessLevel(2)
+	if err := dispatcher.CheckAccess(subscription, AccessLevel(2)); err != nil {
+		t.Fatalf("CheckAccess after lowering minimum failed: %v", err)
+	}
+}
+
 func TestDataStreamSubscriptionDataPlaneIDIsStableAndUnambiguous(t *testing.T) {
 	first := DataStreamSubscription{StoreName: "ab", StreamName: "c", Key: "camera"}
 	second := DataStreamSubscription{StoreName: "a", StreamName: "bc", Key: "camera"}

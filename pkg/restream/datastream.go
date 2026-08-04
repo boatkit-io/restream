@@ -108,8 +108,8 @@ type SessionDataStreamBroker interface {
 type DataStreamHandler func(ctx context.Context, key string, subscribe bool) error
 
 type registeredDataStream struct {
-	minAccessLevel AccessLevel
-	handler        DataStreamHandler
+	minimumAccessLevel func() AccessLevel
+	handler            DataStreamHandler
 }
 
 type dataStreamRegistrationKey struct {
@@ -138,8 +138,26 @@ func (d *DataStreamDispatcher) RegisterDataStream(
 	minAccessLevel AccessLevel,
 	handler DataStreamHandler,
 ) {
+	d.RegisterDataStreamWithMinimumAccess(
+		storeName,
+		streamName,
+		func() AccessLevel { return minAccessLevel },
+		handler,
+	)
+}
+
+// RegisterDataStreamWithMinimumAccess registers one store-owned stream name
+// whose independently configured minimum access level can change at runtime.
+// The provider must be concurrency-safe and is evaluated for every access
+// check so configuration changes take effect without rebuilding dispatchers.
+func (d *DataStreamDispatcher) RegisterDataStreamWithMinimumAccess(
+	storeName string,
+	streamName string,
+	minimumAccessLevel func() AccessLevel,
+	handler DataStreamHandler,
+) {
 	if d == nil {
-		panic("RegisterDataStream called on a nil dispatcher")
+		panic("RegisterDataStreamWithMinimumAccess called on a nil dispatcher")
 	}
 	if strings.TrimSpace(storeName) == "" {
 		panic("RegisterDataStream requires a store name")
@@ -149,6 +167,9 @@ func (d *DataStreamDispatcher) RegisterDataStream(
 	}
 	if len(storeName) > 256 || len(streamName) > 256 {
 		panic("RegisterDataStream name exceeds the protocol limit")
+	}
+	if minimumAccessLevel == nil {
+		panic("RegisterDataStreamWithMinimumAccess requires an access-level provider for " + streamName)
 	}
 	if handler == nil {
 		panic("RegisterDataStream requires a handler for " + streamName)
@@ -164,8 +185,8 @@ func (d *DataStreamDispatcher) RegisterDataStream(
 		panic("Double-registration of data stream: " + storeName + "/" + streamName)
 	}
 	d.streams[registrationKey] = registeredDataStream{
-		minAccessLevel: minAccessLevel,
-		handler:        handler,
+		minimumAccessLevel: minimumAccessLevel,
+		handler:            handler,
 	}
 }
 
@@ -206,12 +227,13 @@ func (d *DataStreamDispatcher) CheckAccess(
 			subscription.StoreName,
 		)
 	}
-	if accessLevel < stream.minAccessLevel {
+	minimumAccessLevel := stream.minimumAccessLevel()
+	if accessLevel < minimumAccessLevel {
 		return fmt.Errorf(
 			"data stream %q called with insufficient access (%d < %d)",
 			subscription.StreamName,
 			accessLevel,
-			stream.minAccessLevel,
+			minimumAccessLevel,
 		)
 	}
 	return nil
