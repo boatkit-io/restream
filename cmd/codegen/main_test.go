@@ -35,11 +35,16 @@ replace github.com/boatkit-io/restream => `+repoRoot+`
 		t.Fatal(err)
 	}
 
+	if err := os.WriteFile(filepath.Join(serverDir, "sharedtypes.go"), []byte(`package main
+
+type Counter uint32
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
 	if err := os.WriteFile(filepath.Join(serverDir, "boardstorestate.go"), []byte(`package main
 
 import "time"
-
-type Counter uint32
 
 // @restream.partials
 type BoardStoreState struct {
@@ -77,6 +82,7 @@ type BoardStoreState struct {
 		"func (s *BoardStoreState) PartialForFields(fields [][]any) (restream.Partial, bool)",
 		"partialForFieldsBoard",
 		"restream.NewPartialArray[[]string]()",
+		`VarInfoPrimitive{DataType: restream.SerializationTypeUint32, MappedType: restream.Ptr("main.Counter")}`,
 		"func (s *BoardStoreStatePartial) PruneAgainst(por any) bool",
 		"hasData := false",
 		"return hasData",

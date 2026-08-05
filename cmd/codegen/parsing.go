@@ -1799,6 +1799,41 @@ func (ft *FileTracking) getEnumUnderlyingType(dt dst.Expr) dst.Expr {
 				}
 			}
 		}
+		// Ident.Obj only resolves declarations from the same source file. Search
+		// the parsed package files as well so a shared primitive type can be used by
+		// generated structs in other files in the package.
+		if ft.pt != nil {
+			for _, packageFile := range ft.pt.files {
+				if !samePackage(ft, packageFile) {
+					continue
+				}
+				for _, decl := range packageFile.f.Decls {
+					gd, ok := decl.(*dst.GenDecl)
+					if !ok || gd.Tok != token.TYPE {
+						continue
+					}
+					for _, spec := range gd.Specs {
+						ts, ok := spec.(*dst.TypeSpec)
+						if !ok || ts.Name.Name != dtt.Name {
+							continue
+						}
+						if underlying, ok := ts.Type.(*dst.Ident); ok {
+							return underlying
+						}
+					}
+				}
+			}
+		}
+		// Fall back to loaded package type information for files that were not part
+		// of the configured source directories.
+		if ft.fPackage != nil && ft.fPackage.Types != nil {
+			ti := ft.fPackage.Types.Scope().Lookup(dtt.Name)
+			if tn, ok := ti.(*types.TypeName); ok {
+				if bt, ok := tn.Type().Underlying().(*types.Basic); ok {
+					return &dst.Ident{Name: bt.Name()}
+				}
+			}
+		}
 	case *dst.SelectorExpr:
 		pkgName := dtt.X.(*dst.Ident).Name
 		pkg := ft.importLookup[pkgName]
