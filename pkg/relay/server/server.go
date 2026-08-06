@@ -19,6 +19,8 @@ const (
 	defaultRPCWriteTimeout       = 5 * time.Second
 	defaultCloseWriteTimeout     = time.Second
 	defaultMaxReadMessageBytes   = int64(64 * 1024 * 1024)
+	maxInFlightRelayRPCs         = 256
+	maxRelayRPCErrorBytes        = 4096
 	maxWebsocketCloseReasonBytes = 123
 	relayServerShutdownReason    = "relay server shutting down"
 )
@@ -40,7 +42,8 @@ type Config struct {
 
 // Server accepts device relay websocket connections.
 type Server struct {
-	config Config
+	config        Config
+	relayRPCSlots chan struct{}
 }
 
 // New creates a device relay server.
@@ -51,7 +54,10 @@ func New(config Config) *Server {
 	if config.MaxReadMessageBytes <= 0 {
 		config.MaxReadMessageBytes = defaultMaxReadMessageBytes
 	}
-	return &Server{config: config}
+	return &Server{
+		config:        config,
+		relayRPCSlots: make(chan struct{}, maxInFlightRelayRPCs),
+	}
 }
 
 // AcceptConn handles a device websocket until it disconnects or ctx is cancelled.
@@ -117,7 +123,9 @@ func (s *Server) AcceptConn(ctx context.Context, conn *gws.Conn) (retErr error) 
 	// Recovery waits for device acknowledgements, so begin it only once the
 	// packet reader below is able to deliver completion packets.
 	device.restoreActiveDataStreamSubscriptions(c)
-	return s.readPackets(c, device)
+	connectionContext, cancelConnection := context.WithCancel(ctx)
+	defer cancelConnection()
+	return s.readPackets(connectionContext, c, device)
 }
 
 func (s *Server) acceptHello(ctx context.Context, c *Connection) (*Device, error) {
@@ -168,7 +176,7 @@ func (s *Server) sendConnected(c *Connection) error {
 	return c.conn.WriteMessage(gws.BinaryMessage, connectedBytes)
 }
 
-func (s *Server) readPackets(c *Connection, device *Device) error {
+func (s *Server) readPackets(ctx context.Context, c *Connection, device *Device) error {
 	for {
 		mt, message, err := c.conn.ReadMessage()
 		if err != nil {
@@ -228,6 +236,10 @@ func (s *Server) readPackets(c *Connection, device *Device) error {
 				return fmt.Errorf("handle relay RPC response packet id %d (%d bytes): %w",
 					packet.RPCID, len(packet.Response), err)
 			}
+		case *protocol.RelayRPCCallPacket:
+			if err := s.handleRelayRPCCall(ctx, c, device, packet); err != nil {
+				return err
+			}
 		case *protocol.DataStreamSubscriptionResultPacket:
 			device.HandleDataStreamSubscriptionResult(c, packet)
 		case *protocol.CustomPacket:
@@ -243,6 +255,42 @@ func (s *Server) readPackets(c *Connection, device *Device) error {
 			return fmt.Errorf("unhandled packet type %T", packet)
 		}
 	}
+}
+
+func (s *Server) handleRelayRPCCall(
+	ctx context.Context,
+	c *Connection,
+	device *Device,
+	packet *protocol.RelayRPCCallPacket,
+) error {
+	handler := device.config.RelayRPCHandler
+	if handler == nil {
+		return c.SendRelayRPCResponse(packet.RPCID, nil, "relay RPCs are not configured")
+	}
+	select {
+	case s.relayRPCSlots <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return c.SendRelayRPCResponse(packet.RPCID, nil, "too many in-flight relay RPCs")
+	}
+
+	go func() {
+		defer func() { <-s.relayRPCSlots }()
+		response, handled, err := handler(ctx, device, c, packet.MethodName, packet.Request)
+		errorMessage := ""
+		switch {
+		case err != nil:
+			errorMessage = err.Error()
+		case !handled:
+			errorMessage = fmt.Sprintf("unhandled relay RPC %s", packet.MethodName)
+		}
+		if len(errorMessage) > maxRelayRPCErrorBytes {
+			errorMessage = errorMessage[:maxRelayRPCErrorBytes]
+		}
+		_ = c.SendRelayRPCResponse(packet.RPCID, response, errorMessage)
+	}()
+	return nil
 }
 
 // Connection represents one authenticated device websocket.
@@ -372,6 +420,19 @@ func (c *Connection) sendRPC(
 		return err
 	}
 
+	return c.sendPacket(packetBytes)
+}
+
+// SendRelayRPCResponse sends the result of a device-originated RPC.
+func (c *Connection) SendRelayRPCResponse(rpcID uint32, response []byte, errorMessage string) error {
+	packetBytes, err := protocol.EncodePacket(&protocol.RelayRPCResponsePacket{
+		RPCID:    rpcID,
+		Response: response,
+		Error:    errorMessage,
+	})
+	if err != nil {
+		return err
+	}
 	return c.sendPacket(packetBytes)
 }
 

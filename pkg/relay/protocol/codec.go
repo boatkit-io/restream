@@ -13,6 +13,7 @@ const (
 	maxUint16                                = int(^uint16(0))
 	maxUint32                                = uint64(^uint32(0))
 	onDemandStoreStreamingCapabilityKey      = "restream.on-demand-store-streaming"
+	relayRPCsCapabilityKey                   = "restream.relay-rpcs"
 	enabledConnectedPacketCapabilityMetadata = "1"
 )
 
@@ -121,6 +122,14 @@ func EncodePacket(packet Packet) ([]byte, error) {
 		if err := encodeRPCResponsePacket(w, p); err != nil {
 			return nil, err
 		}
+	case *RelayRPCCallPacket:
+		if err := encodeRelayRPCCallPacket(w, p); err != nil {
+			return nil, err
+		}
+	case *RelayRPCResponsePacket:
+		if err := encodeRelayRPCResponsePacket(w, p); err != nil {
+			return nil, err
+		}
 	case *StoreSubscriptionPacket:
 		if err := encodeStoreSubscriptionPacket(w, p); err != nil {
 			return nil, err
@@ -209,6 +218,18 @@ func DecodePacket(data []byte) (Packet, error) {
 			return nil, err
 		}
 		return packet, ensureEOF(r, "rpc response packet")
+	case KindRelayRPCCall:
+		packet, err := decodeRelayRPCCallPacket(r)
+		if err != nil {
+			return nil, err
+		}
+		return packet, ensureEOF(r, "device rpc call packet")
+	case KindRelayRPCResponse:
+		packet, err := decodeRelayRPCResponsePacket(r)
+		if err != nil {
+			return nil, err
+		}
+		return packet, ensureEOF(r, "device rpc response packet")
 	case KindStoreSubscription:
 		packet, err := decodeStoreSubscriptionPacket(r)
 		if err != nil {
@@ -274,8 +295,10 @@ func decodeConnectedPacket(r *binarystreams.Reader) (*ConnectedPacket, error) {
 	}
 	capabilities := RelayCapabilities{
 		OnDemandStoreStreaming: metadata[onDemandStoreStreamingCapabilityKey] == enabledConnectedPacketCapabilityMetadata,
+		RelayRPCs:              metadata[relayRPCsCapabilityKey] == enabledConnectedPacketCapabilityMetadata,
 	}
 	delete(metadata, onDemandStoreStreamingCapabilityKey)
+	delete(metadata, relayRPCsCapabilityKey)
 	if len(metadata) == 0 {
 		metadata = nil
 	}
@@ -287,14 +310,17 @@ func decodeConnectedPacket(r *binarystreams.Reader) (*ConnectedPacket, error) {
 }
 
 func encodeConnectedPacketMetadata(packet *ConnectedPacket) map[string]string {
-	metadata := make(map[string]string, len(packet.Metadata)+1)
+	metadata := make(map[string]string, len(packet.Metadata)+2)
 	for key, value := range packet.Metadata {
-		if key != onDemandStoreStreamingCapabilityKey {
+		if key != onDemandStoreStreamingCapabilityKey && key != relayRPCsCapabilityKey {
 			metadata[key] = value
 		}
 	}
 	if packet.Capabilities.OnDemandStoreStreaming {
 		metadata[onDemandStoreStreamingCapabilityKey] = enabledConnectedPacketCapabilityMetadata
+	}
+	if packet.Capabilities.RelayRPCs {
+		metadata[relayRPCsCapabilityKey] = enabledConnectedPacketCapabilityMetadata
 	}
 	if len(metadata) == 0 {
 		return nil
@@ -422,6 +448,51 @@ func decodeRPCResponsePacket(r *binarystreams.Reader) (*RPCResponsePacket, error
 		return nil, err
 	}
 	return &RPCResponsePacket{RPCID: rpcID, Response: response}, nil
+}
+
+func encodeRelayRPCCallPacket(w *binarystreams.Writer, packet *RelayRPCCallPacket) error {
+	if err := w.WriteUInt32(packet.RPCID); err != nil {
+		return err
+	}
+	return encodeNamedData(w, packet.MethodName, packet.Request)
+}
+
+func decodeRelayRPCCallPacket(r *binarystreams.Reader) (*RelayRPCCallPacket, error) {
+	rpcID, err := r.ReadUInt32()
+	if err != nil {
+		return nil, err
+	}
+	methodName, request, err := decodeNamedData(r)
+	if err != nil {
+		return nil, err
+	}
+	return &RelayRPCCallPacket{RPCID: rpcID, MethodName: methodName, Request: request}, nil
+}
+
+func encodeRelayRPCResponsePacket(w *binarystreams.Writer, packet *RelayRPCResponsePacket) error {
+	if err := w.WriteUInt32(packet.RPCID); err != nil {
+		return err
+	}
+	if err := writeBytes(w, packet.Response); err != nil {
+		return err
+	}
+	return writeString(w, packet.Error)
+}
+
+func decodeRelayRPCResponsePacket(r *binarystreams.Reader) (*RelayRPCResponsePacket, error) {
+	rpcID, err := r.ReadUInt32()
+	if err != nil {
+		return nil, err
+	}
+	response, err := readBytes(r)
+	if err != nil {
+		return nil, err
+	}
+	errorMessage, err := readString(r)
+	if err != nil {
+		return nil, err
+	}
+	return &RelayRPCResponsePacket{RPCID: rpcID, Response: response, Error: errorMessage}, nil
 }
 
 func encodeStoreSubscriptionPacket(w *binarystreams.Writer, packet *StoreSubscriptionPacket) error {

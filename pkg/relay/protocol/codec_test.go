@@ -77,6 +77,7 @@ func TestPacketRoundTrips(t *testing.T) {
 				ProtocolVersion: CurrentVersion,
 				Capabilities: RelayCapabilities{
 					OnDemandStoreStreaming: true,
+					RelayRPCs:              true,
 				},
 				Metadata: map[string]string{"relay": "test"},
 			},
@@ -116,6 +117,24 @@ func TestPacketRoundTrips(t *testing.T) {
 				Request:     []byte{9, 10, 11},
 			},
 			kind: KindRPCCall,
+		},
+		{
+			name: "relay rpc call",
+			in: &RelayRPCCallPacket{
+				RPCID:      44,
+				MethodName: "CloudSettings.SetName",
+				Request:    []byte{14, 15},
+			},
+			kind: KindRelayRPCCall,
+		},
+		{
+			name: "relay rpc response",
+			in: &RelayRPCResponsePacket{
+				RPCID:    44,
+				Response: []byte{16, 17},
+				Error:    "test error",
+			},
+			kind: KindRelayRPCResponse,
 		},
 		{
 			name: "rpc call with annotations",
@@ -232,6 +251,7 @@ func TestConnectedPacketCapabilitiesUseBackwardCompatibleMetadataEncoding(t *tes
 		ProtocolVersion: CurrentVersion,
 		Capabilities: RelayCapabilities{
 			OnDemandStoreStreaming: true,
+			RelayRPCs:              true,
 		},
 		Metadata: map[string]string{"relay": "test"},
 	}
@@ -251,6 +271,10 @@ func TestConnectedPacketCapabilitiesUseBackwardCompatibleMetadataEncoding(t *tes
 	if metadata[onDemandStoreStreamingCapabilityKey] != enabledConnectedPacketCapabilityMetadata {
 		t.Fatalf("legacy capability metadata = %q, want %q",
 			metadata[onDemandStoreStreamingCapabilityKey], enabledConnectedPacketCapabilityMetadata)
+	}
+	if metadata[relayRPCsCapabilityKey] != enabledConnectedPacketCapabilityMetadata {
+		t.Fatalf("relay RPC capability metadata = %q, want %q",
+			metadata[relayRPCsCapabilityKey], enabledConnectedPacketCapabilityMetadata)
 	}
 	if metadata["relay"] != "test" {
 		t.Fatalf("application metadata = %#v, want relay=test", metadata)

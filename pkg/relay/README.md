@@ -77,6 +77,14 @@ an optional packet until its peer advertises the corresponding capability.
 Receivers may ignore unknown optional packets or reject unsupported operations
 without taking the base relay offline.
 
+Applications may expose authenticated device-to-cloud mutations with relay
+RPCs. Configure `DeviceManagerConfig.RelayRPCHandler`, advertise
+`RelayCapabilities.RelayRPCs`, and call `client.Streamer.CallRelayRPC` from the
+device. The handler receives the authenticated `Device` and `Connection`, so
+applications must derive device identity from those values rather than trust
+an ID in the request payload. Calls are bounded, run outside the packet reader,
+and are cancelled when the relay connection ends.
+
 RPC call packets may carry an optional application-owned annotation map. A
 device advertises `Capabilities.RPCAnnotations` when its `client.Config`
 provides `RPCHandlerWithAnnotations`, and the streamer passes the decoded map to
@@ -159,4 +167,13 @@ manager := server.NewDeviceManager(server.DeviceManagerConfig{
 
 For relay codegen, `GetMinimumAccessLevel` must have the exact signature `GetMinimumAccessLevel() restream.AccessLevel`, and its body must be a single `return` of a compile-time integer constant or a conversion of one, for example `return restream.AccessLevel(auth.AccessLevelAdmin)`. Stores without the optional method use `restream.AccessLevelPublic`.
 
-`NewRelayStores` includes only stores annotated as `@restream.store(Name)` or `@restream.store(Name, DeviceWithRelay)`. `DeviceWithCloudImpl` stores still stream full states and partials from the device but expect a custom cloud store implementation annotated as `CloudImplOfDevice`. `DeviceWithNoRelay`, `DeviceAndCloud`, `CloudImplOfDevice`, and `CloudOnly` stores are skipped by the device relay streamer.
+`NewRelayStores` includes stores annotated as `@restream.store(Name)` or
+`@restream.store(Name, DeviceWithRelay)`, plus cloud-owned counterparts for
+`DeviceWithCloudSource` stores. A generated `CloudSourceForDevice` store accepts
+cloud-side full-state/partial mutations and streams them down to its device;
+the device-side store rejects local state mutation. A client `StorePolicy` must
+allow the store name for inbound state to arrive. `DeviceWithCloudImpl` stores
+still stream full states and partials from the device but expect a custom cloud
+store implementation annotated as `CloudImplOfDevice`. `DeviceWithNoRelay`,
+`DeviceAndCloud`, `CloudImplOfDevice`, and `CloudOnly` stores are skipped by the
+device relay streamer.

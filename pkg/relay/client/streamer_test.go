@@ -119,6 +119,102 @@ func TestRunRequiresEndpoint(t *testing.T) {
 	}
 }
 
+func TestCallRelayRPCRoundTrip(t *testing.T) {
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	s := NewStreamer(nil, nil, nil, Config{})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.handleConn(context.Background(), clientConn, Credentials{DeviceID: "device-1"})
+	}()
+	if _, _, err := serverConn.ReadMessage(); err != nil {
+		t.Fatalf("Read hello failed: %v", err)
+	}
+	connectedBytes, err := protocol.EncodePacket(&protocol.ConnectedPacket{
+		ProtocolVersion: protocol.CurrentVersion,
+		Capabilities:    protocol.RelayCapabilities{RelayRPCs: true},
+	})
+	if err != nil {
+		t.Fatalf("Encode connected failed: %v", err)
+	}
+	if err := serverConn.WriteMessage(gws.BinaryMessage, connectedBytes); err != nil {
+		t.Fatalf("Write connected failed: %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for !s.isConnected() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !s.isConnected() {
+		t.Fatal("streamer did not become connected")
+	}
+
+	type callResult struct {
+		response []byte
+		err      error
+	}
+	resultCh := make(chan callResult, 1)
+	go func() {
+		response, err := s.CallRelayRPC(context.Background(), "CloudSettings.SetName", []byte{1, 2})
+		resultCh <- callResult{response: response, err: err}
+	}()
+	_, callBytes, err := serverConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read relay RPC call failed: %v", err)
+	}
+	callRaw, err := protocol.DecodePacket(callBytes)
+	if err != nil {
+		t.Fatalf("Decode relay RPC call failed: %v", err)
+	}
+	call, ok := callRaw.(*protocol.RelayRPCCallPacket)
+	if !ok {
+		t.Fatalf("call type = %T, want *RelayRPCCallPacket", callRaw)
+	}
+	if call.MethodName != "CloudSettings.SetName" || !reflect.DeepEqual(call.Request, []byte{1, 2}) {
+		t.Fatalf("call = %#v, want CloudSettings.SetName request", call)
+	}
+	responseBytes, err := protocol.EncodePacket(&protocol.RelayRPCResponsePacket{
+		RPCID:    call.RPCID,
+		Response: []byte{3, 4},
+	})
+	if err != nil {
+		t.Fatalf("Encode relay RPC response failed: %v", err)
+	}
+	if err := serverConn.WriteMessage(gws.BinaryMessage, responseBytes); err != nil {
+		t.Fatalf("Write relay RPC response failed: %v", err)
+	}
+	select {
+	case result := <-resultCh:
+		if result.err != nil || !reflect.DeepEqual(result.response, []byte{3, 4}) {
+			t.Fatalf("CallRelayRPC = (%v, %v), want ([3 4], nil)", result.response, result.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CallRelayRPC did not return")
+	}
+
+	serverConn.Close() //nolint:errcheck // End the client read loop.
+	select {
+	case <-errCh:
+	case <-time.After(time.Second):
+		t.Fatal("streamer did not stop")
+	}
+}
+
+func TestCallRelayRPCRequiresCapability(t *testing.T) {
+	s := NewStreamer(nil, nil, nil, Config{})
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+	s.startConn(clientConn, false)
+	defer s.closeConn(clientConn)
+
+	_, err := s.CallRelayRPC(context.Background(), "CloudSettings.SetName", nil)
+	if !errors.Is(err, ErrRelayRPCUnsupported) {
+		t.Fatalf("CallRelayRPC error = %v, want ErrRelayRPCUnsupported", err)
+	}
+	serverConn.Close() //nolint:errcheck // Release the websocket pair.
+}
+
 func TestHandleConnWrapsRelayRPCPacketError(t *testing.T) {
 	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
 	defer cleanup()

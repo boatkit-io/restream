@@ -58,6 +58,10 @@ const (
 	// acknowledged form of a stream lifecycle change without altering the
 	// original optional packet's wire layout.
 	KindDataStreamSubscriptionRequest PacketKind = 13
+	// KindRelayRPCCall carries an RPC call from a device to its relay server.
+	KindRelayRPCCall PacketKind = 14
+	// KindRelayRPCResponse carries the relay server response to a device-originated RPC.
+	KindRelayRPCResponse PacketKind = 15
 )
 
 const (
@@ -126,6 +130,7 @@ type Packet interface {
 // RelayCapabilities advertises optional relay-server behavior to a connected device.
 type RelayCapabilities struct {
 	OnDemandStoreStreaming bool
+	RelayRPCs              bool
 }
 
 // ConnectedPacket acknowledges an accepted device connection.
@@ -218,6 +223,30 @@ func (*RPCCallPacket) Kind() PacketKind {
 type RPCResponsePacket struct {
 	RPCID    uint32
 	Response []byte
+}
+
+// RelayRPCCallPacket carries an RPC call from an authenticated device to its relay server.
+type RelayRPCCallPacket struct {
+	RPCID      uint32
+	MethodName string
+	Request    []byte
+}
+
+// Kind implements Packet.
+func (*RelayRPCCallPacket) Kind() PacketKind {
+	return KindRelayRPCCall
+}
+
+// RelayRPCResponsePacket carries a response to a device-originated RPC.
+type RelayRPCResponsePacket struct {
+	RPCID    uint32
+	Response []byte
+	Error    string
+}
+
+// Kind implements Packet.
+func (*RelayRPCResponsePacket) Kind() PacketKind {
+	return KindRelayRPCResponse
 }
 
 // Kind implements Packet.
@@ -330,7 +359,7 @@ func (p *RawPacket) Kind() PacketKind {
 
 // IsStandardKind reports whether kind is reserved by this protocol package.
 func IsStandardKind(kind PacketKind) bool {
-	return kind >= KindConnected && kind <= KindDataStreamSubscriptionRequest
+	return kind >= KindConnected && kind <= KindRelayRPCResponse
 }
 
 // IsApplicationKind reports whether kind is in the fixed application extension range.

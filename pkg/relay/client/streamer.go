@@ -20,6 +20,8 @@ var (
 	ErrDisconnected = errors.New("relay streamer disconnected")
 	// ErrSendQueueFull is returned when the bounded outbound send queue is full.
 	ErrSendQueueFull = errors.New("relay streamer send queue full")
+	// ErrRelayRPCUnsupported is returned when the connected relay does not advertise device-originated RPCs.
+	ErrRelayRPCUnsupported = errors.New("connected relay does not support relay RPCs")
 )
 
 const (
@@ -28,6 +30,7 @@ const (
 	maxRelayedStoreSubscriptions   = 4096
 	maxRelayedKeyedSubscriptions   = 4096
 	maxInFlightRelayFFRPCs         = 256
+	maxPendingRelayRPCs            = 4096
 	dataStreamOperationQueueSize   = 64
 	maxDataStreamResultErrorBytes  = 4096
 	dataStreamTransitionTimeout    = 30 * time.Second
@@ -43,11 +46,14 @@ type Streamer struct {
 
 	opts Config
 
-	connMutex sync.RWMutex
-	sendQueue chan outboundPacket
-	sendDone  chan struct{}
-	conn      *gws.Conn
-	shutdown  atomic.Bool
+	connMutex       sync.RWMutex
+	sendQueue       chan outboundPacket
+	sendDone        chan struct{}
+	conn            *gws.Conn
+	shutdown        atomic.Bool
+	relayRPCs       bool
+	relayRPCNextID  uint32
+	relayRPCPending map[uint32]pendingRelayRPC
 
 	gatherMutex      sync.Mutex
 	gatherTimeout    *time.Time
@@ -79,6 +85,16 @@ type Streamer struct {
 type relaySubscriptionKey struct {
 	storeName string
 	key       string
+}
+
+type pendingRelayRPC struct {
+	conn   *gws.Conn
+	result chan relayRPCResult
+}
+
+type relayRPCResult struct {
+	response []byte
+	err      error
 }
 
 type outboundPacket struct {
@@ -156,6 +172,7 @@ func NewStreamer(
 		relayStoreGeneration:         map[string]uint64{},
 		relayStoreCatchingUp:         map[string]bool{},
 		relayCatchupPartials:         map[string]restream.Partial{},
+		relayRPCPending:              map[uint32]pendingRelayRPC{},
 		dataStreamWorkers:            map[restream.DataStreamSubscription]*dataStreamWorker{},
 		ffrpcSlots:                   make(chan struct{}, maxInFlightRelayFFRPCs),
 	}
@@ -287,6 +304,101 @@ func (s *Streamer) SendKeyedEvent(
 	return s.enqueuePacket("keyed event "+storeName+"/"+eventName+"/"+key, packetBytes)
 }
 
+// CallRelayRPC invokes an application RPC on the authenticated relay server.
+func (s *Streamer) CallRelayRPC(ctx context.Context, methodName string, request []byte) ([]byte, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("relay RPC context is nil")
+	}
+	if methodName == "" {
+		return nil, fmt.Errorf("relay RPC method name is empty")
+	}
+
+	s.connMutex.Lock()
+	if s.conn == nil || s.sendQueue == nil || s.sendDone == nil {
+		s.connMutex.Unlock()
+		return nil, ErrDisconnected
+	}
+	if !s.relayRPCs {
+		s.connMutex.Unlock()
+		return nil, ErrRelayRPCUnsupported
+	}
+	if len(s.relayRPCPending) >= maxPendingRelayRPCs {
+		s.connMutex.Unlock()
+		return nil, fmt.Errorf("too many pending relay RPCs")
+	}
+	conn := s.conn
+	rpcID, err := s.nextRelayRPCIDLocked()
+	if err != nil {
+		s.connMutex.Unlock()
+		return nil, err
+	}
+	resultCh := make(chan relayRPCResult, 1)
+	s.relayRPCPending[rpcID] = pendingRelayRPC{conn: conn, result: resultCh}
+	s.connMutex.Unlock()
+
+	packetBytes, err := protocol.EncodePacket(&protocol.RelayRPCCallPacket{
+		RPCID:      rpcID,
+		MethodName: methodName,
+		Request:    request,
+	})
+	if err != nil {
+		s.removePendingRelayRPC(conn, rpcID)
+		return nil, err
+	}
+	if err := s.enqueuePacketForConn(conn, "relay RPC "+methodName, packetBytes); err != nil {
+		s.removePendingRelayRPC(conn, rpcID)
+		return nil, err
+	}
+
+	select {
+	case result := <-resultCh:
+		return result.response, result.err
+	case <-ctx.Done():
+		s.removePendingRelayRPC(conn, rpcID)
+		return nil, ctx.Err()
+	}
+}
+
+func (s *Streamer) nextRelayRPCIDLocked() (uint32, error) {
+	for attempts := 0; attempts <= len(s.relayRPCPending); attempts++ {
+		s.relayRPCNextID++
+		if s.relayRPCNextID == 0 {
+			s.relayRPCNextID++
+		}
+		if _, exists := s.relayRPCPending[s.relayRPCNextID]; !exists {
+			return s.relayRPCNextID, nil
+		}
+	}
+	return 0, fmt.Errorf("no relay RPC IDs available")
+}
+
+func (s *Streamer) removePendingRelayRPC(conn *gws.Conn, rpcID uint32) {
+	s.connMutex.Lock()
+	if pending, exists := s.relayRPCPending[rpcID]; exists && pending.conn == conn {
+		delete(s.relayRPCPending, rpcID)
+	}
+	s.connMutex.Unlock()
+}
+
+func (s *Streamer) handleRelayRPCResponse(conn *gws.Conn, packet *protocol.RelayRPCResponsePacket) {
+	s.connMutex.Lock()
+	pending, exists := s.relayRPCPending[packet.RPCID]
+	if exists && pending.conn == conn {
+		delete(s.relayRPCPending, packet.RPCID)
+	} else {
+		exists = false
+	}
+	s.connMutex.Unlock()
+	if !exists {
+		return
+	}
+	var err error
+	if packet.Error != "" {
+		err = errors.New(packet.Error)
+	}
+	pending.result <- relayRPCResult{response: packet.Response, err: err}
+}
+
 func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials Credentials) error {
 	connCtx, cancelConn := context.WithCancel(ctx)
 	conn.SetReadLimit(s.opts.MaxReadMessageBytes)
@@ -350,7 +462,7 @@ func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials C
 				return fmt.Errorf("unsupported relay protocol version: %d", packet.ProtocolVersion)
 			}
 			onDemand := s.configureOnDemandStoreStreaming(packet)
-			s.startConn(conn)
+			s.startConn(conn, packet.Capabilities.RelayRPCs)
 			s.onConnected(packet)
 			if !onDemand {
 				if err := s.sendFullStates(); err != nil {
@@ -362,6 +474,8 @@ func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials C
 				return fmt.Errorf("handle relay RPC call packet %q (%d bytes): %w",
 					packet.MethodName, len(packet.Request), err)
 			}
+		case *protocol.RelayRPCResponsePacket:
+			s.handleRelayRPCResponse(conn, packet)
 		case *protocol.FFRPCCallPacket:
 			select {
 			case s.ffrpcSlots <- struct{}{}:
@@ -1194,7 +1308,7 @@ func (s *Streamer) isConnected() bool {
 	}
 }
 
-func (s *Streamer) startConn(conn *gws.Conn) {
+func (s *Streamer) startConn(conn *gws.Conn, relayRPCs bool) {
 	sendQueue := make(chan outboundPacket, s.opts.SendQueueSize)
 	sendDone := make(chan struct{})
 
@@ -1204,6 +1318,7 @@ func (s *Streamer) startConn(conn *gws.Conn) {
 	s.conn = conn
 	s.sendQueue = sendQueue
 	s.sendDone = sendDone
+	s.relayRPCs = relayRPCs
 	s.connMutex.Unlock()
 
 	s.handleSendQueue(conn, sendQueue, sendDone)
@@ -1232,6 +1347,13 @@ func (s *Streamer) closeConn(conn *gws.Conn) {
 		s.conn = nil
 		s.sendQueue = nil
 		s.sendDone = nil
+		s.relayRPCs = false
+		for rpcID, pending := range s.relayRPCPending {
+			if pending.conn == conn {
+				delete(s.relayRPCPending, rpcID)
+				pending.result <- relayRPCResult{err: ErrDisconnected}
+			}
+		}
 	}
 	s.connMutex.Unlock()
 

@@ -284,7 +284,7 @@ func TestServerReadPacketsWrapsStorePacketError(t *testing.T) {
 	relayServer := &Server{}
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- relayServer.readPackets(NewConnection(serverConn), device)
+		errCh <- relayServer.readPackets(context.Background(), NewConnection(serverConn), device)
 	}()
 
 	fullStateBytes, err := protocol.EncodePacket(protocol.NewFullStatePacket("Security", []byte{3, 1, 1, 4}))
@@ -312,6 +312,78 @@ func TestServerReadPacketsWrapsStorePacketError(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("readPackets did not return")
+	}
+}
+
+func TestServerDispatchesAuthenticatedRelayRPC(t *testing.T) {
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	type handledRelayRPC struct {
+		deviceID string
+		method   string
+		request  []byte
+	}
+	handledCh := make(chan handledRelayRPC, 1)
+	device := NewDevice("device-1", nil, DeviceManagerConfig{
+		RelayRPCHandler: func(
+			_ context.Context,
+			device *Device,
+			_ *Connection,
+			methodName string,
+			request []byte,
+		) ([]byte, bool, error) {
+			handledCh <- handledRelayRPC{
+				deviceID: device.DeviceID,
+				method:   methodName,
+				request:  append([]byte(nil), request...),
+			}
+			return []byte{7, 8, 9}, true, nil
+		},
+	})
+	relayServer := New(Config{})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- relayServer.readPackets(context.Background(), NewConnection(serverConn), device)
+	}()
+
+	callBytes, err := protocol.EncodePacket(&protocol.RelayRPCCallPacket{
+		RPCID:      17,
+		MethodName: "CloudSettings.SetName",
+		Request:    []byte{1, 2, 3},
+	})
+	if err != nil {
+		t.Fatalf("Encode relay RPC failed: %v", err)
+	}
+	if err := clientConn.WriteMessage(gws.BinaryMessage, callBytes); err != nil {
+		t.Fatalf("Write relay RPC failed: %v", err)
+	}
+	_, responseBytes, err := clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read relay RPC response failed: %v", err)
+	}
+	responseRaw, err := protocol.DecodePacket(responseBytes)
+	if err != nil {
+		t.Fatalf("Decode relay RPC response failed: %v", err)
+	}
+	response, ok := responseRaw.(*protocol.RelayRPCResponsePacket)
+	if !ok {
+		t.Fatalf("response type = %T, want *RelayRPCResponsePacket", responseRaw)
+	}
+	if response.RPCID != 17 || !reflect.DeepEqual(response.Response, []byte{7, 8, 9}) || response.Error != "" {
+		t.Fatalf("response = %#v, want successful response for RPC 17", response)
+	}
+	handled := <-handledCh
+	if handled.deviceID != "device-1" || handled.method != "CloudSettings.SetName" ||
+		!reflect.DeepEqual(handled.request, []byte{1, 2, 3}) {
+		t.Fatalf("handler got device=%q method=%q request=%v", handled.deviceID, handled.method, handled.request)
+	}
+
+	clientConn.Close() //nolint:errcheck // End the read loop.
+	select {
+	case <-errCh:
+	case <-time.After(time.Second):
+		t.Fatal("relay read loop did not stop")
 	}
 }
 

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -30,6 +31,16 @@ type KeyedEventHandler func(
 // RPCResponseHandler handles a serialized device RPC response.
 type RPCResponseHandler func(device *Device, conn *Connection, rpcID uint32, rpcData []byte) error
 
+// RelayRPCHandler handles an RPC initiated by an authenticated device. Device identity
+// comes from the authenticated relay connection rather than the request payload.
+type RelayRPCHandler func(
+	ctx context.Context,
+	device *Device,
+	conn *Connection,
+	methodName string,
+	request []byte,
+) (response []byte, handled bool, err error)
+
 // CustomPacketHandler handles relay custom packets from a device.
 type CustomPacketHandler func(device *Device, conn *Connection, packet *protocol.CustomPacket) error
 
@@ -56,6 +67,7 @@ type DeviceManagerConfig struct {
 	EventHandler        EventHandler
 	KeyedEventHandler   KeyedEventHandler
 	RPCResponseHandler  RPCResponseHandler
+	RelayRPCHandler     RelayRPCHandler
 	CustomPacketHandler CustomPacketHandler
 	RawPacketHandler    RawPacketHandler
 	UnknownStorePolicy  UnknownStorePolicy
