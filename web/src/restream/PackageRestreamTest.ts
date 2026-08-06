@@ -313,6 +313,32 @@ export class keyedcallEvent extends EventStruct {
     }
 }
 
+export class notifyContextRequest extends FFRPCStruct {
+    public _!: Uint8Array|undefined;
+    private constructor() { super("notifyContext"); }
+
+    public static fromValues(
+        _: Uint8Array|undefined = new Uint8Array(),
+    ) {
+        const o = new notifyContextRequest();
+        o._ = _;
+        return o;
+    }
+
+    public static readonly fieldInfo: readonly FieldInfo[] = [
+        {name: "_", fieldIdx: 0, varInfo: new VarInfoArray(false, new VarInfoPrimitive(SerializationType.Uint8, "byte"))},
+    ];
+    public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
+        const o = new notifyContextRequest();
+        o._ = ReStreamDecoders.deserializeValue(r, this.fieldInfo[0].varInfo);
+        return o;
+    }
+
+    public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
+        ReStreamEncoders.serializeValue(this._, w, notifyContextRequest.fieldInfo[0].varInfo);
+    }
+}
+
 export class notifyErrorRequest extends FFRPCStruct {
     public trigger!: boolean;
     private constructor() { super("notifyError"); }

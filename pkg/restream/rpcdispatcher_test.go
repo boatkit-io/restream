@@ -145,7 +145,7 @@ func TestFFRPCCalls(t *testing.T) {
 	rpcd.RegisterFFRPCHandler("notifyContext", AccessLevelAdmin, func(ctx context.Context, _ []byte) error {
 		contextInfo, _ = RPCCallInfoFromContext(ctx)
 		return nil
-	}, reflect.TypeFor[notifyRequest]())
+	}, reflect.TypeFor[notifyContextRequest]())
 	handled, err = rpcd.FireFFRPC("notifyContext", AccessLevelAdmin, requestBytes)
 	assert.True(t, handled)
 	assert.NoError(t, err)

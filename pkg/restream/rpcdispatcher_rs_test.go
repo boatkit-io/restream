@@ -106,6 +106,66 @@ func (s *callResponse) Deserialize(r *binarystreams.Reader, _ *VarInfoStruct) er
 	return nil
 }
 
+// callRequest is a request object for the call RPC call
+type callRequest struct { //nolint:revive
+	Test int
+}
+
+// callRequestFieldInfo is the static field info for the callRequest struct
+var callRequestFieldInfo = []FieldInfo{
+	{Name: "Test", FieldIdx: 0, VarInfo: &VarInfoPrimitive{DataType: SerializationTypeInt64, MappedType: Ptr("int")}},
+}
+
+// Serialize serializes this structure to a binary writer
+func (s *callRequest) Serialize(w *binarystreams.Writer, _ *VarInfoStruct) error {
+	if err := SerializeValue(s.Test, w, callRequestFieldInfo[0].VarInfo); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Deserialize deserializes data from a binary reader into this struct
+func (s *callRequest) Deserialize(r *binarystreams.Reader, _ *VarInfoStruct) error {
+	if err := DeserializeValue(&s.Test, r, callRequestFieldInfo[0].VarInfo); err != nil {
+		return err
+	}
+	return nil
+}
+
+// callResponse is a response object for the call RPC call
+type callResponse struct { //nolint:revive
+	Result int
+	Error  *string
+}
+
+// callResponseFieldInfo is the static field info for the callResponse struct
+var callResponseFieldInfo = []FieldInfo{
+	{Name: "Result", FieldIdx: 0, VarInfo: &VarInfoPrimitive{DataType: SerializationTypeInt64, MappedType: Ptr("int")}},
+	{Name: "Error", FieldIdx: 1, VarInfo: &VarInfoPointer{NotNil: false, SubType: &VarInfoPrimitive{DataType: SerializationTypeString}}},
+}
+
+// Serialize serializes this structure to a binary writer
+func (s *callResponse) Serialize(w *binarystreams.Writer, _ *VarInfoStruct) error {
+	if err := SerializeValue(s.Result, w, callResponseFieldInfo[0].VarInfo); err != nil {
+		return err
+	}
+	if err := SerializeValue(s.Error, w, callResponseFieldInfo[1].VarInfo); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Deserialize deserializes data from a binary reader into this struct
+func (s *callResponse) Deserialize(r *binarystreams.Reader, _ *VarInfoStruct) error {
+	if err := DeserializeValue(&s.Result, r, callResponseFieldInfo[0].VarInfo); err != nil {
+		return err
+	}
+	if err := DeserializeValue(&s.Error, r, callResponseFieldInfo[1].VarInfo); err != nil {
+		return err
+	}
+	return nil
+}
+
 // call2Request is a request object for the call2 RPC call
 type call2Request struct { //nolint:revive
 	Test LatLong
@@ -247,6 +307,32 @@ func (s *notifyRequest) Serialize(w *binarystreams.Writer, _ *VarInfoStruct) err
 // Deserialize deserializes data from a binary reader into this struct
 func (s *notifyRequest) Deserialize(r *binarystreams.Reader, _ *VarInfoStruct) error {
 	if err := DeserializeValue(&s.Payload, r, notifyRequestFieldInfo[0].VarInfo); err != nil {
+		return err
+	}
+	return nil
+}
+
+// notifyContextRequest is a request object for the notifyContext FFRPC call
+type notifyContextRequest struct { //nolint:revive
+	_ []byte
+}
+
+// notifyContextRequestFieldInfo is the static field info for the notifyContextRequest struct
+var notifyContextRequestFieldInfo = []FieldInfo{
+	{Name: "_", FieldIdx: 0, VarInfo: &VarInfoArray{NotNil: false, ElemType: &VarInfoPrimitive{DataType: SerializationTypeUint8, MappedType: Ptr("byte")}}},
+}
+
+// Serialize serializes this structure to a binary writer
+func (s *notifyContextRequest) Serialize(w *binarystreams.Writer, _ *VarInfoStruct) error {
+	if err := SerializeValue(s._, w, notifyContextRequestFieldInfo[0].VarInfo); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Deserialize deserializes data from a binary reader into this struct
+func (s *notifyContextRequest) Deserialize(r *binarystreams.Reader, _ *VarInfoStruct) error {
+	if err := DeserializeValue(&s._, r, notifyContextRequestFieldInfo[0].VarInfo); err != nil {
 		return err
 	}
 	return nil
