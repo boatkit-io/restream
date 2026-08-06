@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, test, vi } from 'vitest';
 
 import TriggerStore from './TriggerStore.js';
 import BinaryReader from '../utils/BinaryReader.js';
+import { StoreUpdateMessageKind } from '../websocket/SocketHelper.js';
 import type {
     FieldInfo,
     PartialFor,
@@ -115,6 +116,34 @@ describe('TriggerStore keyed subscriptions', () => {
         expect(TriggerStore.getAllStores()).toEqual(expect.arrayContaining([first, second]));
         expect(first.getName()).toBe(first.testStoreName);
         expect(second.getName()).toBe(second.testStoreName);
+    });
+
+    test('reports readiness only after an authoritative full-state snapshot', () => {
+        const store = new TriggerStoreSpecStore(uniqueStoreName());
+        expect(store.hasReceivedFullState()).toBe(false);
+
+        TriggerStore.handleUpdateMessage({
+            time: 1,
+            kind: StoreUpdateMessageKind.Partial,
+            storeName: store.testStoreName,
+            partial: new ArrayBuffer(0),
+        });
+        expect(store.hasReceivedFullState()).toBe(false);
+
+        const callback = vi.fn(() => {
+            expect(store.hasReceivedFullState()).toBe(true);
+        });
+        const token = store.subscribe(callback);
+        TriggerStore.handleUpdateMessage({
+            time: 2,
+            kind: StoreUpdateMessageKind.Full,
+            storeName: store.testStoreName,
+            state: new ArrayBuffer(0),
+        });
+
+        expect(store.hasReceivedFullState()).toBe(true);
+        expect(callback).toHaveBeenCalledTimes(1);
+        store.unsubscribe(token);
     });
 
     test('refcounts duplicate subscriptions for the same key', () => {

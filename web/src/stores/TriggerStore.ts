@@ -31,6 +31,7 @@ export default abstract class TriggerStore<S extends object> extends StoreBase {
     protected static _storeMap: { [storeName: string]: TriggerStore<object> } = {};
 
     protected _state: S;
+    private _hasReceivedFullState = false;
 
     static eventSubscriptionStarted = new SubscribableEvent<(storeName: string, key?: string) => void>();
     static eventSubscriptionStopped = new SubscribableEvent<(storeName: string, key?: string) => void>();
@@ -79,6 +80,11 @@ export default abstract class TriggerStore<S extends object> extends StoreBase {
 
     getName(): string {
         return this._storeName;
+    }
+
+    /** Whether this store has received its first authoritative full-state snapshot. */
+    hasReceivedFullState(): boolean {
+        return this._hasReceivedFullState;
     }
 
     // Track when the app first starts caring and last stops caring about this store, for the streaming service
@@ -139,6 +145,7 @@ export default abstract class TriggerStore<S extends object> extends StoreBase {
             case StoreUpdateMessageKind.Full: {
                 const msgFull = message as StoreUpdateFullMessage;
                 this._state = this._stateType.deserialized(new BinaryReader(msgFull.state));
+                this._hasReceivedFullState = true;
                 this.trigger();
                 break;
             }
