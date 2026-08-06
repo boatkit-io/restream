@@ -1,6 +1,12 @@
 name: package release
 
 on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing Restream release tag to publish (for example, v0.19.0)
+        required: true
+        type: string
   push:
     tags:
       - "v*"
@@ -10,7 +16,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: ${{ github.repository }}-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.repository }}-${{ github.workflow }}-${{ inputs.release_tag || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -22,6 +28,16 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: |-
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Expected a stable release tag such as v0.19.0; received '$RELEASE_TAG'."
+            exit 1
+          fi
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -48,8 +64,10 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
       - name: Set package version from tag
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |-
-          npm pkg set "version=${GITHUB_REF_NAME#v}"
+          npm pkg set "version=${RELEASE_TAG#v}"
       - name: Lint
         run: pnpm run lint
       - name: Test
