@@ -89,6 +89,9 @@ type Callbacks struct {
 type Config struct {
 	Endpoint    string
 	Credentials Credentials
+	// RPCHandlerWithAnnotations receives RPC calls with optional transport
+	// annotations that remain separate from the serialized request.
+	RPCHandlerWithAnnotations restream.RPCHandlerWithAnnotationsFunc
 
 	StorePolicy StorePolicy
 	// DataStreams owns independently authorized high-bandwidth stream

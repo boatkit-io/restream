@@ -35,10 +35,11 @@ const (
 
 // Streamer streams local Restream state to a relay server.
 type Streamer struct {
-	sr    *restream.StoreRegistry
-	rpc   restream.RPCHandlerFunc
-	ffrpc restream.FFRPCHandlerFunc
-	ed    *restream.EventDispatcher
+	sr                 *restream.StoreRegistry
+	rpc                restream.RPCHandlerFunc
+	rpcWithAnnotations restream.RPCHandlerWithAnnotationsFunc
+	ffrpc              restream.FFRPCHandlerFunc
+	ed                 *restream.EventDispatcher
 
 	opts Config
 
@@ -137,10 +138,11 @@ func NewStreamer(
 	opts := applyDefaults(config)
 
 	s := &Streamer{
-		sr:    sr,
-		rpc:   rpc,
-		ffrpc: ffrpc,
-		ed:    ed,
+		sr:                 sr,
+		rpc:                rpc,
+		rpcWithAnnotations: opts.RPCHandlerWithAnnotations,
+		ffrpc:              ffrpc,
+		ed:                 ed,
 
 		opts: opts,
 
@@ -316,7 +318,8 @@ func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials C
 		Metadata: protocol.DeviceMetadataWithCapabilities(
 			credentials.Metadata,
 			protocol.DeviceCapabilities{
-				DataStreams: s.opts.DataStreams != nil && s.opts.DataStreams.HasRegistrations(),
+				DataStreams:    s.opts.DataStreams != nil && s.opts.DataStreams.HasRegistrations(),
+				RPCAnnotations: s.rpcWithAnnotations != nil,
 			},
 		),
 	})
@@ -692,10 +695,22 @@ func (s *Streamer) sendRPCResponse(rpcID uint32, resp []byte) error {
 }
 
 func (s *Streamer) handleRPCCall(packet *protocol.RPCCallPacket) error {
-	if s.rpc == nil {
+	if s.rpc == nil && s.rpcWithAnnotations == nil {
 		return fmt.Errorf("relay RPC received but no RPC handler is configured")
 	}
-	resp, handled, err := s.rpc(packet.MethodName, restream.AccessLevel(packet.AccessLevel), packet.Request)
+	var resp []byte
+	var handled bool
+	var err error
+	if s.rpcWithAnnotations != nil {
+		resp, handled, err = s.rpcWithAnnotations(
+			packet.Annotations,
+			packet.MethodName,
+			restream.AccessLevel(packet.AccessLevel),
+			packet.Request,
+		)
+	} else {
+		resp, handled, err = s.rpc(packet.MethodName, restream.AccessLevel(packet.AccessLevel), packet.Request)
+	}
 	if err != nil {
 		return err
 	}

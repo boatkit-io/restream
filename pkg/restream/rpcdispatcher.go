@@ -1,6 +1,7 @@
 package restream
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 
@@ -25,10 +26,38 @@ type rpcInfo struct {
 	ArgKinds                  []reflect.Kind
 	ArgTypes                  []reflect.Type
 	RequestType, ResponseType reflect.Type
+	HasContext                bool
 }
 
 // RPCHandlerFunc is a helper type for a function that handles an RPC call
 type RPCHandlerFunc func(name string, minAccessLevel AccessLevel, binaryData []byte) ([]byte, bool, error)
+
+// RPCHandlerWithAnnotationsFunc handles an RPC together with transport-supplied
+// key/value annotations that remain separate from its serialized request.
+type RPCHandlerWithAnnotationsFunc func(
+	annotations map[string]string,
+	name string,
+	minAccessLevel AccessLevel,
+	binaryData []byte,
+) ([]byte, bool, error)
+
+// RPCCallInfo contains trusted request metadata made available to RPC
+// callbacks that declare context.Context as their first parameter.
+type RPCCallInfo struct {
+	AccessLevel AccessLevel
+	Annotations map[string]string
+}
+
+type rpcCallInfoContextKey struct{}
+
+// RPCCallInfoFromContext returns request metadata attached by the dispatcher.
+func RPCCallInfoFromContext(ctx context.Context) (RPCCallInfo, bool) {
+	if ctx == nil {
+		return RPCCallInfo{}, false
+	}
+	info, ok := ctx.Value(rpcCallInfoContextKey{}).(RPCCallInfo)
+	return info, ok
+}
 
 // FFRPCHandlerFunc handles a fire-and-forget RPC call. The bool reports whether
 // a handler was registered; errors are only available to the receiving process
@@ -41,6 +70,7 @@ type ffrpcInfo struct {
 	ArgKinds       []reflect.Kind
 	RequestType    reflect.Type
 	ReturnsError   bool
+	HasContext     bool
 }
 
 // Dispatcher is a service/struct that handles being a centralized registration point for RPCs, since the RPCs need to fan out
@@ -93,12 +123,13 @@ func (d *RPCDispatcher) RegisterRPCHandler(name string, accessLevel AccessLevel,
 		panic(fmt.Sprintf("Function not returning an error as the last var passed to RegisterRPCHandler: %+v", tt))
 	}
 
-	pc := tt.NumIn()
+	argOffset := rpcContextArgumentOffset(tt)
+	pc := tt.NumIn() - argOffset
 	kinds := make([]reflect.Kind, pc)
 	types := make([]reflect.Type, pc)
 	for i := 0; i < pc; i++ {
-		kinds[i] = tt.In(i).Kind()
-		types[i] = tt.In(i)
+		kinds[i] = tt.In(i + argOffset).Kind()
+		types[i] = tt.In(i + argOffset)
 	}
 
 	info := rpcInfo{
@@ -109,6 +140,7 @@ func (d *RPCDispatcher) RegisterRPCHandler(name string, accessLevel AccessLevel,
 		ArgTypes:       types,
 		RequestType:    requestType,
 		ResponseType:   responseType,
+		HasContext:     argOffset == 1,
 	}
 
 	d.rpcLookup[name] = info
@@ -144,9 +176,10 @@ func (d *RPCDispatcher) RegisterFFRPCHandler(
 		panic(fmt.Sprintf("Function not returning an error passed to RegisterFFRPCHandler: %+v", tt))
 	}
 
-	argKinds := make([]reflect.Kind, tt.NumIn())
+	argOffset := rpcContextArgumentOffset(tt)
+	argKinds := make([]reflect.Kind, tt.NumIn()-argOffset)
 	for index := range argKinds {
-		argKinds[index] = tt.In(index).Kind()
+		argKinds[index] = tt.In(index + argOffset).Kind()
 	}
 	d.ffrpcLookup[name] = ffrpcInfo{
 		MinAccessLevel: accessLevel,
@@ -154,11 +187,22 @@ func (d *RPCDispatcher) RegisterFFRPCHandler(
 		ArgKinds:       argKinds,
 		RequestType:    requestType,
 		ReturnsError:   returnsError,
+		HasContext:     argOffset == 1,
 	}
 }
 
 // FireRPC is called by a client to fire an RPC to a store
 func (d *RPCDispatcher) FireRPC(name string, accessLevel AccessLevel, binaryData []byte) ([]byte, bool, error) {
+	return d.FireRPCWithAnnotations(nil, name, accessLevel, binaryData)
+}
+
+// FireRPCWithAnnotations dispatches an RPC with transport-supplied annotations.
+func (d *RPCDispatcher) FireRPCWithAnnotations(
+	annotations map[string]string,
+	name string,
+	accessLevel AccessLevel,
+	binaryData []byte,
+) ([]byte, bool, error) {
 	d.mutex.Lock()
 	rpc, exists := d.rpcLookup[name]
 	d.mutex.Unlock()
@@ -187,9 +231,16 @@ func (d *RPCDispatcher) FireRPC(name string, accessLevel AccessLevel, binaryData
 		return nil, true, err
 	}
 
-	argVs := make([]reflect.Value, numArgs)
-	for i := range argVs {
-		argVs[i] = rve.Field(i)
+	argOffset := 0
+	if rpc.HasContext {
+		argOffset = 1
+	}
+	argVs := make([]reflect.Value, numArgs+argOffset)
+	if rpc.HasContext {
+		argVs[0] = reflect.ValueOf(newRPCCallContext(accessLevel, annotations))
+	}
+	for i := range numArgs {
+		argVs[i+argOffset] = rve.Field(i)
 	}
 
 	// RPC function returns already checked in RegisterRPCHandler, so we can trust them
@@ -270,9 +321,16 @@ func (d *RPCDispatcher) FireFFRPC(name string, accessLevel AccessLevel, binaryDa
 		return true, err
 	}
 
-	argValues := make([]reflect.Value, len(ffrpc.ArgKinds))
-	for index := range argValues {
-		argValues[index] = rve.Field(index)
+	argOffset := 0
+	if ffrpc.HasContext {
+		argOffset = 1
+	}
+	argValues := make([]reflect.Value, len(ffrpc.ArgKinds)+argOffset)
+	if ffrpc.HasContext {
+		argValues[0] = reflect.ValueOf(newRPCCallContext(accessLevel, nil))
+	}
+	for index := range ffrpc.ArgKinds {
+		argValues[index+argOffset] = rve.Field(index)
 	}
 	results := ffrpc.CallbackValue.Call(argValues)
 	if ffrpc.ReturnsError && !results[0].IsNil() {
@@ -283,4 +341,18 @@ func (d *RPCDispatcher) FireFFRPC(name string, accessLevel AccessLevel, binaryDa
 		return true, err
 	}
 	return true, nil
+}
+
+func rpcContextArgumentOffset(callbackType reflect.Type) int {
+	if callbackType.NumIn() > 0 && callbackType.In(0) == reflect.TypeFor[context.Context]() {
+		return 1
+	}
+	return 0
+}
+
+func newRPCCallContext(accessLevel AccessLevel, annotations map[string]string) context.Context {
+	return context.WithValue(context.Background(), rpcCallInfoContextKey{}, RPCCallInfo{
+		AccessLevel: accessLevel,
+		Annotations: annotations,
+	})
 }

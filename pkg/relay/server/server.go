@@ -336,11 +336,37 @@ func (c *Connection) markClosed() {
 
 // SendRPC sends an RPC command to the connected device.
 func (c *Connection) SendRPC(rpcID uint32, name string, accessLevel restream.AccessLevel, binaryData []byte) error {
+	return c.sendRPC(rpcID, name, accessLevel, binaryData, nil)
+}
+
+// SendRPCWithAnnotations sends an RPC command with transport annotations to a
+// connected device that advertises support for them.
+func (c *Connection) SendRPCWithAnnotations(
+	rpcID uint32,
+	name string,
+	accessLevel restream.AccessLevel,
+	binaryData []byte,
+	annotations map[string]string,
+) error {
+	if len(annotations) > 0 && !c.Capabilities.RPCAnnotations {
+		return fmt.Errorf("connected device does not advertise RPC-annotation support")
+	}
+	return c.sendRPC(rpcID, name, accessLevel, binaryData, annotations)
+}
+
+func (c *Connection) sendRPC(
+	rpcID uint32,
+	name string,
+	accessLevel restream.AccessLevel,
+	binaryData []byte,
+	annotations map[string]string,
+) error {
 	packetBytes, err := protocol.EncodePacket(&protocol.RPCCallPacket{
 		RPCID:       rpcID,
 		MethodName:  name,
 		AccessLevel: byte(accessLevel),
 		Request:     binaryData,
+		Annotations: annotations,
 	})
 	if err != nil {
 		return err

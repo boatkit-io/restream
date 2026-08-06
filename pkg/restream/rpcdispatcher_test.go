@@ -1,6 +1,7 @@
 package restream
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"testing"
@@ -91,6 +92,30 @@ func TestCalls(t *testing.T) {
 	assert.Nil(t, resb)
 }
 
+func TestCallWithOptionalContext(t *testing.T) {
+	rpcd := NewRPCDispatcher(logrus.StandardLogger())
+
+	var calledInfo RPCCallInfo
+	rpcd.RegisterRPCHandler("call", AccessLevelViewer, func(ctx context.Context, test int) (int, error) {
+		var ok bool
+		calledInfo, ok = RPCCallInfoFromContext(ctx)
+		assert.True(t, ok)
+		return test + 1, nil
+	}, reflect.TypeFor[callRequest](), reflect.TypeFor[callResponse]())
+	requestBytes, err := SerializeToBytes(&callRequest{Test: 4}, nil)
+	assert.NoError(t, err)
+	annotations := map[string]string{"example": "value", "trace_id": "request-call"}
+
+	responseBytes, handled, err := rpcd.FireRPCWithAnnotations(annotations, "call", AccessLevelViewer, requestBytes)
+	assert.True(t, handled)
+	assert.NoError(t, err)
+	assert.Equal(t, RPCCallInfo{AccessLevel: AccessLevelViewer, Annotations: annotations}, calledInfo)
+
+	response := callResponse{}
+	assert.NoError(t, response.Deserialize(binarystreams.NewReaderFromBytes(responseBytes), nil))
+	assert.Equal(t, 5, response.Result)
+}
+
 func TestFFRPCCalls(t *testing.T) {
 	rpcd := NewRPCDispatcher(logrus.StandardLogger())
 
@@ -115,6 +140,16 @@ func TestFFRPCCalls(t *testing.T) {
 	handled, err = rpcd.FireFFRPC("missing", AccessLevelAdmin, requestBytes)
 	assert.False(t, handled)
 	assert.NoError(t, err)
+
+	var contextInfo RPCCallInfo
+	rpcd.RegisterFFRPCHandler("notifyContext", AccessLevelAdmin, func(ctx context.Context, _ []byte) error {
+		contextInfo, _ = RPCCallInfoFromContext(ctx)
+		return nil
+	}, reflect.TypeFor[notifyRequest]())
+	handled, err = rpcd.FireFFRPC("notifyContext", AccessLevelAdmin, requestBytes)
+	assert.True(t, handled)
+	assert.NoError(t, err)
+	assert.Equal(t, RPCCallInfo{AccessLevel: AccessLevelAdmin}, contextInfo)
 
 	var voidResult int
 	rpcd.RegisterFFRPCHandler("notifyVoid", AccessLevelAdmin, func(value int) {

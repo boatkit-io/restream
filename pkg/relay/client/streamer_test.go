@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -171,6 +172,80 @@ func TestHandleConnWrapsRelayRPCPacketError(t *testing.T) {
 			if !strings.Contains(err.Error(), want) {
 				t.Fatalf("handleConn error = %q, missing %q", err, want)
 			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("handleConn did not return")
+	}
+}
+
+func TestHandleConnDispatchesRPCAnnotations(t *testing.T) {
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	var received map[string]string
+	s := NewStreamer(nil, nil, nil, Config{
+		RPCHandlerWithAnnotations: func(
+			annotations map[string]string,
+			_ string,
+			_ restream.AccessLevel,
+			_ []byte,
+		) ([]byte, bool, error) {
+			received = annotations
+			return nil, true, errors.New("stop after annotations capture")
+		},
+	})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.handleConn(context.Background(), clientConn, Credentials{
+			DeviceID: "device-1",
+			AuthType: "shared-key",
+			AuthData: []byte("secret"),
+		})
+	}()
+
+	_, helloBytes, err := serverConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read hello failed: %v", err)
+	}
+	hello, err := protocol.DecodeDeviceHello(helloBytes)
+	if err != nil {
+		t.Fatalf("Decode hello failed: %v", err)
+	}
+	if !protocol.CapabilitiesFromDeviceMetadata(hello.Metadata).RPCAnnotations {
+		t.Fatal("device did not advertise RPC-annotations support")
+	}
+	connectedBytes, err := protocol.EncodePacket(&protocol.ConnectedPacket{ProtocolVersion: protocol.CurrentVersion})
+	if err != nil {
+		t.Fatalf("Encode connected failed: %v", err)
+	}
+	if err := serverConn.WriteMessage(gws.BinaryMessage, connectedBytes); err != nil {
+		t.Fatalf("Write connected failed: %v", err)
+	}
+	rpcBytes, err := protocol.EncodePacket(&protocol.RPCCallPacket{
+		RPCID:       12,
+		MethodName:  "Store.AnnotatedMethod",
+		AccessLevel: byte(restream.AccessLevelPublic),
+		Request:     []byte{4},
+		Annotations: map[string]string{
+			"example":  "value",
+			"trace_id": "request-12",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Encode RPC call failed: %v", err)
+	}
+	if err := serverConn.WriteMessage(gws.BinaryMessage, rpcBytes); err != nil {
+		t.Fatalf("Write RPC call failed: %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if err == nil || !strings.Contains(err.Error(), "stop after annotations capture") {
+			t.Fatalf("handleConn error = %v", err)
+		}
+		want := map[string]string{"example": "value", "trace_id": "request-12"}
+		if !reflect.DeepEqual(received, want) {
+			t.Fatalf("received annotations = %#v, want %#v", received, want)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("handleConn did not return")

@@ -201,6 +201,46 @@ Device/cloud relays forward these transitions to the device and carry matching e
 
 See the runnable [Keyed Events example](examples/keyedevents), including its exact-routing and refcount tests.
 
+## RPC Context and Transport Annotations
+
+RPC callbacks normally declare only their serialized request parameters. A callback that needs caller metadata may opt in by declaring `context.Context` as its first parameter:
+
+```go
+rpcd.RegisterRPCHandler(
+	"Document.Update",
+	AccessLevelAdmin,
+	func(ctx context.Context, documentID string, contents []byte) error {
+		call, ok := restream.RPCCallInfoFromContext(ctx)
+		if ok {
+			log.WithFields(logrus.Fields{
+				"callerAccessLevel": call.AccessLevel,
+				"requestID":         call.Annotations["request_id"],
+			}).Info("Document updated")
+		}
+		return documents.Update(documentID, contents)
+	},
+	reflect.TypeFor[DocumentUpdateRequest](),
+	reflect.TypeFor[DocumentUpdateResponse](),
+)
+```
+
+The context parameter is dispatcher-only. Codegen omits it from the generated Go request structure and TypeScript RPC, so adding it does not change the serialized request or require callers to supply another argument. The dispatcher constructs and passes a context only when the registered callback has the exact leading `context.Context` parameter; callbacks without it retain the existing call path. The same optional leading parameter is supported for FFRPC callbacks.
+
+`RPCCallInfo` contains the authenticated caller's `AccessLevel` and an optional `Annotations` map. Annotation keys and values are opaque to ReStream: applications define their meaning and should populate trusted identity or connection metadata only after authenticating the caller. An annotation is transport metadata, not part of the typed RPC request.
+
+Call `FireRPCWithAnnotations` when a transport has metadata to attach. Existing transports can continue to use `FireRPC`:
+
+```go
+response, handled, err := rpcd.FireRPCWithAnnotations(
+	map[string]string{"request_id": requestID},
+	methodName,
+	callerAccessLevel,
+	requestBytes,
+)
+```
+
+The device relay advertises RPC-annotation support when `relayclient.Config.RPCHandlerWithAnnotations` is configured. A cloud relay may then use `server.Connection.SendRPCWithAnnotations`; it must use the original `SendRPC` for a device whose `Capabilities.RPCAnnotations` is false. Annotations are an optional trailing field on capable relay RPC packets, while unannotated packets retain their legacy byte representation.
+
 ## Fire-and-Forget RPCs
 
 FFRPCs are typed client-to-server calls for data whose caller does not need an acknowledgement. They use the same generated request encoding and access checks as normal RPCs, but their websocket and relay envelopes have no call ID. The TypeScript client creates no promise or pending-call entry, and the receiving Go transport dispatches the handler in a goroutine without emitting a response.

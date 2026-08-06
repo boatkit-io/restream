@@ -56,6 +56,27 @@ func TestAddSocketHandlersRejectsInvalidStoreDeliveryMode(t *testing.T) {
 	}
 }
 
+func TestUpdateSessionConfigRefreshesRPCHandler(t *testing.T) {
+	oldCalled := false
+	newCalled := false
+	tracker := newSocketTracker(socketTrackerConfig{rpch: func(string, AccessLevel, []byte) ([]byte, bool, error) {
+		oldCalled = true
+		return nil, true, nil
+	}})
+	tracker.updateSessionConfig(socketTrackerConfig{rpch: func(string, AccessLevel, []byte) ([]byte, bool, error) {
+		newCalled = true
+		return nil, true, nil
+	}}, ViewerSessionIdentity{})
+
+	_, _, err := tracker.lookupRPCHandler()("Test.Call", AccessLevelPublic, nil)
+	if err != nil {
+		t.Fatalf("refreshed RPC handler failed: %v", err)
+	}
+	if oldCalled || !newCalled {
+		t.Fatalf("RPC handlers called: old=%t new=%t", oldCalled, newCalled)
+	}
+}
+
 type viewerSocketTestState struct {
 	Values             map[string]int
 	Other              int

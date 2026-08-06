@@ -43,6 +43,28 @@ func TestDeviceHelloRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRPCCallWithoutAnnotationsKeepsLegacyWireShape(t *testing.T) {
+	encoded, err := EncodePacket(&RPCCallPacket{
+		RPCID:       42,
+		MethodName:  "M",
+		AccessLevel: 3,
+		Request:     []byte{9, 10},
+	})
+	if err != nil {
+		t.Fatalf("EncodePacket failed: %v", err)
+	}
+	want := []byte{
+		byte(KindRPCCall),
+		42, 0, 0, 0,
+		1, 0, 'M',
+		3,
+		2, 0, 0, 0, 9, 10,
+	}
+	if !bytes.Equal(encoded, want) {
+		t.Fatalf("legacy RPC encoding = %v, want %v", encoded, want)
+	}
+}
+
 func TestPacketRoundTrips(t *testing.T) {
 	tests := []struct {
 		name string
@@ -92,6 +114,20 @@ func TestPacketRoundTrips(t *testing.T) {
 				MethodName:  "BoardStore.PlaceToken",
 				AccessLevel: 3,
 				Request:     []byte{9, 10, 11},
+			},
+			kind: KindRPCCall,
+		},
+		{
+			name: "rpc call with annotations",
+			in: &RPCCallPacket{
+				RPCID:       43,
+				MethodName:  "Store.AnnotatedMethod",
+				AccessLevel: 3,
+				Request:     []byte{12, 13},
+				Annotations: map[string]string{
+					"example":  "value",
+					"trace_id": "request-43",
+				},
 			},
 			kind: KindRPCCall,
 		},
@@ -236,7 +272,7 @@ func TestConnectedPacketCapabilitiesUseBackwardCompatibleMetadataEncoding(t *tes
 func TestDeviceCapabilitiesUseHelloMetadataWithoutChangingBaseVersion(t *testing.T) {
 	metadata := DeviceMetadataWithCapabilities(
 		map[string]string{"app": "goatkit"},
-		DeviceCapabilities{DataStreams: true},
+		DeviceCapabilities{DataStreams: true, RPCAnnotations: true},
 	)
 	if metadata[DeviceDataStreamsCapabilityMetadataKey] != enabledCapabilityMetadataValue {
 		t.Fatalf("capability metadata = %#v", metadata)
@@ -244,8 +280,11 @@ func TestDeviceCapabilitiesUseHelloMetadataWithoutChangingBaseVersion(t *testing
 	if got := CapabilitiesFromDeviceMetadata(metadata); !got.DataStreams {
 		t.Fatal("data-stream capability did not round trip")
 	}
+	if got := CapabilitiesFromDeviceMetadata(metadata); !got.RPCAnnotations {
+		t.Fatal("RPC-annotations capability did not round trip")
+	}
 	if CurrentVersion != 8 {
-		t.Fatalf("optional data-stream capability changed base protocol version to %d", CurrentVersion)
+		t.Fatalf("optional capabilities changed base protocol version to %d", CurrentVersion)
 	}
 }
 

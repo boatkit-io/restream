@@ -748,6 +748,7 @@ func (st *socketTracker) updateSessionConfig(
 ) {
 	st.accessMutex.Lock()
 	st.accessLookup = config.accessLookup
+	st.rpch = config.rpch
 	st.sessionIdentity = identity
 	st.accessMutex.Unlock()
 }
@@ -1298,6 +1299,13 @@ func (st *socketTracker) lookupAccessLevel() (AccessLevel, error) {
 		return AccessLevelPublic, nil
 	}
 	return lookup()
+}
+
+func (st *socketTracker) lookupRPCHandler() RPCHandlerFunc {
+	st.accessMutex.RLock()
+	handler := st.rpch
+	st.accessMutex.RUnlock()
+	return handler
 }
 
 func (st *socketTracker) removeTrackedStoreSubscription(storeName string, key string) {
@@ -2252,7 +2260,8 @@ func (st *socketTracker) KeyedEventCallback(
 
 // onRPCCall is a helper that is called when an RPC call message is received
 func (st *socketTracker) onRPCCall(params ...any) {
-	if st.rpch == nil {
+	rpch := st.lookupRPCHandler()
+	if rpch == nil {
 		st.log.Errorf("RPCCall received but no RPCHandlerFunc was provided")
 		st.disconnect()
 		return
@@ -2298,7 +2307,7 @@ func (st *socketTracker) onRPCCall(params ...any) {
 			return
 		}
 
-		respBytes, handled, err := st.rpch(rpcMsg.MethodName, userAccessLevel, requestBytes)
+		respBytes, handled, err := rpch(rpcMsg.MethodName, userAccessLevel, requestBytes)
 		var errObj *RPCCallError
 		if err != nil {
 			st.log.WithField("rpcName", rpcMsg.MethodName).Errorf("Error handling RPC call: %+v", err)

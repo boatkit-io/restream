@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -182,6 +183,60 @@ func TestConnectionSendRPCWritesCallPacket(t *testing.T) {
 	}
 	if string(packet.Request) != string([]byte{7, 8, 9}) {
 		t.Fatalf("RPC request = %v, want [7 8 9]", packet.Request)
+	}
+}
+
+func TestConnectionSendRPCWithAnnotationsWritesExtendedPacket(t *testing.T) {
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	conn := NewConnection(serverConn)
+	conn.Capabilities.RPCAnnotations = true
+	annotations := map[string]string{"example": "value", "trace_id": "request-13"}
+	if err := conn.SendRPCWithAnnotations(
+		13,
+		"Store.AnnotatedMethod",
+		restream.AccessLevel(3),
+		[]byte{7, 8, 9},
+		annotations,
+	); err != nil {
+		t.Fatalf("SendRPCWithAnnotations failed: %v", err)
+	}
+
+	messageType, message, err := clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read RPC failed: %v", err)
+	}
+	if messageType != gws.BinaryMessage {
+		t.Fatalf("message type = %d, want BinaryMessage", messageType)
+	}
+	packetRaw, err := protocol.DecodePacket(message)
+	if err != nil {
+		t.Fatalf("Decode RPC failed: %v", err)
+	}
+	packet, ok := packetRaw.(*protocol.RPCCallPacket)
+	if !ok {
+		t.Fatalf("RPC packet type = %T, want *RPCCallPacket", packetRaw)
+	}
+	if packet.RPCID != 13 || packet.MethodName != "Store.AnnotatedMethod" || packet.AccessLevel != 3 {
+		t.Fatalf("RPC packet = %+v, want id=13 method=Store.AnnotatedMethod access=3", packet)
+	}
+	if !reflect.DeepEqual(packet.Annotations, annotations) {
+		t.Fatalf("RPC annotations = %#v, want %#v", packet.Annotations, annotations)
+	}
+}
+
+func TestConnectionSendRPCRejectsAnnotationsWithoutCapability(t *testing.T) {
+	conn := NewConnection(nil)
+	err := conn.SendRPCWithAnnotations(
+		13,
+		"Store.AnnotatedMethod",
+		restream.AccessLevel(3),
+		[]byte{7, 8, 9},
+		map[string]string{"example": "value"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "does not advertise RPC-annotation support") {
+		t.Fatalf("SendRPC error = %v", err)
 	}
 }
 

@@ -335,6 +335,7 @@ go 1.26.2
 	if err := os.WriteFile(filepath.Join(serverDir, "boardstore.go"), []byte(`package main
 
 import (
+	stdcontext "context"
 	"reflect"
 )
 
@@ -343,11 +344,15 @@ var _ = reflect.TypeFor[int]
 type testDispatcher struct{}
 
 func (*testDispatcher) RegisterRPCHandler(string, int, any, any, any) {}
+func (*testDispatcher) RegisterFFRPCHandler(string, int, any, any) {}
 
 func Register(rpcd *testDispatcher) {
-	rpcd.RegisterRPCHandler("PlaceToken", 1, func(x, y int) error {
+	rpcd.RegisterRPCHandler("PlaceToken", 1, func(_ stdcontext.Context, x, y int) error {
 		return nil
 	}, nil, nil)
+	rpcd.RegisterFFRPCHandler("Notify", 1, func(_ stdcontext.Context, payload []byte) error {
+		return nil
+	}, nil)
 }
 `), 0644); err != nil {
 		t.Fatal(err)
@@ -374,6 +379,8 @@ func Register(rpcd *testDispatcher) {
 	for _, expected := range []string{
 		"X int",
 		"Y int",
+		"type NotifyRequest struct",
+		"Payload []byte",
 		`{Name: "X", FieldIdx: 0, VarInfo: &restream.VarInfoPrimitive{DataType: restream.SerializationTypeInt64, MappedType: restream.Ptr("int")}}`,
 		`{Name: "Y", FieldIdx: 1, VarInfo: &restream.VarInfoPrimitive{DataType: restream.SerializationTypeInt64, MappedType: restream.Ptr("int")}}`,
 		"restream.SerializeValue(s.Y, w, PlaceTokenRequestFieldInfo[1].VarInfo)",
@@ -382,6 +389,9 @@ func Register(rpcd *testDispatcher) {
 		if !strings.Contains(got, expected) {
 			t.Fatalf("generated RPC request missing expected %q:\n%s", expected, got)
 		}
+	}
+	if strings.Contains(got, "Context") {
+		t.Fatalf("generated RPC request unexpectedly contains context.Context:\n%s", got)
 	}
 }
 

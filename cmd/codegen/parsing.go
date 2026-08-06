@@ -1166,6 +1166,7 @@ func (ft *FileTracking) parseFuncDecls() error { //nolint:gocyclo,funlen
 
 			ftp := ftt.Params
 			ftr := ftt.Results
+			wireParams := ft.rpcWireParams(ftp)
 			if isFFRPC {
 				if ftr != nil && len(ftr.List) > 1 {
 					return fmt.Errorf("FFRPC handler for %s has %d return values", rpcn, len(ftr.List))
@@ -1179,7 +1180,7 @@ func (ft *FileTracking) parseFuncDecls() error { //nolint:gocyclo,funlen
 
 				fmt.Printf("Building FFRPC handler for: %s\n", rpcn)
 
-				reqFields, err := ft.genParamFieldInfo(ftp.List)
+				reqFields, err := ft.genParamFieldInfo(wireParams)
 				if err != nil {
 					return err
 				}
@@ -1226,7 +1227,7 @@ func (ft *FileTracking) parseFuncDecls() error { //nolint:gocyclo,funlen
 
 			fmt.Printf("Building RPC handlers for: %s\n", rpcn)
 
-			reqFields, err := ft.genParamFieldInfo(ftp.List)
+			reqFields, err := ft.genParamFieldInfo(wireParams)
 			if err != nil {
 				return err
 			}
@@ -1273,6 +1274,32 @@ func (ft *FileTracking) parseFuncDecls() error { //nolint:gocyclo,funlen
 	}
 
 	return nil
+}
+
+func (ft *FileTracking) rpcWireParams(params *dst.FieldList) []*dst.Field {
+	if params == nil || len(params.List) == 0 || !ft.isRPCContextParam(params.List[0]) {
+		if params == nil {
+			return nil
+		}
+		return params.List
+	}
+	return params.List[1:]
+}
+
+func (ft *FileTracking) isRPCContextParam(field *dst.Field) bool {
+	if len(field.Names) > 1 {
+		return false
+	}
+	selector, ok := field.Type.(*dst.SelectorExpr)
+	if !ok || selector.Sel.Name != "Context" {
+		return false
+	}
+	packageName, ok := selector.X.(*dst.Ident)
+	if !ok {
+		return false
+	}
+	contextPackage := ft.importLookup[packageName.Name]
+	return contextPackage != nil && contextPackage.PkgPath == "context"
 }
 
 func (ft *FileTracking) minimumAccessLevelExprForStore(storeTypeName string) (string, error) {

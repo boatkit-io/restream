@@ -15,7 +15,10 @@ const (
 	// DeviceDataStreamsCapabilityMetadataKey advertises support for asynchronous
 	// data-stream subscription packets and completion results.
 	DeviceDataStreamsCapabilityMetadataKey = "restream.capability.data-streams"
-	enabledCapabilityMetadataValue         = "1"
+	// DeviceRPCAnnotationsCapabilityMetadataKey advertises support for optional
+	// key/value annotations appended to RPC call packets.
+	DeviceRPCAnnotationsCapabilityMetadataKey = "restream.capability.rpc-annotations"
+	enabledCapabilityMetadataValue            = "1"
 )
 
 // PacketKind identifies the type of a relay packet.
@@ -78,14 +81,16 @@ type DeviceHello struct {
 // DeviceCapabilities are optional extensions advertised in DeviceHello
 // metadata without changing the base protocol version.
 type DeviceCapabilities struct {
-	DataStreams bool
+	DataStreams    bool
+	RPCAnnotations bool
 }
 
 // CapabilitiesFromDeviceMetadata decodes Restream-reserved device capability
 // keys while leaving application metadata opaque.
 func CapabilitiesFromDeviceMetadata(metadata map[string]string) DeviceCapabilities {
 	return DeviceCapabilities{
-		DataStreams: metadata[DeviceDataStreamsCapabilityMetadataKey] == enabledCapabilityMetadataValue,
+		DataStreams:    metadata[DeviceDataStreamsCapabilityMetadataKey] == enabledCapabilityMetadataValue,
+		RPCAnnotations: metadata[DeviceRPCAnnotationsCapabilityMetadataKey] == enabledCapabilityMetadataValue,
 	}
 }
 
@@ -95,14 +100,17 @@ func DeviceMetadataWithCapabilities(
 	metadata map[string]string,
 	capabilities DeviceCapabilities,
 ) map[string]string {
-	ret := make(map[string]string, len(metadata)+1)
+	ret := make(map[string]string, len(metadata)+2)
 	for key, value := range metadata {
-		if key != DeviceDataStreamsCapabilityMetadataKey {
+		if key != DeviceDataStreamsCapabilityMetadataKey && key != DeviceRPCAnnotationsCapabilityMetadataKey {
 			ret[key] = value
 		}
 	}
 	if capabilities.DataStreams {
 		ret[DeviceDataStreamsCapabilityMetadataKey] = enabledCapabilityMetadataValue
+	}
+	if capabilities.RPCAnnotations {
+		ret[DeviceRPCAnnotationsCapabilityMetadataKey] = enabledCapabilityMetadataValue
 	}
 	if len(ret) == 0 {
 		return nil
@@ -185,6 +193,7 @@ type RPCCallPacket struct {
 	MethodName  string
 	AccessLevel byte
 	Request     []byte
+	Annotations map[string]string
 }
 
 // FFRPCCallPacket carries an FFRPC call from the relay server to the device

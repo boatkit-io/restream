@@ -77,6 +77,16 @@ an optional packet until its peer advertises the corresponding capability.
 Receivers may ignore unknown optional packets or reject unsupported operations
 without taking the base relay offline.
 
+RPC call packets may carry an optional application-owned annotation map. A
+device advertises `Capabilities.RPCAnnotations` when its `client.Config`
+provides `RPCHandlerWithAnnotations`, and the streamer passes the decoded map to
+that handler separately from the serialized RPC request. Cloud code must check
+the capability before calling `Connection.SendRPCWithAnnotations`; use
+`Connection.SendRPC` for older devices. The unannotated encoding remains byte
+compatible with the legacy packet shape. See [RPC Context and Transport
+Annotations](../../README.md#rpc-context-and-transport-annotations) for
+dispatcher callback usage.
+
 Restream bounds state retained per viewer connection (subscriptions, catch-up
 buffers, data leases, and in-flight RPC/FFRPC work) and bounds each device relay
 websocket message. The application that creates the Socket.IO server must also
