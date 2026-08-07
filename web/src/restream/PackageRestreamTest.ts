@@ -197,6 +197,66 @@ export class call3Response {
     ];
 }
 
+export class call5Request extends RPCStruct<call5Response,number> {
+    public test!: number;
+    private constructor() { super("call5", call5Response); }
+
+    public static fromValues(
+        test: number = 0,
+    ) {
+        const o = new call5Request();
+        o.test = test;
+        return o;
+    }
+
+    public static readonly fieldInfo: readonly FieldInfo[] = [
+        {name: "Test", fieldIdx: 0, varInfo: new VarInfoPrimitive(SerializationType.Int64, "int")},
+    ];
+    public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
+        const o = new call5Request();
+        o.test = ReStreamDecoders.deserializeValue(r, this.fieldInfo[0].varInfo);
+        return o;
+    }
+
+    public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
+        ReStreamEncoders.serializeValue(this.test, w, call5Request.fieldInfo[0].varInfo);
+    }
+}
+
+export class call5Response {
+    public result!: number;
+    public error!: string|undefined;
+
+    private constructor() {}
+
+    public static fromValues(
+        result: number = 0,
+        error: string|undefined = undefined,
+    ) {
+        const o = new call5Response();
+        o.result = result;
+        o.error = error;
+        return o;
+    }
+
+    public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
+        const o = new call5Response();
+        o.result = ReStreamDecoders.deserializeValue(r, this.fieldInfo[0].varInfo);
+        o.error = ReStreamDecoders.deserializeValue(r, this.fieldInfo[1].varInfo);
+        return o;
+    }
+
+    public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
+        ReStreamEncoders.serializeValue(this.result, w, call5Response.fieldInfo[0].varInfo);
+        ReStreamEncoders.serializeValue(this.error, w, call5Response.fieldInfo[1].varInfo);
+    }
+
+    public static readonly fieldInfo: readonly FieldInfo[] = [
+        {name: "Result", fieldIdx: 0, varInfo: new VarInfoPrimitive(SerializationType.Int64, "int")},
+        {name: "Error", fieldIdx: 1, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.String))},
+    ];
+}
+
 export class callEvent extends EventStruct {
     public test!: number;
 
@@ -314,28 +374,28 @@ export class keyedcallEvent extends EventStruct {
 }
 
 export class notifyContextRequest extends FFRPCStruct {
-    public _!: Uint8Array|undefined;
+    public someBytes!: Uint8Array|undefined;
     private constructor() { super("notifyContext"); }
 
     public static fromValues(
-        _: Uint8Array|undefined = new Uint8Array(),
+        someBytes: Uint8Array|undefined = new Uint8Array(),
     ) {
         const o = new notifyContextRequest();
-        o._ = _;
+        o.someBytes = someBytes;
         return o;
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "_", fieldIdx: 0, varInfo: new VarInfoArray(false, new VarInfoPrimitive(SerializationType.Uint8, "byte"))},
+        {name: "SomeBytes", fieldIdx: 0, varInfo: new VarInfoArray(false, new VarInfoPrimitive(SerializationType.Uint8, "byte"))},
     ];
     public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
         const o = new notifyContextRequest();
-        o._ = ReStreamDecoders.deserializeValue(r, this.fieldInfo[0].varInfo);
+        o.someBytes = ReStreamDecoders.deserializeValue(r, this.fieldInfo[0].varInfo);
         return o;
     }
 
     public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
-        ReStreamEncoders.serializeValue(this._, w, notifyContextRequest.fieldInfo[0].varInfo);
+        ReStreamEncoders.serializeValue(this.someBytes, w, notifyContextRequest.fieldInfo[0].varInfo);
     }
 }
 

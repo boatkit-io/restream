@@ -96,22 +96,22 @@ func TestCallWithOptionalContext(t *testing.T) {
 	rpcd := NewRPCDispatcher(logrus.StandardLogger())
 
 	var calledInfo RPCCallInfo
-	rpcd.RegisterRPCHandler("call", AccessLevelViewer, func(ctx context.Context, test int) (int, error) {
+	rpcd.RegisterRPCHandler("call5", AccessLevelViewer, func(ctx context.Context, test int) (int, error) {
 		var ok bool
 		calledInfo, ok = RPCCallInfoFromContext(ctx)
 		assert.True(t, ok)
 		return test + 1, nil
-	}, reflect.TypeFor[callRequest](), reflect.TypeFor[callResponse]())
-	requestBytes, err := SerializeToBytes(&callRequest{Test: 4}, nil)
+	}, reflect.TypeFor[call5Request](), reflect.TypeFor[call5Response]())
+	requestBytes, err := SerializeToBytes(&call5Request{Test: 4}, nil)
 	assert.NoError(t, err)
 	annotations := map[string]string{"example": "value", "trace_id": "request-call"}
 
-	responseBytes, handled, err := rpcd.FireRPCWithAnnotations(annotations, "call", AccessLevelViewer, requestBytes)
+	responseBytes, handled, err := rpcd.FireRPCWithAnnotations(annotations, "call5", AccessLevelViewer, requestBytes)
 	assert.True(t, handled)
 	assert.NoError(t, err)
 	assert.Equal(t, RPCCallInfo{AccessLevel: AccessLevelViewer, Annotations: annotations}, calledInfo)
 
-	response := callResponse{}
+	response := call5Response{}
 	assert.NoError(t, response.Deserialize(binarystreams.NewReaderFromBytes(responseBytes), nil))
 	assert.Equal(t, 5, response.Result)
 }
@@ -142,7 +142,7 @@ func TestFFRPCCalls(t *testing.T) {
 	assert.NoError(t, err)
 
 	var contextInfo RPCCallInfo
-	rpcd.RegisterFFRPCHandler("notifyContext", AccessLevelAdmin, func(ctx context.Context, _ []byte) error {
+	rpcd.RegisterFFRPCHandler("notifyContext", AccessLevelAdmin, func(ctx context.Context, someBytes []byte) error {
 		contextInfo, _ = RPCCallInfoFromContext(ctx)
 		return nil
 	}, reflect.TypeFor[notifyContextRequest]())
