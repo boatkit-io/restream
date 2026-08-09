@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/boatkit-io/tugboat/pkg/subscribableevent"
 	"github.com/samber/lo"
@@ -21,6 +22,7 @@ type StoreRegistry struct {
 	partialApplyCallbacks subscribableevent.Event[PartialCallbackFunc]
 	fullStateCallbacks    subscribableevent.Event[FullStateCallbackFunc]
 	subscriptionCallbacks subscribableevent.Event[StoreSubscriptionCallbackFunc]
+	now                   func() time.Time
 }
 
 // StoreInfo holds info about a store for the StoreRegistry
@@ -34,6 +36,19 @@ type StoreInfo struct {
 	KeySubCallbacks   KeySubscriptionAwareStore
 	ActiveSubCount    int
 	ActiveKeySubCount map[string]int
+	keyActivity       map[string]StoreSubscriptionActivity
+}
+
+// StoreSubscriptionActivity describes the lifetime and most recent matching
+// state update for one active store subscription key. Activity is reset when
+// the key's aggregate reference count transitions from zero to one, when its
+// upstream generation is explicitly reset, and removed when it returns to zero.
+type StoreSubscriptionActivity struct {
+	ReferenceCount  int
+	StartedAt       time.Time
+	LastUpdateAt    time.Time
+	LastFullStateAt time.Time
+	LastPartialAt   time.Time
 }
 
 // ErrInsufficientStoreAccess is returned when a caller's access level is below a store's minimum.
@@ -84,6 +99,7 @@ func NewStoreRegistry(storeList []Store) (*StoreRegistry, error) {
 		partialApplyCallbacks: subscribableevent.NewEvent[PartialCallbackFunc](),
 		fullStateCallbacks:    subscribableevent.NewEvent[FullStateCallbackFunc](),
 		subscriptionCallbacks: subscribableevent.NewEvent[StoreSubscriptionCallbackFunc](),
+		now:                   time.Now,
 	}
 
 	for _, s := range storeList {
@@ -156,6 +172,7 @@ func (s *StoreRegistry) UnsubscribeFromStoreSubscriptions(sid subscribableevent.
 
 // PartialCallback is a callback for any Partial application for all storedatas in the SDR
 func (s *StoreRegistry) PartialCallback(storeName string, fields [][]any, partial Partial) {
+	s.recordPartialActivity(storeName, fields)
 	s.partialApplyCallbacks.Fire(storeName, fields, partial)
 }
 
@@ -273,13 +290,20 @@ func (s *StoreRegistry) ListeningToStoreKey(storeName string, key string, access
 	if si.ActiveKeySubCount == nil {
 		si.ActiveKeySubCount = map[string]int{}
 	}
+	if si.keyActivity == nil {
+		si.keyActivity = map[string]StoreSubscriptionActivity{}
+	}
 	si.ActiveKeySubCount[key]++
 	if si.ActiveKeySubCount[key] == 1 {
 		keyStarted = true
+		si.keyActivity[key] = StoreSubscriptionActivity{StartedAt: s.now()}
 		if si.KeySubCallbacks != nil {
 			keySubCallbacks = si.KeySubCallbacks
 		}
 	}
+	activity := si.keyActivity[key]
+	activity.ReferenceCount = si.ActiveKeySubCount[key]
+	si.keyActivity[key] = activity
 	if si.ActiveSubCount == 1 && si.SubAwareCallbacks != nil {
 		subAwareCallbacks = si.SubAwareCallbacks
 	}
@@ -332,10 +356,15 @@ func (s *StoreRegistry) StopListeningToStoreKey(storeName string, key string) er
 	si.ActiveKeySubCount[key]--
 	if si.ActiveKeySubCount[key] == 0 {
 		delete(si.ActiveKeySubCount, key)
+		delete(si.keyActivity, key)
 		keyEnded = true
 		if si.KeySubCallbacks != nil {
 			keySubCallbacks = si.KeySubCallbacks
 		}
+	} else {
+		activity := si.keyActivity[key]
+		activity.ReferenceCount = si.ActiveKeySubCount[key]
+		si.keyActivity[key] = activity
 	}
 	if si.ActiveSubCount == 0 && si.SubAwareCallbacks != nil {
 		subAwareCallbacks = si.SubAwareCallbacks
@@ -375,6 +404,51 @@ func (s *StoreRegistry) GetActiveStoreSubscriptionKeys(storeName string) ([]stri
 	}
 	sort.Strings(keys)
 	return keys, nil
+}
+
+// GetStoreSubscriptionActivity returns activity for an active store/key
+// subscription. The boolean is false when the key currently has no listeners.
+func (s *StoreRegistry) GetStoreSubscriptionActivity(
+	storeName string,
+	key string,
+) (StoreSubscriptionActivity, bool, error) {
+	s.subscriptionMutex.Lock()
+	defer s.subscriptionMutex.Unlock()
+
+	si, has := s.storeMap[storeName]
+	if !has {
+		return StoreSubscriptionActivity{}, false,
+			fmt.Errorf("no store found (%s) in GetStoreSubscriptionActivity", storeName)
+	}
+	activity, active := si.keyActivity[key]
+	if !active || activity.ReferenceCount <= 0 {
+		return StoreSubscriptionActivity{}, false, nil
+	}
+	return activity, true, nil
+}
+
+// ResetStoreSubscriptionActivity starts a new upstream state generation for
+// every active key on one store without changing listener reference counts.
+// Relay consumers should call this before exposing a replacement upstream
+// connection so cached state is not treated as current until that connection
+// sends a full state or matching partial.
+func (s *StoreRegistry) ResetStoreSubscriptionActivity(storeName string) error {
+	s.subscriptionMutex.Lock()
+	defer s.subscriptionMutex.Unlock()
+
+	si, has := s.storeMap[storeName]
+	if !has {
+		return fmt.Errorf("no store found (%s) in ResetStoreSubscriptionActivity", storeName)
+	}
+	now := s.now()
+	for key, activity := range si.keyActivity {
+		activity.StartedAt = now
+		activity.LastUpdateAt = time.Time{}
+		activity.LastFullStateAt = time.Time{}
+		activity.LastPartialAt = time.Time{}
+		si.keyActivity[key] = activity
+	}
+	return nil
 }
 
 // CheckStoreAccess verifies that accessLevel is enough to read or subscribe to storeName.
@@ -460,6 +534,7 @@ func (s *StoreRegistry) SetFullStateToStore(storeName string, stateBytes []byte)
 	if err := si.StoreData.DecodeAndSetFullState(stateBytes); err != nil {
 		return err
 	}
+	s.recordFullStateActivity(storeName)
 	s.fullStateCallbacks.Fire(storeName, append([]byte(nil), stateBytes...))
 	return nil
 }
@@ -471,6 +546,54 @@ func (s *StoreRegistry) ApplyPartialToStore(storeName string, partialBytes []byt
 		return fmt.Errorf("no store found (%s) in ApplyPartialToStore", storeName)
 	}
 	return si.StoreData.DecodeAndApplyPartial(partialBytes)
+}
+
+func (s *StoreRegistry) recordFullStateActivity(storeName string) {
+	s.subscriptionMutex.Lock()
+	defer s.subscriptionMutex.Unlock()
+
+	si := s.storeMap[storeName]
+	if si == nil || len(si.keyActivity) == 0 {
+		return
+	}
+	now := s.now()
+	for key, activity := range si.keyActivity {
+		activity.LastUpdateAt = now
+		activity.LastFullStateAt = now
+		si.keyActivity[key] = activity
+	}
+}
+
+func (s *StoreRegistry) recordPartialActivity(storeName string, fields [][]any) {
+	s.subscriptionMutex.Lock()
+	defer s.subscriptionMutex.Unlock()
+
+	si := s.storeMap[storeName]
+	if si == nil || len(si.keyActivity) == 0 {
+		return
+	}
+	now := s.now()
+	for key, activity := range si.keyActivity {
+		subscribedField := FieldPathFromSubscriptionKey(key)
+		if !partialFieldsAffectSubscription(fields, subscribedField) {
+			continue
+		}
+		activity.LastUpdateAt = now
+		activity.LastPartialAt = now
+		si.keyActivity[key] = activity
+	}
+}
+
+func partialFieldsAffectSubscription(fields [][]any, subscribedField []any) bool {
+	if len(fields) == 0 {
+		return true
+	}
+	for _, field := range fields {
+		if FieldPathAffectsSubscription(field, subscribedField) {
+			return true
+		}
+	}
+	return false
 }
 
 // GetAllStoreNames returns all store names tracked

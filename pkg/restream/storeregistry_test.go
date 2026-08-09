@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/boatkit-io/tugboat/pkg/subscribableevent"
 )
@@ -201,6 +202,85 @@ func TestStoreRegistryPublishesAggregateSubscriptionTransitions(t *testing.T) {
 	}
 	if len(keys) != 0 {
 		t.Fatalf("active keys = %#v, want none", keys)
+	}
+}
+
+func TestStoreRegistryTracksActiveKeySubscriptionActivity(t *testing.T) {
+	store := newRegistryTestStore()
+	registry, err := NewStoreRegistry([]Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+
+	now := time.Date(2026, time.August, 9, 12, 0, 0, 0, time.UTC)
+	registry.now = func() time.Time { return now }
+	keyA := "values%&a"
+	keyB := "values%&b"
+
+	if _, active, err := registry.GetStoreSubscriptionActivity(store.GetName(), keyA); err != nil || active {
+		t.Fatalf("initial activity = active %t, error %v; want inactive", active, err)
+	}
+	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), keyA, AccessLevelPublic))
+	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), keyA, AccessLevelPublic))
+	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), keyB, AccessLevelPublic))
+
+	activityA, active, err := registry.GetStoreSubscriptionActivity(store.GetName(), keyA)
+	if err != nil || !active {
+		t.Fatalf("key A activity = active %t, error %v; want active", active, err)
+	}
+	assertEqual(t, 2, activityA.ReferenceCount)
+	assertEqual(t, now, activityA.StartedAt)
+	if !activityA.LastUpdateAt.IsZero() {
+		t.Fatalf("key A last update = %v, want zero before a matching state", activityA.LastUpdateAt)
+	}
+
+	partialAt := now.Add(time.Second)
+	now = partialAt
+	registry.PartialCallback(store.GetName(), [][]any{{"Values", "a"}}, nil)
+	activityA, _, err = registry.GetStoreSubscriptionActivity(store.GetName(), keyA)
+	mustNoError(t, err)
+	assertEqual(t, partialAt, activityA.LastUpdateAt)
+	assertEqual(t, partialAt, activityA.LastPartialAt)
+	activityB, _, err := registry.GetStoreSubscriptionActivity(store.GetName(), keyB)
+	mustNoError(t, err)
+	if !activityB.LastUpdateAt.IsZero() {
+		t.Fatalf("non-matching key B last update = %v, want zero", activityB.LastUpdateAt)
+	}
+
+	fullAt := now.Add(time.Second)
+	now = fullAt
+	mustNoError(t, registry.SetFullStateToStore(store.GetName(), []byte{7, 8, 9}))
+	activityA, _, err = registry.GetStoreSubscriptionActivity(store.GetName(), keyA)
+	mustNoError(t, err)
+	activityB, _, err = registry.GetStoreSubscriptionActivity(store.GetName(), keyB)
+	mustNoError(t, err)
+	assertEqual(t, fullAt, activityA.LastFullStateAt)
+	assertEqual(t, fullAt, activityB.LastFullStateAt)
+	assertEqual(t, fullAt, activityB.LastUpdateAt)
+
+	resetAt := now.Add(time.Second)
+	now = resetAt
+	mustNoError(t, registry.ResetStoreSubscriptionActivity(store.GetName()))
+	activityA, _, err = registry.GetStoreSubscriptionActivity(store.GetName(), keyA)
+	mustNoError(t, err)
+	activityB, _, err = registry.GetStoreSubscriptionActivity(store.GetName(), keyB)
+	mustNoError(t, err)
+	assertEqual(t, resetAt, activityA.StartedAt)
+	assertEqual(t, resetAt, activityB.StartedAt)
+	if !activityA.LastUpdateAt.IsZero() || !activityA.LastFullStateAt.IsZero() || !activityA.LastPartialAt.IsZero() {
+		t.Fatalf("key A activity after reset = %#v, want no current-generation state", activityA)
+	}
+	assertEqual(t, 2, activityA.ReferenceCount)
+
+	mustNoError(t, registry.StopListeningToStoreKey(store.GetName(), keyA))
+	activityA, active, err = registry.GetStoreSubscriptionActivity(store.GetName(), keyA)
+	if err != nil || !active {
+		t.Fatalf("key A after one stop = active %t, error %v; want active", active, err)
+	}
+	assertEqual(t, 1, activityA.ReferenceCount)
+	mustNoError(t, registry.StopListeningToStoreKey(store.GetName(), keyA))
+	if _, active, err = registry.GetStoreSubscriptionActivity(store.GetName(), keyA); err != nil || active {
+		t.Fatalf("key A final activity = active %t, error %v; want inactive", active, err)
 	}
 }
 
