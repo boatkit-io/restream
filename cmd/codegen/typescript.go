@@ -41,6 +41,11 @@ func (ft *FileTracking) createTSStructSerializers(si StructInfo, fields []*restr
 	for _, fi := range fields {
 		ft.documentTSSamePackageTypeDeps(fi.VarInfo, deps)
 	}
+	partialDeps := lo.Keys(deps)
+	// A recursive struct does not need to be ordered after itself. Keeping the
+	// self edge turns one valid recursive type into a dependency cycle that can
+	// unnecessarily reorder otherwise unrelated generated package definitions.
+	delete(deps, si.Name)
 
 	// Calculate main structs and/or deserialization functions for typescript
 	classDef := ft.genTSClass(si, fields, false)
@@ -54,7 +59,9 @@ func (ft *FileTracking) createTSStructSerializers(si StructInfo, fields []*restr
 		sip.Name += "Partial"
 
 		partialClassDef := ft.genTSClass(sip, partialFields, true)
-		ft.tsGenEntries = append(ft.tsGenEntries, fdef{name: sip.Name, defs: partialClassDef, typ: fdefTypeOther, deps: lo.Keys(deps)})
+		ft.tsGenEntries = append(ft.tsGenEntries, fdef{
+			name: sip.Name, defs: partialClassDef, typ: fdefTypeOther, deps: partialDeps,
+		})
 		ft.tsGenEntries = append(ft.tsGenEntries, fdef{name: "reduceFieldPaths", defs: genTSFieldPathReducer(), typ: fdefTypeOther})
 	}
 

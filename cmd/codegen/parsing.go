@@ -107,9 +107,6 @@ func (ft *FileTracking) parseStructDecls() error { //nolint:gocyclo,funlen
 			continue
 		}
 
-		if serializers {
-			ft.serializerStructs[s] = struct{}{}
-		}
 		if fielded {
 			ft.fieldedStructs[s] = struct{}{}
 		}
@@ -1753,6 +1750,9 @@ func dstExprString(expr dst.Expr) string {
 
 // walkStructDeps walks through the struct and finds all the structs that it references to add to the todo list
 func (ft *FileTracking) walkStructDeps(s *dst.TypeSpec) {
+	if _, exists := ft.serializerStructs[s]; exists {
+		return
+	}
 	st := s.Type.(*dst.StructType)
 	ft.serializerStructs[s] = struct{}{}
 

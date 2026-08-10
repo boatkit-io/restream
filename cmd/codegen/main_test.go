@@ -111,6 +111,105 @@ type BoardStoreState struct {
 	}
 }
 
+func TestGeneratedFieldedStructSupportsSelfReference(t *testing.T) {
+	repoRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	projectDir := t.TempDir()
+	modelDir := filepath.Join(projectDir, "model")
+	if err := os.MkdirAll(modelDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/recursive
+
+go 1.26.2
+
+require github.com/boatkit-io/restream v0.0.0
+
+replace github.com/boatkit-io/restream => `+repoRoot+`
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(modelDir, "condition.go"), []byte(`package model
+
+// @restream.fields
+// @restream.partials
+type Condition struct {
+	Name string
+	Children []*Condition
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	pt := NewProjTracking(projectDir, &restreamConfig{InputDirs: []string{"model"}})
+	if err := pt.parseProject(); err != nil {
+		t.Fatal(err)
+	}
+	if len(pt.files) != 1 {
+		t.Fatalf("parsed files = %v, want condition.go", fileTrackingBaseNames(pt.files))
+	}
+	if err := pt.files[0].Run(); err != nil {
+		t.Fatal(err)
+	}
+	for _, definition := range pt.files[0].tsGenEntries {
+		for _, dependency := range definition.deps {
+			if definition.name == dependency {
+				t.Fatalf("generated TypeScript definition %s depends on itself", definition.name)
+			}
+		}
+	}
+	if err := os.WriteFile(filepath.Join(modelDir, "condition_test.go"), []byte(`package model
+
+import (
+	"reflect"
+	"testing"
+
+	"github.com/boatkit-io/restream/pkg/binarystreams"
+)
+
+func TestConditionRoundTrip(t *testing.T) {
+	original := &Condition{Name: "all", Children: []*Condition{{Name: "left"}, {Name: "right"}}}
+	w, buffer := binarystreams.NewMemoryWriter()
+	if err := original.Serialize(w, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	decoded := &Condition{}
+	if err := decoded.Deserialize(binarystreams.NewReaderFromBytes(buffer.Bytes()), nil); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(original, decoded) {
+		t.Fatalf("decoded = %#v, want %#v", decoded, original)
+	}
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	generated, err := os.ReadFile(filepath.Join(modelDir, "condition_rs.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"func (s *Condition) Serialize(",
+		"func (s *Condition) Deserialize(",
+		"func (s *ConditionPartial) ApplyTo(",
+	} {
+		if !strings.Contains(string(generated), expected) {
+			t.Fatalf("generated recursive support missing %q:\n%s", expected, generated)
+		}
+	}
+	cmd := exec.Command("go", "test", "-mod=mod", "./...")
+	cmd.Dir = projectDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generated recursive model failed round-trip test: %v\n%s", err, output)
+	}
+}
+
 func TestParseProjectIgnoresRestreamGeneratedGoFiles(t *testing.T) {
 	repoRoot, err := filepath.Abs("../..")
 	if err != nil {
