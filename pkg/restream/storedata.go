@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"reflect"
+	"sync"
 	"time"
 
 	"github.com/boatkit-io/restream/pkg/binarystreams"
@@ -68,6 +69,21 @@ type StoreData[S any, SP StoreDataPtrType[S], P Partial] struct {
 	subscriptions *fieldSubTier
 
 	localApplyErr error
+
+	outputBufferDuration time.Duration
+	outputBufferMutex    sync.Mutex
+	outputBufferTimer    *time.Timer
+	outputBufferPartial  Partial
+	outputBufferFields   [][]any
+	outputFlushMutex     sync.Mutex
+}
+
+// StoreDataOptions controls optional StoreData update delivery behavior.
+type StoreDataOptions struct {
+	// OutputBufferDuration gathers changed partials for this duration before
+	// firing AddCallback and SubscribeToField callbacks. Store state is still
+	// updated synchronously on every ApplyPartial call.
+	OutputBufferDuration time.Duration
 }
 
 // AddCallback implements StoreDataBase.
@@ -83,6 +99,15 @@ func (d *StoreData[S, SP, PS]) RemoveCallback(sid subscribableevent.Subscription
 
 // NewStoreData builds a new StoreData for a given named store, taking a reference to the store's state structure.
 func NewStoreData[S any, SP StoreDataPtrType[S], P Partial](store Store, state SP) *StoreData[S, SP, P] {
+	return NewStoreDataWithOptions[S, SP, P](store, state, StoreDataOptions{})
+}
+
+// NewStoreDataWithOptions builds StoreData with optional update delivery behavior.
+func NewStoreDataWithOptions[S any, SP StoreDataPtrType[S], P Partial](
+	store Store,
+	state SP,
+	options StoreDataOptions,
+) *StoreData[S, SP, P] {
 	name := store.GetName()
 
 	// Pre-calc the reflected state since we use it repeatedly
@@ -109,6 +134,8 @@ func NewStoreData[S any, SP StoreDataPtrType[S], P Partial](store Store, state S
 		partialCallbacks: subscribableevent.NewEvent[PartialCallbackFunc](),
 		subscriptions:    newFieldSubTier(nil),
 		localApplyErr:    localApplyErr,
+
+		outputBufferDuration: options.OutputBufferDuration,
 	}
 }
 
@@ -337,7 +364,16 @@ func (d *StoreData[S, SP, PS]) ApplyPartial(partial PS) {
 }
 
 func (d *StoreData[S, SP, PS]) applyPartial(partial PS) {
+	bufferOutput := d.outputBufferDuration > 0
+	if bufferOutput {
+		// Keep state mutation and partial gathering in the same order when
+		// concurrent producers call ApplyPartial.
+		d.outputBufferMutex.Lock()
+		defer d.outputBufferMutex.Unlock()
+	}
+
 	var fields [][]any
+	var bufferedPartial Partial
 	func() {
 		waitStart := time.Now()
 		d.stateMutex.Lock()
@@ -349,12 +385,75 @@ func (d *StoreData[S, SP, PS]) applyPartial(partial PS) {
 			d.logLockTiming("ApplyPartial", "write", waitDuration, holdDuration)
 		}()
 		fields = partial.ApplyTo(d.state)
+		if len(fields) > 0 && bufferOutput {
+			// Generated stores can snapshot only the changed fields directly
+			// from state. Besides avoiding another wire round trip, this keeps
+			// local buffering independent of application serializer setup.
+			if provider, ok := any(d.state).(StateFieldPartialProvider); ok {
+				bufferedPartial, _ = provider.PartialForFields(fields)
+			}
+		}
 	}()
 	fields = reduceFieldPaths(fields)
 	if len(fields) == 0 {
 		return
 	}
+	if bufferOutput {
+		if bufferedPartial == nil {
+			var err error
+			bufferedPartial, err = ClonePartial(partial)
+			if err != nil {
+				panic(fmt.Errorf("clone buffered partial for store %s: %w", d.name, err))
+			}
+		}
+		d.bufferOutputLocked(fields, bufferedPartial)
+		return
+	}
 
+	d.fireCallbacks(fields, partial)
+}
+
+func (d *StoreData[S, SP, PS]) bufferOutputLocked(fields [][]any, partial Partial) {
+	if d.outputBufferPartial == nil {
+		d.outputBufferPartial = partial
+	} else {
+		partial.MergeOntoPartial(d.outputBufferPartial)
+	}
+	d.outputBufferFields = append(d.outputBufferFields, cloneFieldPaths(fields)...)
+	if d.outputBufferTimer == nil {
+		d.outputBufferTimer = time.AfterFunc(d.outputBufferDuration, d.flushOutputBuffer)
+	}
+}
+
+func (d *StoreData[S, SP, PS]) flushOutputBuffer() {
+	// Keep callback batches ordered when a callback blocks longer than the
+	// configured buffer duration and the following window expires.
+	d.outputFlushMutex.Lock()
+	defer d.outputFlushMutex.Unlock()
+
+	d.outputBufferMutex.Lock()
+	partial := d.outputBufferPartial
+	fields := d.outputBufferFields
+	d.outputBufferPartial = nil
+	d.outputBufferFields = nil
+	d.outputBufferTimer = nil
+	d.outputBufferMutex.Unlock()
+
+	if partial == nil {
+		return
+	}
+	d.fireCallbacks(reduceFieldPaths(fields), partial)
+}
+
+func cloneFieldPaths(fields [][]any) [][]any {
+	cloned := make([][]any, len(fields))
+	for i, field := range fields {
+		cloned[i] = append([]any(nil), field...)
+	}
+	return cloned
+}
+
+func (d *StoreData[S, SP, PS]) fireCallbacks(fields [][]any, partial Partial) {
 	d.partialCallbacks.Fire(d.name, fields, partial)
 
 	for _, f := range fields {

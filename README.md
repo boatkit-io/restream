@@ -356,6 +356,20 @@ For structs that should generate client-side types, serializers/deserializers, o
 
 Structs with generics are also automatically supported -- the types used used by the generics are serialized in front of the structure's contents, allowing the deserializer to know what types to pull off the wire.
 
+### Buffering Store Callbacks
+
+Stores that update faster than their consumers need can opt into callback buffering when they construct `StoreData`:
+
+```go
+s.storeData = restream.NewStoreDataWithOptions[MyState, *MyState, *MyStatePartial](
+    s,
+    initialState,
+    restream.StoreDataOptions{OutputBufferDuration: 250 * time.Millisecond},
+)
+```
+
+`ApplyPartial` still updates the live state synchronously. ReStream gathers the changed partials for the configured fixed window, then fires `AddCallback` and `SubscribeToField` callbacks once with the merged latest values. The existing `NewStoreData` constructor keeps immediate callback delivery.
+
 ## Cloud Relay Server
 
 ReStream is designed to work well for both directly-hosted web applications/API servers as well as remotely-hosted servers (i.e. on an IOT device) that relay data up to a cloud-based server.  Helpers are in the restream packages for both the device-side relaying and creating the relay server itself.  Both sides have very simple out of the box configs to get you started and extension points to add in complexity as your project advances.  See the `tictactoerelay` example for how to set up and use the relay server.

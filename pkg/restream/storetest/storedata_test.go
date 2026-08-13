@@ -2,7 +2,9 @@ package storetest
 
 import (
 	"reflect"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/boatkit-io/restream/pkg/binarystreams"
 	"github.com/boatkit-io/restream/pkg/restream"
@@ -79,6 +81,117 @@ func TestSetField(t *testing.T) {
 	td := TestMapData{Number: 6}
 	store.Sd.ApplyPartial(&TestStatePartial{MapPtrTest: restream.NewPartialModMap[uint8, *TestMapData, *TestMapDataPartial]().Set(5, &td)})
 	assert.Equal(t, uint(6), state.MapPtrTest[5].Number)
+}
+
+func TestStoreDataBuffersUpdateCallbacks(t *testing.T) {
+	const bufferDuration = 50 * time.Millisecond
+	state := TestState{MapPtrTest: map[uint8]*TestMapData{}}
+	store := TestStore{}
+	store.Sd = restream.NewStoreDataWithOptions[TestState, *TestState, *TestStatePartial](
+		&store,
+		&state,
+		restream.StoreDataOptions{OutputBufferDuration: bufferDuration},
+	)
+
+	var callbackCount atomic.Int32
+	partials := make(chan *TestStatePartial, 2)
+	var callbackFields [][]any
+	store.Sd.AddCallback(func(_ string, fields [][]any, partial restream.Partial) {
+		callbackCount.Add(1)
+		callbackFields = fields
+		partials <- partial.(*TestStatePartial)
+	})
+	baseFieldValues := make(chan string, 2)
+	store.SubscribeToField([]any{"BaseField"}, func(value string) {
+		baseFieldValues <- value
+	})
+
+	firstValue := "first"
+	store.Sd.ApplyPartial(&TestStatePartial{
+		BaseField: &firstValue,
+		BaseStruct: (&restream.PartialValue[TestMapData, *TestMapDataPartial]{}).
+			ApplyPartial(&TestMapDataPartial{Number: restream.Ptr(uint(4))}),
+	})
+	if state.BaseField != "first" || state.BaseStruct.Number != 4 {
+		t.Fatalf("state after first ApplyPartial = %+v, want immediate mutation", state)
+	}
+	firstValue = "mutated after apply"
+
+	secondValue := "second"
+	store.Sd.ApplyPartial(&TestStatePartial{BaseField: &secondValue})
+	if state.BaseField != "second" {
+		t.Fatalf("state after second ApplyPartial = %+v, want immediate latest value", state)
+	}
+	secondValue = "also mutated after apply"
+	if callbackCount.Load() != 0 {
+		t.Fatalf("callback count before buffer expires = %d, want 0", callbackCount.Load())
+	}
+
+	var partial *TestStatePartial
+	select {
+	case partial = <-partials:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for buffered StoreData callback")
+	}
+	if callbackCount.Load() != 1 {
+		t.Fatalf("callback count after buffer expires = %d, want 1", callbackCount.Load())
+	}
+	if partial.BaseField == nil || *partial.BaseField != "second" {
+		t.Fatalf("buffered BaseField = %v, want detached latest value second", partial.BaseField)
+	}
+	if partial.BaseStruct == nil {
+		t.Fatal("buffered partial omitted BaseStruct update")
+	}
+	assert.ElementsMatch(t, [][]any{{"BaseField"}, {"BaseStruct", "Number"}}, callbackFields)
+
+	select {
+	case value := <-baseFieldValues:
+		if value != "second" {
+			t.Fatalf("field subscription value = %q, want second", value)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for buffered field subscription")
+	}
+}
+
+func TestStoreDataBufferedConcurrentAppliesPreserveLatestPartial(t *testing.T) {
+	const (
+		applyCount     = 100
+		bufferDuration = 50 * time.Millisecond
+	)
+	state := TestState{MapPtrTest: map[uint8]*TestMapData{}}
+	store := TestStore{}
+	store.Sd = restream.NewStoreDataWithOptions[TestState, *TestState, *TestStatePartial](
+		&store,
+		&state,
+		restream.StoreDataOptions{OutputBufferDuration: bufferDuration},
+	)
+
+	partials := make(chan *TestStatePartial, applyCount)
+	store.Sd.AddCallback(func(_ string, _ [][]any, partial restream.Partial) {
+		partials <- partial.(*TestStatePartial)
+	})
+
+	done := make(chan struct{}, applyCount)
+	for value := range applyCount {
+		go func() {
+			store.Sd.ApplyPartial(&TestStatePartial{BaseField: restream.Ptr(string(rune(value + 1)))})
+			done <- struct{}{}
+		}()
+	}
+	for range applyCount {
+		<-done
+	}
+	latestState := state.BaseField
+
+	select {
+	case partial := <-partials:
+		if partial.BaseField == nil || *partial.BaseField != latestState {
+			t.Fatalf("buffered value = %v, want latest state %q", partial.BaseField, latestState)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for concurrent buffered StoreData callback")
+	}
 }
 
 func TestGeneratedPartialCanClearOptionalPrimitivePointer(t *testing.T) {
