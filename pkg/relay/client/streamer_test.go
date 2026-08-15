@@ -832,6 +832,12 @@ func TestStreamerAppliesInboundRelayStateOnlyForCloudSourceStores(t *testing.T) 
 			t.Fatalf("handleStoreState partial for %s failed: %v", storeName, err)
 		}
 	}
+	for _, store := range stores {
+		waiter := store.GetStoreData().(restream.StoreDataOutputWaiter)
+		if !waiter.WaitForOutputIdle(time.Second) {
+			t.Fatalf("timed out waiting for %s output", store.GetName())
+		}
+	}
 
 	for _, store := range stores {
 		storeName := store.GetName()
