@@ -143,6 +143,20 @@ func (s *StoreRegistry) SubscribeToPartialApplies(cb PartialCallbackFunc) subscr
 	return s.partialApplyCallbacks.Subscribe(cb)
 }
 
+// StoreOutputStats returns callback queue pressure for every registered store
+// that uses StoreData's serialized output worker.
+func (s *StoreRegistry) StoreOutputStats(now time.Time) map[string]StoreDataOutputStats {
+	ret := make(map[string]StoreDataOutputStats, len(s.storeMap))
+	for name, info := range s.storeMap {
+		provider, ok := info.StoreData.(StoreDataOutputStatsProvider)
+		if !ok {
+			continue
+		}
+		ret[name] = provider.GetOutputStats(now)
+	}
+	return ret
+}
+
 // UnsubscribeFromPartialApplies unsubscribes from the above SubscribeToPartialApplies call.
 func (s *StoreRegistry) UnsubscribeFromPartialApplies(sid subscribableevent.SubscriptionId) error {
 	return s.partialApplyCallbacks.Unsubscribe(sid)

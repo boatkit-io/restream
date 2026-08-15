@@ -194,6 +194,236 @@ func TestStoreDataBufferedConcurrentAppliesPreserveLatestPartial(t *testing.T) {
 	}
 }
 
+func TestStoreDataOutputWorkerPreservesOrderWithoutBlockingApply(t *testing.T) {
+	state := TestState{MapPtrTest: map[uint8]*TestMapData{}}
+	store := TestStore{}
+	store.Sd = restream.NewStoreData[TestState, *TestState, *TestStatePartial](&store, &state)
+
+	callbackStarted := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	callbackValues := make(chan string, 2)
+	fieldValues := make(chan string, 2)
+	store.Sd.AddCallback(func(_ string, _ [][]any, partial restream.Partial) {
+		value := *partial.(*TestStatePartial).BaseField
+		callbackValues <- value
+		if value == "first" {
+			close(callbackStarted)
+			<-releaseCallback
+		}
+	})
+	store.SubscribeToField([]any{"BaseField"}, func(value string) {
+		fieldValues <- value
+	})
+
+	store.Sd.ApplyPartial(&TestStatePartial{BaseField: restream.Ptr("first")})
+	select {
+	case <-callbackStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first output callback")
+	}
+
+	secondApplied := make(chan struct{})
+	go func() {
+		store.Sd.ApplyPartial(&TestStatePartial{BaseField: restream.Ptr("second")})
+		close(secondApplied)
+	}()
+	select {
+	case <-secondApplied:
+	case <-time.After(time.Second):
+		t.Fatal("second ApplyPartial blocked on the downstream callback")
+	}
+	close(releaseCallback)
+	if !store.Sd.WaitForOutputIdle(time.Second) {
+		t.Fatal("timed out waiting for ordered outputs")
+	}
+
+	assert.Equal(t, "second", state.BaseField)
+	assert.Equal(t, "first", <-callbackValues)
+	assert.Equal(t, "second", <-callbackValues)
+	assert.Equal(t, "first", <-fieldValues)
+	assert.Equal(t, "second", <-fieldValues)
+}
+
+func TestStoreDataOutputWorkerBacksOffGatheringUnderPressure(t *testing.T) {
+	state := TestState{MapPtrTest: map[uint8]*TestMapData{}}
+	store := TestStore{}
+	store.Sd = restream.NewStoreDataWithOptions[TestState, *TestState, *TestStatePartial](
+		&store,
+		&state,
+		restream.StoreDataOptions{
+			MaxOutputBufferDuration: 40 * time.Millisecond,
+			OutputBacklogThreshold:  2,
+		},
+	)
+
+	callbackStarted := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	store.Sd.AddCallback(func(_ string, _ [][]any, partial restream.Partial) {
+		if *partial.(*TestStatePartial).BaseField == "blocked" {
+			close(callbackStarted)
+			<-releaseCallback
+		}
+	})
+	store.Sd.ApplyPartial(&TestStatePartial{BaseField: restream.Ptr("blocked")})
+	select {
+	case <-callbackStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for blocking output callback")
+	}
+	for i := range 8 {
+		store.Sd.ApplyPartial(&TestStatePartial{BaseField: restream.Ptr(string(rune('a' + i)))})
+	}
+
+	pressured := store.Sd.GetOutputStats(time.Now().Add(2 * time.Second))
+	assert.Equal(t, 9, pressured.QueueDepth)
+	assert.GreaterOrEqual(t, pressured.OldestQueuedAge, 2*time.Second)
+	close(releaseCallback)
+	if !store.Sd.WaitForOutputIdle(time.Second) {
+		t.Fatal("timed out waiting for gathered outputs")
+	}
+
+	recovered := store.Sd.GetOutputStats(time.Now())
+	assert.Zero(t, recovered.QueueDepth)
+	assert.GreaterOrEqual(t, recovered.MaxQueueDepth, 9)
+	assert.True(t, recovered.AdaptiveGathering)
+	assert.Greater(t, recovered.EffectiveBufferDuration, time.Duration(0))
+	assert.Greater(t, recovered.AdaptiveBackoffCount, uint64(0))
+}
+
+func TestStoreDataOutputStatsMeasureGatheringAndHandling(t *testing.T) {
+	state := TestState{MapPtrTest: map[uint8]*TestMapData{}}
+	store := TestStore{}
+	store.Sd = restream.NewStoreDataWithOptions[TestState, *TestState, *TestStatePartial](
+		&store,
+		&state,
+		restream.StoreDataOptions{OutputBufferDuration: 20 * time.Millisecond},
+	)
+	store.Sd.AddCallback(func(_ string, _ [][]any, _ restream.Partial) {
+		time.Sleep(10 * time.Millisecond)
+	})
+
+	store.Sd.ApplyPartial(&TestStatePartial{BaseField: restream.Ptr("first")})
+	store.Sd.ApplyPartial(&TestStatePartial{BaseField: restream.Ptr("second")})
+	if !store.Sd.WaitForOutputIdle(time.Second) {
+		t.Fatal("timed out waiting for measured output")
+	}
+
+	stats := store.Sd.GetOutputStats(time.Now())
+	assert.Equal(t, uint64(2), stats.EnqueuedOutputCount)
+	assert.Equal(t, uint64(2), stats.ProcessedOutputCount)
+	assert.Equal(t, uint64(1), stats.EmittedBatchCount)
+	assert.Equal(t, 2, stats.MaxBatchSize)
+	assert.GreaterOrEqual(t, stats.TotalQueueDelay, 20*time.Millisecond)
+	assert.GreaterOrEqual(t, stats.TotalHandlingTime, 10*time.Millisecond)
+}
+
+func TestStoreDataOutputWorkerSurvivesCallbackPanic(t *testing.T) {
+	state := TestState{MapPtrTest: map[uint8]*TestMapData{}}
+	store := TestStore{}
+	store.Sd = restream.NewStoreData[TestState, *TestState, *TestStatePartial](&store, &state)
+
+	var calls atomic.Int32
+	store.Sd.AddCallback(func(_ string, _ [][]any, _ restream.Partial) {
+		if calls.Add(1) == 1 {
+			panic("expected test panic")
+		}
+	})
+	store.Sd.ApplyPartial(&TestStatePartial{BaseField: restream.Ptr("first")})
+	store.Sd.ApplyPartial(&TestStatePartial{BaseField: restream.Ptr("second")})
+	if !store.Sd.WaitForOutputIdle(time.Second) {
+		t.Fatal("worker stopped after callback panic")
+	}
+	assert.Equal(t, int32(2), calls.Load())
+}
+
+func TestStoreDataSubscribersDoNotReceiveOutputQueuedBeforeSubscription(t *testing.T) {
+	state := TestState{MapPtrTest: map[uint8]*TestMapData{}}
+	store := TestStore{}
+	store.Sd = restream.NewStoreData[TestState, *TestState, *TestStatePartial](&store, &state)
+
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	store.Sd.AddCallback(func(_ string, _ [][]any, partial restream.Partial) {
+		if *partial.(*TestStatePartial).BaseField == "blocking" {
+			close(firstStarted)
+			<-releaseFirst
+		}
+	})
+	store.Sd.ApplyPartial(&TestStatePartial{BaseField: restream.Ptr("blocking")})
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for blocking callback")
+	}
+	store.Sd.ApplyPartial(&TestStatePartial{BaseField: restream.Ptr("queued before subscription")})
+
+	callbackValues := make(chan string, 2)
+	fieldValues := make(chan string, 2)
+	store.Sd.AddCallback(func(_ string, _ [][]any, partial restream.Partial) {
+		callbackValues <- *partial.(*TestStatePartial).BaseField
+	})
+	store.SubscribeToField([]any{"BaseField"}, func(value string) {
+		fieldValues <- value
+	})
+
+	close(releaseFirst)
+	store.Sd.ApplyPartial(&TestStatePartial{BaseField: restream.Ptr("after subscription")})
+	if !store.Sd.WaitForOutputIdle(time.Second) {
+		t.Fatal("timed out waiting for subscription-boundary outputs")
+	}
+
+	assert.Equal(t, "after subscription", <-callbackValues)
+	assert.Equal(t, "after subscription", <-fieldValues)
+	select {
+	case value := <-callbackValues:
+		t.Fatalf("late callback received extra value %q", value)
+	default:
+	}
+	select {
+	case value := <-fieldValues:
+		t.Fatalf("late field subscription received extra value %q", value)
+	default:
+	}
+}
+
+func TestStoreDataGatheringDoesNotCrossSubscriptionBoundary(t *testing.T) {
+	state := TestState{MapPtrTest: map[uint8]*TestMapData{}}
+	store := TestStore{}
+	store.Sd = restream.NewStoreDataWithOptions[TestState, *TestState, *TestStatePartial](
+		&store,
+		&state,
+		restream.StoreDataOptions{OutputBufferDuration: 50 * time.Millisecond},
+	)
+
+	store.Sd.ApplyPartial(&TestStatePartial{BaseField: restream.Ptr("before subscription")})
+
+	partials := make(chan *TestStatePartial, 2)
+	store.Sd.AddCallback(func(_ string, _ [][]any, partial restream.Partial) {
+		partials <- partial.(*TestStatePartial)
+	})
+	baseFieldValues := make(chan string, 1)
+	store.SubscribeToField([]any{"BaseField"}, func(value string) {
+		baseFieldValues <- value
+	})
+
+	store.Sd.ApplyPartial(&TestStatePartial{
+		BaseStruct: (&restream.PartialValue[TestMapData, *TestMapDataPartial]{}).
+			ApplyPartial(&TestMapDataPartial{Number: restream.Ptr(uint(7))}),
+	})
+	if !store.Sd.WaitForOutputIdle(time.Second) {
+		t.Fatal("timed out waiting for gathered subscription-boundary outputs")
+	}
+
+	partial := <-partials
+	assert.Nil(t, partial.BaseField)
+	assert.NotNil(t, partial.BaseStruct)
+	select {
+	case value := <-baseFieldValues:
+		t.Fatalf("late field subscription received pre-subscription value %q", value)
+	default:
+	}
+}
+
 func TestGeneratedPartialCanClearOptionalPrimitivePointer(t *testing.T) {
 	originalOptional := uint32(2)
 	state := TestPrimitiveOptionalState{
@@ -274,8 +504,9 @@ func TestStoreDataCallbackReceivesPrunedGeneratedPartial(t *testing.T) {
 			ApplyPartial(&TestMapDataPartial{Number: restream.Ptr(uint(2))}),
 	}
 	store.Sd.ApplyPartial(partial)
+	assert.True(t, store.Sd.WaitForOutputIdle(time.Second))
 
-	assert.Same(t, partial, callbackPartial)
+	assert.Equal(t, partial, callbackPartial)
 	assert.Nil(t, callbackPartial.BaseField)
 	assert.NotNil(t, callbackPartial.BaseStruct)
 	assert.Equal(t, uint(2), state.BaseStruct.Number)
@@ -680,6 +911,7 @@ func TestRelayStoreMergedPartialFieldPathsCoverMergedChanges(t *testing.T) {
 	mergedPartial := relayStoreMergeFirstPartial()
 	relayStoreMergeSecondPartial().MergeOntoPartial(mergedPartial)
 	applyRelayStorePartial(t, relayStore, mergedPartial)
+	assert.True(t, relayStore.GetStoreData().(restream.StoreDataOutputWaiter).WaitForOutputIdle(time.Second))
 
 	assert.ElementsMatch(t, [][]any{
 		{"MapPtrTest", uint8(5), "Number"},
@@ -860,6 +1092,7 @@ func TestSubs(t *testing.T) {
 	store.Sd.ApplyPartial(&TestAPartial{A: (&restream.PartialValue[TestB, *TestBPartial]{}).
 		ApplyPartial(&TestBPartial{A: (&restream.PartialValue[TestC, *TestCPartial]{}).
 			SetWhole(&TestC{A: 1})})})
+	assert.True(t, store.Sd.WaitForOutputIdle(time.Second))
 	assert.Equal(t, 1, aCalls)
 	assert.Equal(t, &TestB{A: TestC{A: 1}}, lastACall)
 	assert.Equal(t, 1, bCalls)
@@ -871,6 +1104,7 @@ func TestSubs(t *testing.T) {
 	store.Sd.ApplyPartial(&TestAPartial{A: (&restream.PartialValue[TestB, *TestBPartial]{}).
 		ApplyPartial(&TestBPartial{A: (&restream.PartialValue[TestC, *TestCPartial]{}).
 			ApplyPartial(&TestCPartial{B: restream.Ptr(2)})})})
+	assert.True(t, store.Sd.WaitForOutputIdle(time.Second))
 	assert.Equal(t, 2, aCalls)
 	assert.Equal(t, &TestB{A: TestC{A: 1, B: 2}}, lastACall)
 	assert.Equal(t, 2, bCalls)
@@ -879,6 +1113,7 @@ func TestSubs(t *testing.T) {
 	store.Sd.ApplyPartial(&TestAPartial{A: (&restream.PartialValue[TestB, *TestBPartial]{}).
 		ApplyPartial(&TestBPartial{A: (&restream.PartialValue[TestC, *TestCPartial]{}).
 			SetWhole(&TestC{A: 3, B: 4})})})
+	assert.True(t, store.Sd.WaitForOutputIdle(time.Second))
 	assert.Equal(t, 3, aCalls)
 	assert.Equal(t, &TestB{A: TestC{A: 3, B: 4}}, lastACall)
 	assert.Equal(t, 3, bCalls)
@@ -888,12 +1123,14 @@ func TestSubs(t *testing.T) {
 	store.Sd.ApplyPartial(&TestAPartial{A: (&restream.PartialValue[TestB, *TestBPartial]{}).
 		ApplyPartial(&TestBPartial{B: (&restream.PartialValue[TestC, *TestCPartial]{}).
 			SetWhole(&TestC{A: 5, B: 6})})})
+	assert.True(t, store.Sd.WaitForOutputIdle(time.Second))
 	assert.Equal(t, 4, aCalls)
 	assert.Equal(t, &TestB{A: TestC{A: 3, B: 4}, B: TestC{A: 5, B: 6}}, lastACall)
 	assert.Equal(t, 3, bCalls)
 	assert.Equal(t, 2, cCalls)
 	store.Sd.ApplyPartial(&TestAPartial{A: (&restream.PartialValue[TestB, *TestBPartial]{}).
 		SetWhole(&TestB{A: TestC{A: 7, B: 8}, B: TestC{A: 9, B: 10}})})
+	assert.True(t, store.Sd.WaitForOutputIdle(time.Second))
 	assert.Equal(t, 5, aCalls)
 	assert.Equal(t, &TestB{A: TestC{A: 7, B: 8}, B: TestC{A: 9, B: 10}}, lastACall)
 	assert.Equal(t, 4, bCalls)
@@ -901,6 +1138,7 @@ func TestSubs(t *testing.T) {
 	assert.Equal(t, 3, cCalls)
 	assert.Equal(t, restream.Ptr(7), lastCCall)
 	store.Sd.ApplyPartial(&TestAPartial{B: (&restream.PartialValue[TestB, *TestBPartial]{}).SetWhole(&TestB{})})
+	assert.True(t, store.Sd.WaitForOutputIdle(time.Second))
 	assert.Equal(t, 5, aCalls)
 	assert.Equal(t, 4, bCalls)
 	assert.Equal(t, 3, cCalls)

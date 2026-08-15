@@ -6,6 +6,7 @@ import (
 	"log"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/boatkit-io/restream/pkg/binarystreams"
@@ -16,7 +17,14 @@ import (
 // typeAnyArrayOfAny is a cached reflection type for []any
 var typeAnyArrayOfAny = reflect.TypeFor[[]any]()
 
-const storeDataLockWarnAfter = 100 * time.Millisecond
+const (
+	storeDataLockWarnAfter              = 100 * time.Millisecond
+	defaultOutputBacklogThreshold       = 8
+	minimumAdaptiveOutputBufferDuration = 5 * time.Millisecond
+	adaptiveOutputPressureAge           = 250 * time.Millisecond
+	adaptiveOutputRecoveryInterval      = 5 * time.Second
+	outputPressureLogInterval           = 30 * time.Second
+)
 
 // ErrCloudSourceStoreMutation is raised when local code attempts to mutate a device store
 // whose source of truth is the cloud relay.
@@ -66,30 +74,106 @@ type StoreData[S any, SP StoreDataPtrType[S], P Partial] struct {
 
 	partialCallbacks subscribableevent.Event[PartialCallbackFunc]
 
-	subscriptions *fieldSubTier
+	subscriptions      *fieldSubTier
+	subscriptionsMutex sync.RWMutex
 
 	localApplyErr error
 
-	outputBufferDuration time.Duration
-	outputBufferMutex    sync.Mutex
-	outputBufferTimer    *time.Timer
-	outputBufferPartial  Partial
-	outputBufferFields   [][]any
-	outputFlushMutex     sync.Mutex
+	applyOrderMutex sync.Mutex
+
+	outputBufferDuration          time.Duration
+	outputQueueMutex              sync.Mutex
+	outputQueueCond               *sync.Cond
+	outputQueue                   []storeDataOutput[S]
+	outputNextSequence            uint64
+	outputSubscriptionGeneration  uint64
+	outputFiringSequence          atomic.Uint64
+	outputState                   SP
+	outputEffectiveBufferDuration time.Duration
+	outputMaxBufferDuration       time.Duration
+	outputBacklogThreshold        int
+	outputInFlightEnqueuedAt      time.Time
+	outputMaxQueueDepth           int
+	outputBackoffCount            uint64
+	outputLastBackoff             time.Time
+	outputLastRecoveryAdjustment  time.Time
+	outputLastPressureLog         time.Time
+	outputEnqueuedCount           uint64
+	outputProcessedCount          uint64
+	outputBatchCount              uint64
+	outputTotalQueueDelay         time.Duration
+	outputTotalHandlingTime       time.Duration
+	outputMaxBatchSize            int
+}
+
+type storeDataOutput[S any] struct {
+	partial                Partial
+	replaceWith            *S
+	enqueuedAt             time.Time
+	barrier                chan struct{}
+	sequence               uint64
+	subscriptionGeneration uint64
+}
+
+// StoreDataOutputStats reports one store's serialized callback queue pressure.
+type StoreDataOutputStats struct {
+	QueueDepth               int
+	MaxQueueDepth            int
+	OldestQueuedAge          time.Duration
+	ConfiguredBufferDuration time.Duration
+	EffectiveBufferDuration  time.Duration
+	MaxBufferDuration        time.Duration
+	AdaptiveGathering        bool
+	AdaptiveBackoffCount     uint64
+	EnqueuedOutputCount      uint64
+	ProcessedOutputCount     uint64
+	EmittedBatchCount        uint64
+	TotalQueueDelay          time.Duration
+	TotalHandlingTime        time.Duration
+	MaxBatchSize             int
+}
+
+// StoreDataOutputStatsProvider is implemented by StoreData instances so a
+// registry can surface per-store callback pressure without knowing state types.
+type StoreDataOutputStatsProvider interface {
+	GetOutputStats(time.Time) StoreDataOutputStats
+}
+
+// StoreDataOutputWaiter allows tests and shutdown checks to wait for all
+// outputs queued before the call without exposing a store's state types.
+type StoreDataOutputWaiter interface {
+	WaitForOutputIdle(time.Duration) bool
 }
 
 // StoreDataOptions controls optional StoreData update delivery behavior.
 type StoreDataOptions struct {
-	// OutputBufferDuration gathers changed partials for this duration before
-	// firing AddCallback and SubscribeToField callbacks. Store state is still
-	// updated synchronously on every ApplyPartial call.
+	// OutputBufferDuration gathers changed partials for this duration before the
+	// store's serialized output worker fires AddCallback and SubscribeToField
+	// callbacks. Zero emits every update without gathering. Store state is still
+	// updated synchronously on every ApplyPartial call in either mode.
 	OutputBufferDuration time.Duration
+	// MaxOutputBufferDuration opts this store into adaptive gathering when its
+	// output queue falls behind. It must be greater than OutputBufferDuration.
+	// Zero preserves every output without automatic gathering.
+	MaxOutputBufferDuration time.Duration
+	// OutputBacklogThreshold controls how many queued outputs trigger adaptive
+	// gathering. Values below one use a conservative default.
+	OutputBacklogThreshold int
 }
 
 // AddCallback implements StoreDataBase.
 func (d *StoreData[S, SP, PS]) AddCallback(cf func(storeName string, fields [][]any,
 	partial Partial)) subscribableevent.SubscriptionId {
-	return d.partialCallbacks.Subscribe(cf)
+	d.outputQueueMutex.Lock()
+	d.outputSubscriptionGeneration++
+	startSequence := d.outputNextSequence + 1
+	sid := d.partialCallbacks.Subscribe(func(storeName string, fields [][]any, partial Partial) {
+		if d.outputFiringSequence.Load() >= startSequence {
+			cf(storeName, fields, partial)
+		}
+	})
+	d.outputQueueMutex.Unlock()
+	return sid
 }
 
 // RemoveCallback implements StoreDataBase.
@@ -125,7 +209,19 @@ func NewStoreDataWithOptions[S any, SP StoreDataPtrType[S], P Partial](
 		localApplyErr = ErrCloudSourceStoreMutation
 	}
 
-	return &StoreData[S, SP, P]{
+	outputState, err := detachedState[S, SP](state)
+	if err != nil {
+		panic(fmt.Sprintf("Store %s could not clone initial output state: %v", name, err))
+	}
+	backlogThreshold := options.OutputBacklogThreshold
+	if backlogThreshold < 1 {
+		backlogThreshold = defaultOutputBacklogThreshold
+	}
+	maxBufferDuration := options.MaxOutputBufferDuration
+	if maxBufferDuration < options.OutputBufferDuration {
+		maxBufferDuration = options.OutputBufferDuration
+	}
+	d := &StoreData[S, SP, P]{
 		name:         name,
 		stateMutex:   smartmutex.SmartMutex{Name: "restream.StoreData(" + name + ").stateMutex"},
 		state:        state,
@@ -135,8 +231,15 @@ func NewStoreDataWithOptions[S any, SP StoreDataPtrType[S], P Partial](
 		subscriptions:    newFieldSubTier(nil),
 		localApplyErr:    localApplyErr,
 
-		outputBufferDuration: options.OutputBufferDuration,
+		outputBufferDuration:          options.OutputBufferDuration,
+		outputEffectiveBufferDuration: options.OutputBufferDuration,
+		outputMaxBufferDuration:       maxBufferDuration,
+		outputBacklogThreshold:        backlogThreshold,
+		outputState:                   SP(outputState),
 	}
+	d.outputQueueCond = sync.NewCond(&d.outputQueueMutex)
+	go d.runOutputWorker()
+	return d
 }
 
 // GetFullStateSnapshot returns a full state snapshot from a StoreData.
@@ -251,6 +354,21 @@ func cloneState[S any, SP StoreDataPtrType[S]](state SP) (*S, bool) {
 	return cloner.RestreamClone(), true
 }
 
+func detachedState[S any, SP StoreDataPtrType[S]](state SP) (*S, error) {
+	if cloned, ok := cloneState[S, SP](state); ok {
+		return cloned, nil
+	}
+	serialized, err := serializeState[S, SP](state)
+	if err != nil {
+		return nil, err
+	}
+	ret := new(S)
+	if err := SP(ret).Deserialize(binarystreams.NewReaderFromBytes(serialized), nil); err != nil {
+		return nil, err
+	}
+	return ret, nil
+}
+
 func serializeState[S any, SP StoreDataPtrType[S]](state SP) ([]byte, error) {
 	w, b := binarystreams.NewMemoryWriter()
 	if err := state.Serialize(w, nil); err != nil {
@@ -318,7 +436,11 @@ func (d *StoreData[S, SP, PS]) readState(operation string, cb func(SP)) {
 
 // getFieldValue is a helper to get a reflection value for a given field array.
 func (d *StoreData[S, SP, PS]) getFieldValue(field []any) reflect.Value {
-	ds := d.stateReflect
+	return getFieldValueFrom(d.stateReflect, field)
+}
+
+func getFieldValueFrom(stateReflect reflect.Value, field []any) reflect.Value {
+	ds := stateReflect
 	for _, f := range field {
 		fv := reflect.ValueOf(f)
 		kind := fv.Kind()
@@ -364,16 +486,13 @@ func (d *StoreData[S, SP, PS]) ApplyPartial(partial PS) {
 }
 
 func (d *StoreData[S, SP, PS]) applyPartial(partial PS) {
-	bufferOutput := d.outputBufferDuration > 0
-	if bufferOutput {
-		// Keep state mutation and partial gathering in the same order when
-		// concurrent producers call ApplyPartial.
-		d.outputBufferMutex.Lock()
-		defer d.outputBufferMutex.Unlock()
-	}
+	// Keep state mutation, detached output capture, and queue insertion in one
+	// order when concurrent producers call ApplyPartial.
+	d.applyOrderMutex.Lock()
+	defer d.applyOrderMutex.Unlock()
 
 	var fields [][]any
-	var bufferedPartial Partial
+	var outputPartial Partial
 	func() {
 		waitStart := time.Now()
 		d.stateMutex.Lock()
@@ -385,12 +504,12 @@ func (d *StoreData[S, SP, PS]) applyPartial(partial PS) {
 			d.logLockTiming("ApplyPartial", "write", waitDuration, holdDuration)
 		}()
 		fields = partial.ApplyTo(d.state)
-		if len(fields) > 0 && bufferOutput {
-			// Generated stores can snapshot only the changed fields directly
-			// from state. Besides avoiding another wire round trip, this keeps
-			// local buffering independent of application serializer setup.
+		if len(fields) > 0 {
+			// Generated states can clone just the applied fields without a
+			// serializer round trip. Capture them under the state lock so the
+			// worker sees the exact state installed by this partial.
 			if provider, ok := any(d.state).(StateFieldPartialProvider); ok {
-				bufferedPartial, _ = provider.PartialForFields(fields)
+				outputPartial, _ = provider.PartialForFields(fields)
 			}
 		}
 	}()
@@ -398,66 +517,266 @@ func (d *StoreData[S, SP, PS]) applyPartial(partial PS) {
 	if len(fields) == 0 {
 		return
 	}
-	if bufferOutput {
-		if bufferedPartial == nil {
-			var err error
-			bufferedPartial, err = ClonePartial(partial)
-			if err != nil {
-				panic(fmt.Errorf("clone buffered partial for store %s: %w", d.name, err))
+	if outputPartial == nil {
+		// Custom stores without generated changed-field snapshots fall back to
+		// detaching the pruned partial through their serializer.
+		var err error
+		outputPartial, err = ClonePartial(partial)
+		if err != nil {
+			panic(fmt.Errorf("clone output partial for store %s: %w", d.name, err))
+		}
+	}
+	d.enqueueOutput(storeDataOutput[S]{partial: outputPartial})
+}
+
+func (d *StoreData[S, SP, PS]) enqueueOutput(output storeDataOutput[S]) {
+	d.outputQueueMutex.Lock()
+	d.outputNextSequence++
+	output.sequence = d.outputNextSequence
+	output.subscriptionGeneration = d.outputSubscriptionGeneration
+	if output.enqueuedAt.IsZero() {
+		output.enqueuedAt = time.Now()
+	}
+	d.outputQueue = append(d.outputQueue, output)
+	if output.partial != nil {
+		d.outputEnqueuedCount++
+	}
+	depth := len(d.outputQueue)
+	if !d.outputInFlightEnqueuedAt.IsZero() {
+		depth++
+	}
+	if depth > d.outputMaxQueueDepth {
+		d.outputMaxQueueDepth = depth
+	}
+	d.outputQueueCond.Signal()
+	d.outputQueueMutex.Unlock()
+}
+
+// GetOutputStats returns a point-in-time snapshot of callback queue pressure.
+func (d *StoreData[S, SP, PS]) GetOutputStats(now time.Time) StoreDataOutputStats {
+	d.outputQueueMutex.Lock()
+	defer d.outputQueueMutex.Unlock()
+
+	depth := len(d.outputQueue)
+	oldest := time.Time{}
+	if len(d.outputQueue) > 0 {
+		oldest = d.outputQueue[0].enqueuedAt
+	}
+	if !d.outputInFlightEnqueuedAt.IsZero() {
+		depth++
+		if oldest.IsZero() || d.outputInFlightEnqueuedAt.Before(oldest) {
+			oldest = d.outputInFlightEnqueuedAt
+		}
+	}
+	oldestAge := time.Duration(0)
+	if !oldest.IsZero() && now.After(oldest) {
+		oldestAge = now.Sub(oldest)
+	}
+	return StoreDataOutputStats{
+		QueueDepth:               depth,
+		MaxQueueDepth:            d.outputMaxQueueDepth,
+		OldestQueuedAge:          oldestAge,
+		ConfiguredBufferDuration: d.outputBufferDuration,
+		EffectiveBufferDuration:  d.outputEffectiveBufferDuration,
+		MaxBufferDuration:        d.outputMaxBufferDuration,
+		AdaptiveGathering:        d.outputMaxBufferDuration > d.outputBufferDuration,
+		AdaptiveBackoffCount:     d.outputBackoffCount,
+		EnqueuedOutputCount:      d.outputEnqueuedCount,
+		ProcessedOutputCount:     d.outputProcessedCount,
+		EmittedBatchCount:        d.outputBatchCount,
+		TotalQueueDelay:          d.outputTotalQueueDelay,
+		TotalHandlingTime:        d.outputTotalHandlingTime,
+		MaxBatchSize:             d.outputMaxBatchSize,
+	}
+}
+
+func (d *StoreData[S, SP, PS]) runOutputWorker() {
+	for {
+		d.processOutputBatch(d.nextOutputBatch())
+	}
+}
+
+func (d *StoreData[S, SP, PS]) processOutputBatch(outputs []storeDataOutput[S]) {
+	startedAt := time.Now()
+	partialBatch := len(outputs) > 0 && outputs[0].partial != nil
+	defer func() {
+		d.outputFiringSequence.Store(0)
+		if recovered := recover(); recovered != nil {
+			log.Printf("StoreData %s output callback panic: %v", d.name, recovered)
+		}
+		d.finishOutputBatch(time.Now(), startedAt, outputs, partialBatch)
+	}()
+
+	if len(outputs) == 0 {
+		return
+	}
+	if outputs[0].barrier != nil {
+		close(outputs[0].barrier)
+		return
+	}
+	if outputs[0].replaceWith != nil {
+		d.outputState = SP(outputs[0].replaceWith)
+		return
+	}
+
+	d.outputFiringSequence.Store(outputs[len(outputs)-1].sequence)
+	partial := outputs[0].partial
+	for _, output := range outputs[1:] {
+		output.partial.MergeOntoPartial(partial)
+	}
+	fields := reduceFieldPaths(partial.ApplyTo(d.outputState))
+	if len(fields) == 0 {
+		return
+	}
+	d.fireCallbacks(fields, partial, reflect.ValueOf(d.outputState).Elem())
+}
+
+func (d *StoreData[S, SP, PS]) nextOutputBatch() []storeDataOutput[S] {
+	d.outputQueueMutex.Lock()
+	for len(d.outputQueue) == 0 {
+		d.outputQueueCond.Wait()
+	}
+	now := time.Now()
+	d.adjustOutputGatheringLocked(now)
+	effectiveBufferDuration := d.outputEffectiveBufferDuration
+	if d.outputQueue[0].replaceWith != nil || d.outputQueue[0].barrier != nil || effectiveBufferDuration <= 0 {
+		output := d.outputQueue[0]
+		d.outputQueue = d.outputQueue[1:]
+		d.outputInFlightEnqueuedAt = output.enqueuedAt
+		d.outputQueueMutex.Unlock()
+		return []storeDataOutput[S]{output}
+	}
+	d.outputQueueMutex.Unlock()
+
+	time.Sleep(effectiveBufferDuration)
+
+	d.outputQueueMutex.Lock()
+	count := 0
+	firstSubscriptionGeneration := d.outputQueue[0].subscriptionGeneration
+	for count < len(d.outputQueue) && d.outputQueue[count].replaceWith == nil && d.outputQueue[count].barrier == nil &&
+		d.outputQueue[count].subscriptionGeneration == firstSubscriptionGeneration {
+		count++
+	}
+	outputs := append([]storeDataOutput[S](nil), d.outputQueue[:count]...)
+	d.outputQueue = d.outputQueue[count:]
+	if len(outputs) > 0 {
+		d.outputInFlightEnqueuedAt = outputs[0].enqueuedAt
+	}
+	d.outputQueueMutex.Unlock()
+	return outputs
+}
+
+// WaitForOutputIdle waits until the serialized output worker has processed all
+// updates enqueued before this call. It is primarily useful for deterministic
+// tests and orderly shutdown checks.
+func (d *StoreData[S, SP, PS]) WaitForOutputIdle(timeout time.Duration) bool {
+	barrier := make(chan struct{})
+	d.applyOrderMutex.Lock()
+	d.enqueueOutput(storeDataOutput[S]{barrier: barrier})
+	d.applyOrderMutex.Unlock()
+	if timeout <= 0 {
+		<-barrier
+		return true
+	}
+	select {
+	case <-barrier:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
+func (d *StoreData[S, SP, PS]) finishOutputBatch(
+	now time.Time,
+	startedAt time.Time,
+	outputs []storeDataOutput[S],
+	partialBatch bool,
+) {
+	d.outputQueueMutex.Lock()
+	if partialBatch {
+		d.outputProcessedCount += uint64(len(outputs))
+		d.outputBatchCount++
+		d.outputTotalHandlingTime += now.Sub(startedAt)
+		if len(outputs) > d.outputMaxBatchSize {
+			d.outputMaxBatchSize = len(outputs)
+		}
+		for _, output := range outputs {
+			if startedAt.After(output.enqueuedAt) {
+				d.outputTotalQueueDelay += startedAt.Sub(output.enqueuedAt)
 			}
 		}
-		d.bufferOutputLocked(fields, bufferedPartial)
+	}
+	if !d.outputInFlightEnqueuedAt.IsZero() &&
+		now.Sub(d.outputInFlightEnqueuedAt) >= adaptiveOutputPressureAge {
+		d.backoffOutputGatheringLocked(now, len(d.outputQueue), now.Sub(d.outputInFlightEnqueuedAt))
+	}
+	d.outputInFlightEnqueuedAt = time.Time{}
+	d.outputQueueMutex.Unlock()
+}
+
+func (d *StoreData[S, SP, PS]) adjustOutputGatheringLocked(now time.Time) {
+	oldestAge := time.Duration(0)
+	if len(d.outputQueue) > 0 && now.After(d.outputQueue[0].enqueuedAt) {
+		oldestAge = now.Sub(d.outputQueue[0].enqueuedAt)
+	}
+	if len(d.outputQueue) >= d.outputBacklogThreshold || oldestAge >= adaptiveOutputPressureAge {
+		d.backoffOutputGatheringLocked(now, len(d.outputQueue), oldestAge)
+		return
+	}
+	if d.outputEffectiveBufferDuration <= d.outputBufferDuration || len(d.outputQueue) > 1 ||
+		now.Sub(d.outputLastBackoff) < adaptiveOutputRecoveryInterval ||
+		now.Sub(d.outputLastRecoveryAdjustment) < adaptiveOutputRecoveryInterval {
 		return
 	}
 
-	d.fireCallbacks(fields, partial)
+	delta := (d.outputEffectiveBufferDuration - d.outputBufferDuration) / 8
+	if delta < time.Millisecond {
+		delta = time.Millisecond
+	}
+	d.outputEffectiveBufferDuration -= delta
+	if d.outputEffectiveBufferDuration < d.outputBufferDuration {
+		d.outputEffectiveBufferDuration = d.outputBufferDuration
+	}
+	d.outputLastRecoveryAdjustment = now
+	if d.outputEffectiveBufferDuration == d.outputBufferDuration {
+		log.Printf("StoreData %s output queue recovered; gather window returned to %s",
+			d.name, d.outputBufferDuration)
+	}
 }
 
-func (d *StoreData[S, SP, PS]) bufferOutputLocked(fields [][]any, partial Partial) {
-	if d.outputBufferPartial == nil {
-		d.outputBufferPartial = partial
-	} else {
-		partial.MergeOntoPartial(d.outputBufferPartial)
-	}
-	d.outputBufferFields = append(d.outputBufferFields, cloneFieldPaths(fields)...)
-	if d.outputBufferTimer == nil {
-		d.outputBufferTimer = time.AfterFunc(d.outputBufferDuration, d.flushOutputBuffer)
-	}
-}
-
-func (d *StoreData[S, SP, PS]) flushOutputBuffer() {
-	// Keep callback batches ordered when a callback blocks longer than the
-	// configured buffer duration and the following window expires.
-	d.outputFlushMutex.Lock()
-	defer d.outputFlushMutex.Unlock()
-
-	d.outputBufferMutex.Lock()
-	partial := d.outputBufferPartial
-	fields := d.outputBufferFields
-	d.outputBufferPartial = nil
-	d.outputBufferFields = nil
-	d.outputBufferTimer = nil
-	d.outputBufferMutex.Unlock()
-
-	if partial == nil {
+func (d *StoreData[S, SP, PS]) backoffOutputGatheringLocked(now time.Time, depth int, oldestAge time.Duration) {
+	if d.outputMaxBufferDuration <= d.outputBufferDuration {
+		if oldestAge >= time.Second && now.Sub(d.outputLastPressureLog) >= outputPressureLogInterval {
+			log.Printf("StoreData %s output queue falling behind: depth=%d oldest=%s adaptive gathering disabled",
+				d.name, depth, oldestAge.Round(time.Millisecond))
+			d.outputLastPressureLog = now
+		}
 		return
 	}
-	d.fireCallbacks(reduceFieldPaths(fields), partial)
-}
-
-func cloneFieldPaths(fields [][]any) [][]any {
-	cloned := make([][]any, len(fields))
-	for i, field := range fields {
-		cloned[i] = append([]any(nil), field...)
+	next := d.outputEffectiveBufferDuration * 2
+	if next < minimumAdaptiveOutputBufferDuration {
+		next = minimumAdaptiveOutputBufferDuration
 	}
-	return cloned
+	if next > d.outputMaxBufferDuration {
+		next = d.outputMaxBufferDuration
+	}
+	if next <= d.outputEffectiveBufferDuration {
+		return
+	}
+	previous := d.outputEffectiveBufferDuration
+	d.outputEffectiveBufferDuration = next
+	d.outputBackoffCount++
+	d.outputLastBackoff = now
+	d.outputLastRecoveryAdjustment = now
+	log.Printf("StoreData %s output queue pressure: depth=%d oldest=%s gather=%s->%s",
+		d.name, depth, oldestAge.Round(time.Millisecond), previous, next)
 }
 
-func (d *StoreData[S, SP, PS]) fireCallbacks(fields [][]any, partial Partial) {
+func (d *StoreData[S, SP, PS]) fireCallbacks(fields [][]any, partial Partial, stateReflect reflect.Value) {
 	d.partialCallbacks.Fire(d.name, fields, partial)
 
 	for _, f := range fields {
-		d.triggerSubs(f)
+		d.triggerSubs(f, stateReflect)
 	}
 }
 
@@ -469,6 +788,8 @@ func (d *StoreData[S, SP, PS]) DecodeAndSetFullState(b []byte) error {
 	if err := iv.(Serializable).Deserialize(binarystreams.NewReaderFromBytes(b), nil); err != nil {
 		return err
 	}
+	d.applyOrderMutex.Lock()
+	defer d.applyOrderMutex.Unlock()
 	waitStart := time.Now()
 	d.stateMutex.Lock()
 	waitDuration := time.Since(waitStart)
@@ -479,6 +800,11 @@ func (d *StoreData[S, SP, PS]) DecodeAndSetFullState(b []byte) error {
 		d.logLockTiming("DecodeAndSetFullState", "write", waitDuration, holdDuration)
 	}()
 	*d.state = *iv.(SP)
+	replacement, err := detachedState[S, SP](d.state)
+	if err != nil {
+		return fmt.Errorf("clone replacement output state for store %s: %w", d.name, err)
+	}
+	d.enqueueOutput(storeDataOutput[S]{replaceWith: replacement})
 	return nil
 }
 
@@ -511,10 +837,11 @@ func (d *StoreData[S, SP, PS]) logLockTiming(operation string, lockType string, 
 }
 
 // triggerSubs is an internal helper to break up triggering subscriptions from the field changes themselves
-func (d *StoreData[S, SP, PS]) triggerSubs(field []any) {
+func (d *StoreData[S, SP, PS]) triggerSubs(field []any, stateReflect reflect.Value) {
 	// Get the set of possible subscriptions to fire
 	possibleSubs := make(map[*subInfo]bool)
 
+	d.subscriptionsMutex.RLock()
 	t := d.subscriptions
 	for _, f := range field {
 		for _, s := range t.subs {
@@ -527,9 +854,13 @@ func (d *StoreData[S, SP, PS]) triggerSubs(field []any) {
 		}
 		t = c
 	}
+	d.subscriptionsMutex.RUnlock()
 
 	// Now filter each one to make sure it actually needs firing
 	for s := range possibleSubs {
+		if d.outputFiringSequence.Load() < s.startSequence {
+			continue
+		}
 		// Only need to walk up the smaller of the two sets of fields and ensure equality up to that far -- any mismatches
 		// above that level will always still be fine, in either direction.
 		mismatch := false
@@ -549,10 +880,10 @@ func (d *StoreData[S, SP, PS]) triggerSubs(field []any) {
 
 		switch {
 		case s.takesType && s.takesField:
-			fv := d.getFieldValue(s.field)
+			fv := getFieldValueFrom(stateReflect, s.field)
 			s.callback.Call([]reflect.Value{reflect.ValueOf(field), fv})
 		case s.takesType:
-			fv := d.getFieldValue(s.field)
+			fv := getFieldValueFrom(stateReflect, s.field)
 			s.callback.Call([]reflect.Value{fv})
 		case s.takesField:
 			s.callback.Call([]reflect.Value{reflect.ValueOf(field)})
@@ -598,11 +929,18 @@ func (d *StoreData[S, SP, PS]) SubscribeToField(field []any, callback any) {
 		panic(fmt.Sprintf("SubscribeToField callback for field %+v has wrong number of args (got %d, expected 1 or 2)", field, ct.NumIn()))
 	}
 
+	d.outputQueueMutex.Lock()
+	defer d.outputQueueMutex.Unlock()
+	d.subscriptionsMutex.Lock()
+	defer d.subscriptionsMutex.Unlock()
+	d.outputSubscriptionGeneration++
+
 	si := &subInfo{
-		field:      field,
-		callback:   reflect.ValueOf(callback),
-		takesType:  takesType,
-		takesField: takesField,
+		field:         field,
+		callback:      reflect.ValueOf(callback),
+		takesType:     takesType,
+		takesField:    takesField,
+		startSequence: d.outputNextSequence + 1,
 	}
 
 	// Find/build the sub tier for the requested field at full depth
@@ -629,7 +967,8 @@ func (d *StoreData[S, SP, PS]) SubscribeToField(field []any, callback any) {
 
 // subInfo is a helper structure for storing information about a subscription
 type subInfo struct {
-	field []any
+	field         []any
+	startSequence uint64
 
 	callback   reflect.Value
 	takesField bool

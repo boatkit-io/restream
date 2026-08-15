@@ -161,6 +161,9 @@ func TestViewerSessionDetachedStoreAccumulatorTransitions(t *testing.T) {
 	applyViewerSessionTestPartial(t, registry, &viewerSocketTestPartial{
 		Values: NewPartialMap[string, int]().Set("b", 2),
 	})
+	if !store.GetStoreData().(StoreDataOutputWaiter).WaitForOutputIdle(time.Second) {
+		t.Fatal("timed out waiting for partial outputs")
+	}
 
 	tracker.sessionBufferMutex.Lock()
 	update := tracker.sessionStoreUpdates[viewerSocketTestStoreName]
@@ -188,6 +191,9 @@ func TestViewerSessionDetachedStoreAccumulatorTransitions(t *testing.T) {
 	applyViewerSessionTestPartial(t, registry, &viewerSocketTestPartial{
 		Other: Ptr(9),
 	})
+	if !store.GetStoreData().(StoreDataOutputWaiter).WaitForOutputIdle(time.Second) {
+		t.Fatal("timed out waiting for full-state outputs")
+	}
 
 	tracker.sessionBufferMutex.Lock()
 	update = tracker.sessionStoreUpdates[viewerSocketTestStoreName]
@@ -215,6 +221,9 @@ func TestViewerSessionDetachedStoreAccumulatorTransitions(t *testing.T) {
 	}
 	if err := registry.SetFullStateToStore(viewerSocketTestStoreName, replacementBytes); err != nil {
 		t.Fatalf("replace full state failed: %v", err)
+	}
+	if !store.GetStoreData().(StoreDataOutputWaiter).WaitForOutputIdle(time.Second) {
+		t.Fatal("timed out waiting for replacement full-state output")
 	}
 	tracker.sessionBufferMutex.Lock()
 	retainedFull = tracker.sessionStoreUpdates[viewerSocketTestStoreName].
@@ -273,6 +282,9 @@ func TestViewerSessionManifestChangeRebuildsRetainedKeyBaseline(t *testing.T) {
 			Set("a", 10).
 			Set("b", 20),
 	})
+	if !store.GetStoreData().(StoreDataOutputWaiter).WaitForOutputIdle(time.Second) {
+		t.Fatal("timed out waiting for retained keyed update")
+	}
 	if err := tracker.reconcileSessionManifest(ViewerSessionAttachRequest{
 		StoreSubscriptions: []ViewerSessionStoreSubscription{{
 			StoreName: viewerSocketTestStoreName,

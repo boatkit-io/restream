@@ -275,6 +275,9 @@ func TestCloudSourceStoreDataAllowsDecodedRelayPartial(t *testing.T) {
 	if err := store.data.DecodeAndApplyPartial(partialBytes); err != nil {
 		t.Fatalf("DecodeAndApplyPartial failed: %v", err)
 	}
+	if !store.data.WaitForOutputIdle(time.Second) {
+		t.Fatal("timed out waiting for decoded relay output")
+	}
 
 	if state.Value != "decoded relay partial" {
 		t.Fatalf("state value = %q, want decoded relay partial", state.Value)
@@ -321,6 +324,10 @@ func TestGetSerializedPartialForSubscriptionKeySerializesSnapshotOutsideReadLock
 func TestGetPartialSnapshotForSubscriptionKeyBuildsPartialOutsideReadLock(t *testing.T) {
 	store, state := newStoreDataSnapshotTestStore()
 	state.onPartialForFields = func() {
+		// Generated PartialForFields implementations are pure. Clear this
+		// deliberately re-entrant test hook before the nested ApplyPartial also
+		// captures its output snapshot.
+		state.onPartialForFields = nil
 		store.data.ApplyPartial(&storeDataSnapshotTestPartial{Value: "updated during partial snapshot"})
 	}
 
