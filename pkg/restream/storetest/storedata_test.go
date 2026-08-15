@@ -252,7 +252,6 @@ func TestStoreDataOutputWorkerBacksOffGatheringUnderPressure(t *testing.T) {
 		&state,
 		restream.StoreDataOptions{
 			MaxOutputBufferDuration: 40 * time.Millisecond,
-			OutputBacklogThreshold:  2,
 		},
 	)
 
@@ -277,6 +276,7 @@ func TestStoreDataOutputWorkerBacksOffGatheringUnderPressure(t *testing.T) {
 	pressured := store.Sd.GetOutputStats(time.Now().Add(2 * time.Second))
 	assert.Equal(t, 9, pressured.QueueDepth)
 	assert.GreaterOrEqual(t, pressured.OldestQueuedAge, 2*time.Second)
+	time.Sleep(275 * time.Millisecond)
 	close(releaseCallback)
 	if !store.Sd.WaitForOutputIdle(time.Second) {
 		t.Fatal("timed out waiting for gathered outputs")

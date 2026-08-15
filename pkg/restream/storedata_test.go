@@ -2,11 +2,69 @@ package restream
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/boatkit-io/restream/pkg/binarystreams"
 )
+
+func TestOutputPressureDetailsExplainTriggerAndPreviousBatch(t *testing.T) {
+	store, _ := newStoreDataLockTestStore()
+	store.data.outputLastBatchSize = 17
+	store.data.outputLastBatchAge = 122 * time.Millisecond
+	store.data.outputLastBatchGatherDuration = 100 * time.Millisecond
+	store.data.outputLastBatchHandlingTime = 7 * time.Millisecond
+
+	details := store.data.outputPressureDetails(13, 280*time.Millisecond)
+	for _, want := range []string{
+		"reason=queue-age",
+		"depth=13 oldest=280ms age-threshold=250ms",
+		"last-batch-inputs=17",
+		"last-batch-age=122ms",
+		"last-batch-gather=100ms",
+		"last-batch-handling=7ms",
+		"last-batch-excess=22ms",
+	} {
+		if !strings.Contains(details, want) {
+			t.Errorf("details %q do not contain %q", details, want)
+		}
+	}
+}
+
+func TestAdaptiveGatheringUsesQueueAgeNotFreshDepth(t *testing.T) {
+	store, _ := newStoreDataLockTestStore()
+	store.data.outputBufferDuration = 50 * time.Millisecond
+	store.data.outputEffectiveBufferDuration = 50 * time.Millisecond
+	store.data.outputMaxBufferDuration = 500 * time.Millisecond
+	now := time.Now()
+
+	store.data.outputQueueMutex.Lock()
+	for range 100 {
+		store.data.outputQueue = append(store.data.outputQueue, storeDataOutput[storeDataLockTestState]{
+			enqueuedAt: now.Add(-3 * time.Millisecond),
+		})
+	}
+	store.data.adjustOutputGatheringLocked(now)
+	store.data.outputQueue = nil
+	store.data.outputQueueMutex.Unlock()
+
+	if got := store.data.outputEffectiveBufferDuration; got != 50*time.Millisecond {
+		t.Fatalf("fresh queue depth increased gather to %s", got)
+	}
+
+	store.data.outputQueueMutex.Lock()
+	store.data.outputQueue = []storeDataOutput[storeDataLockTestState]{{
+		enqueuedAt: now.Add(-300 * time.Millisecond),
+	}}
+	store.data.adjustOutputGatheringLocked(now)
+	store.data.outputQueue = nil
+	store.data.outputQueueMutex.Unlock()
+
+	if got := store.data.outputEffectiveBufferDuration; got != 100*time.Millisecond {
+		t.Fatalf("old queued output increased gather to %s, want 100ms", got)
+	}
+}
 
 type storeDataLockTestState struct {
 	Value string

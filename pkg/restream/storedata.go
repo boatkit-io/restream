@@ -19,7 +19,6 @@ var typeAnyArrayOfAny = reflect.TypeFor[[]any]()
 
 const (
 	storeDataLockWarnAfter              = 100 * time.Millisecond
-	defaultOutputBacklogThreshold       = 8
 	minimumAdaptiveOutputBufferDuration = 5 * time.Millisecond
 	adaptiveOutputPressureAge           = 250 * time.Millisecond
 	adaptiveOutputRecoveryInterval      = 5 * time.Second
@@ -91,13 +90,17 @@ type StoreData[S any, SP StoreDataPtrType[S], P Partial] struct {
 	outputState                   SP
 	outputEffectiveBufferDuration time.Duration
 	outputMaxBufferDuration       time.Duration
-	outputBacklogThreshold        int
 	outputInFlightEnqueuedAt      time.Time
+	outputInFlightGatherDuration  time.Duration
 	outputMaxQueueDepth           int
 	outputBackoffCount            uint64
 	outputLastBackoff             time.Time
 	outputLastRecoveryAdjustment  time.Time
 	outputLastPressureLog         time.Time
+	outputLastBatchSize           int
+	outputLastBatchAge            time.Duration
+	outputLastBatchGatherDuration time.Duration
+	outputLastBatchHandlingTime   time.Duration
 	outputEnqueuedCount           uint64
 	outputProcessedCount          uint64
 	outputBatchCount              uint64
@@ -156,8 +159,9 @@ type StoreDataOptions struct {
 	// output queue falls behind. It must be greater than OutputBufferDuration.
 	// Zero preserves every output without automatic gathering.
 	MaxOutputBufferDuration time.Duration
-	// OutputBacklogThreshold controls how many queued outputs trigger adaptive
-	// gathering. Values below one use a conservative default.
+	// OutputBacklogThreshold is retained for source compatibility. It is ignored:
+	// adaptive gathering responds to queue age rather than burst depth.
+	// Deprecated: queue depth is diagnostic only.
 	OutputBacklogThreshold int
 }
 
@@ -213,10 +217,6 @@ func NewStoreDataWithOptions[S any, SP StoreDataPtrType[S], P Partial](
 	if err != nil {
 		panic(fmt.Sprintf("Store %s could not clone initial output state: %v", name, err))
 	}
-	backlogThreshold := options.OutputBacklogThreshold
-	if backlogThreshold < 1 {
-		backlogThreshold = defaultOutputBacklogThreshold
-	}
 	maxBufferDuration := options.MaxOutputBufferDuration
 	if maxBufferDuration < options.OutputBufferDuration {
 		maxBufferDuration = options.OutputBufferDuration
@@ -234,7 +234,6 @@ func NewStoreDataWithOptions[S any, SP StoreDataPtrType[S], P Partial](
 		outputBufferDuration:          options.OutputBufferDuration,
 		outputEffectiveBufferDuration: options.OutputBufferDuration,
 		outputMaxBufferDuration:       maxBufferDuration,
-		outputBacklogThreshold:        backlogThreshold,
 		outputState:                   SP(outputState),
 	}
 	d.outputQueueCond = sync.NewCond(&d.outputQueueMutex)
@@ -643,6 +642,7 @@ func (d *StoreData[S, SP, PS]) nextOutputBatch() []storeDataOutput[S] {
 		output := d.outputQueue[0]
 		d.outputQueue = d.outputQueue[1:]
 		d.outputInFlightEnqueuedAt = output.enqueuedAt
+		d.outputInFlightGatherDuration = 0
 		d.outputQueueMutex.Unlock()
 		return []storeDataOutput[S]{output}
 	}
@@ -661,6 +661,7 @@ func (d *StoreData[S, SP, PS]) nextOutputBatch() []storeDataOutput[S] {
 	d.outputQueue = d.outputQueue[count:]
 	if len(outputs) > 0 {
 		d.outputInFlightEnqueuedAt = outputs[0].enqueuedAt
+		d.outputInFlightGatherDuration = effectiveBufferDuration
 	}
 	d.outputQueueMutex.Unlock()
 	return outputs
@@ -693,10 +694,19 @@ func (d *StoreData[S, SP, PS]) finishOutputBatch(
 	partialBatch bool,
 ) {
 	d.outputQueueMutex.Lock()
+	handlingTime := now.Sub(startedAt)
+	batchAge := time.Duration(0)
+	if !d.outputInFlightEnqueuedAt.IsZero() && now.After(d.outputInFlightEnqueuedAt) {
+		batchAge = now.Sub(d.outputInFlightEnqueuedAt)
+	}
 	if partialBatch {
 		d.outputProcessedCount += uint64(len(outputs))
 		d.outputBatchCount++
-		d.outputTotalHandlingTime += now.Sub(startedAt)
+		d.outputTotalHandlingTime += handlingTime
+		d.outputLastBatchSize = len(outputs)
+		d.outputLastBatchAge = batchAge
+		d.outputLastBatchGatherDuration = d.outputInFlightGatherDuration
+		d.outputLastBatchHandlingTime = handlingTime
 		if len(outputs) > d.outputMaxBatchSize {
 			d.outputMaxBatchSize = len(outputs)
 		}
@@ -706,20 +716,14 @@ func (d *StoreData[S, SP, PS]) finishOutputBatch(
 			}
 		}
 	}
-	if !d.outputInFlightEnqueuedAt.IsZero() &&
-		now.Sub(d.outputInFlightEnqueuedAt) >= adaptiveOutputPressureAge {
-		d.backoffOutputGatheringLocked(now, len(d.outputQueue), now.Sub(d.outputInFlightEnqueuedAt))
-	}
 	d.outputInFlightEnqueuedAt = time.Time{}
+	d.outputInFlightGatherDuration = 0
 	d.outputQueueMutex.Unlock()
 }
 
 func (d *StoreData[S, SP, PS]) adjustOutputGatheringLocked(now time.Time) {
-	oldestAge := time.Duration(0)
-	if len(d.outputQueue) > 0 && now.After(d.outputQueue[0].enqueuedAt) {
-		oldestAge = now.Sub(d.outputQueue[0].enqueuedAt)
-	}
-	if len(d.outputQueue) >= d.outputBacklogThreshold || oldestAge >= adaptiveOutputPressureAge {
+	oldestAge := d.oldestQueuedAgeLocked(now)
+	if oldestAge >= adaptiveOutputPressureAge {
 		d.backoffOutputGatheringLocked(now, len(d.outputQueue), oldestAge)
 		return
 	}
@@ -744,11 +748,46 @@ func (d *StoreData[S, SP, PS]) adjustOutputGatheringLocked(now time.Time) {
 	}
 }
 
-func (d *StoreData[S, SP, PS]) backoffOutputGatheringLocked(now time.Time, depth int, oldestAge time.Duration) {
+func (d *StoreData[S, SP, PS]) oldestQueuedAgeLocked(now time.Time) time.Duration {
+	if len(d.outputQueue) == 0 || !now.After(d.outputQueue[0].enqueuedAt) {
+		return 0
+	}
+	return now.Sub(d.outputQueue[0].enqueuedAt)
+}
+
+func (d *StoreData[S, SP, PS]) outputPressureDetails(
+	depth int,
+	oldestAge time.Duration,
+) string {
+	lastBatchExcess := d.outputLastBatchAge - d.outputLastBatchGatherDuration
+	if lastBatchExcess < 0 {
+		lastBatchExcess = 0
+	}
+	return fmt.Sprintf(
+		"reason=queue-age depth=%d oldest=%s age-threshold=%s "+
+			"last-batch-inputs=%d last-batch-age=%s last-batch-gather=%s "+
+			"last-batch-handling=%s last-batch-excess=%s",
+		depth,
+		oldestAge.Round(time.Millisecond),
+		adaptiveOutputPressureAge,
+		d.outputLastBatchSize,
+		d.outputLastBatchAge.Round(time.Millisecond),
+		d.outputLastBatchGatherDuration,
+		d.outputLastBatchHandlingTime.Round(time.Millisecond),
+		lastBatchExcess.Round(time.Millisecond),
+	)
+}
+
+func (d *StoreData[S, SP, PS]) backoffOutputGatheringLocked(
+	now time.Time,
+	depth int,
+	oldestAge time.Duration,
+) {
+	details := d.outputPressureDetails(depth, oldestAge)
 	if d.outputMaxBufferDuration <= d.outputBufferDuration {
 		if oldestAge >= time.Second && now.Sub(d.outputLastPressureLog) >= outputPressureLogInterval {
-			log.Printf("StoreData %s output queue falling behind: depth=%d oldest=%s adaptive gathering disabled",
-				d.name, depth, oldestAge.Round(time.Millisecond))
+			log.Printf("StoreData %s output queue falling behind: %s adaptive-gathering=disabled",
+				d.name, details)
 			d.outputLastPressureLog = now
 		}
 		return
@@ -768,8 +807,8 @@ func (d *StoreData[S, SP, PS]) backoffOutputGatheringLocked(now time.Time, depth
 	d.outputBackoffCount++
 	d.outputLastBackoff = now
 	d.outputLastRecoveryAdjustment = now
-	log.Printf("StoreData %s output queue pressure: depth=%d oldest=%s gather=%s->%s",
-		d.name, depth, oldestAge.Round(time.Millisecond), previous, next)
+	log.Printf("StoreData %s output queue pressure: %s gather=%s->%s base=%s max=%s backoff=%d",
+		d.name, details, previous, next, d.outputBufferDuration, d.outputMaxBufferDuration, d.outputBackoffCount)
 }
 
 func (d *StoreData[S, SP, PS]) fireCallbacks(fields [][]any, partial Partial, stateReflect reflect.Value) {
