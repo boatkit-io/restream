@@ -27,7 +27,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  tests:
+    name: tests
+    uses: ./.github/workflows/test.yaml
+    permissions:
+      contents: read
+      pull-requests: read
+
   release:
+    needs: tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
