@@ -10,6 +10,7 @@ import (
 
 	"github.com/boatkit-io/restream/pkg/binarystreams"
 	"github.com/sirupsen/logrus"
+	socketTypes "github.com/zishang520/socket.io/v3/pkg/types"
 )
 
 type viewerSocketDataStreamBroker struct {
@@ -56,17 +57,45 @@ func TestAddSocketHandlersRejectsInvalidStoreDeliveryMode(t *testing.T) {
 	}
 }
 
+func TestAddSocketHandlersRejectsConflictingFFRPCHandlers(t *testing.T) {
+	legacy := func(string, AccessLevel, []byte) (bool, error) { return true, nil }
+	annotated := func(map[string]string, string, AccessLevel, []byte) (bool, error) { return true, nil }
+	err := AddSocketHandlersWithOptions(nil, nil, nil, nil, nil, nil, SocketHandlerOptions{
+		FFRPCHandler:                legacy,
+		FFRPCHandlerWithAnnotations: annotated,
+	})
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("conflicting FFRPC handler error = %v", err)
+	}
+}
+
 func TestUpdateSessionConfigRefreshesRPCHandler(t *testing.T) {
 	oldCalled := false
 	newCalled := false
-	tracker := newSocketTracker(socketTrackerConfig{rpch: func(string, AccessLevel, []byte) ([]byte, bool, error) {
-		oldCalled = true
-		return nil, true, nil
-	}})
-	tracker.updateSessionConfig(socketTrackerConfig{rpch: func(string, AccessLevel, []byte) ([]byte, bool, error) {
-		newCalled = true
-		return nil, true, nil
-	}}, ViewerSessionIdentity{})
+	oldFFRPCCalled := false
+	newFFRPCCalled := false
+	tracker := newSocketTracker(socketTrackerConfig{
+		rpch: func(string, AccessLevel, []byte) ([]byte, bool, error) {
+			oldCalled = true
+			return nil, true, nil
+		},
+		ffrpch: func(map[string]string, string, AccessLevel, []byte) (bool, error) {
+			oldFFRPCCalled = true
+			return true, nil
+		},
+		annotations: map[string]string{"principal_id": "old"},
+	})
+	tracker.updateSessionConfig(socketTrackerConfig{
+		rpch: func(string, AccessLevel, []byte) ([]byte, bool, error) {
+			newCalled = true
+			return nil, true, nil
+		},
+		ffrpch: func(map[string]string, string, AccessLevel, []byte) (bool, error) {
+			newFFRPCCalled = true
+			return true, nil
+		},
+		annotations: map[string]string{"principal_id": "new"},
+	}, ViewerSessionIdentity{})
 
 	_, _, err := tracker.lookupRPCHandler()("Test.Call", AccessLevelPublic, nil)
 	if err != nil {
@@ -74,6 +103,50 @@ func TestUpdateSessionConfigRefreshesRPCHandler(t *testing.T) {
 	}
 	if oldCalled || !newCalled {
 		t.Fatalf("RPC handlers called: old=%t new=%t", oldCalled, newCalled)
+	}
+	ffrpc, annotations := tracker.lookupFFRPCHandler()
+	if _, err := ffrpc(annotations, "Test.Notify", AccessLevelPublic, nil); err != nil {
+		t.Fatalf("refreshed FFRPC handler failed: %v", err)
+	}
+	if oldFFRPCCalled || !newFFRPCCalled || annotations["principal_id"] != "new" {
+		t.Fatalf(
+			"FFRPC config: old=%t new=%t annotations=%#v",
+			oldFFRPCCalled, newFFRPCCalled, annotations,
+		)
+	}
+}
+
+func TestViewerSocketFFRPCReceivesAnnotations(t *testing.T) {
+	received := make(chan map[string]string, 1)
+	annotations := map[string]string{"principal_id": "cloud-user:42"}
+	tracker := newSocketTracker(socketTrackerConfig{
+		log: logrus.New(),
+		ffrpch: func(
+			got map[string]string,
+			_ string,
+			_ AccessLevel,
+			_ []byte,
+		) (bool, error) {
+			received <- got
+			return true, nil
+		},
+		annotations: annotations,
+	})
+	initializeTestSocketRuntime(tracker)
+	defer tracker.cancel()
+
+	tracker.onFFRPCCall(FFRPCCallMessage{
+		MethodName: "Store.Notify",
+		Request:    socketTypes.NewBytesBuffer([]byte{1}),
+	})
+
+	select {
+	case got := <-received:
+		if len(got) != 1 || got["principal_id"] != "cloud-user:42" {
+			t.Fatalf("annotations = %#v, want %#v", got, annotations)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("FFRPC handler was not called")
 	}
 }
 

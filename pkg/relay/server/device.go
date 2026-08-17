@@ -73,6 +73,7 @@ type pendingDataStreamOperation struct {
 
 // NewDevice creates a Device around an existing store registry.
 func NewDevice(deviceID string, sr *restream.StoreRegistry, config DeviceManagerConfig) *Device {
+	validateDeviceManagerFFRPCHandlers(config)
 	return &Device{
 		DeviceID:        deviceID,
 		StoreRegistry:   sr,
@@ -832,7 +833,23 @@ func (d *Device) RPCHandler(name string, accessLevel restream.AccessLevel, binar
 // forwarding unhandled calls to the connected device without retaining any
 // response state.
 func (d *Device) FFRPCHandler(name string, accessLevel restream.AccessLevel, binaryData []byte) (bool, error) {
-	if d.config.GlobalFFRPC != nil {
+	return d.FFRPCHandlerWithAnnotations(nil, name, accessLevel, binaryData)
+}
+
+// FFRPCHandlerWithAnnotations handles cloud viewer FFRPCs without allowing
+// trusted transport identity to be lost on either the global or device path.
+func (d *Device) FFRPCHandlerWithAnnotations(
+	annotations map[string]string,
+	name string,
+	accessLevel restream.AccessLevel,
+	binaryData []byte,
+) (bool, error) {
+	if d.config.GlobalFFRPCWithAnnotations != nil {
+		handled, err := d.config.GlobalFFRPCWithAnnotations(annotations, name, accessLevel, binaryData)
+		if handled {
+			return true, err
+		}
+	} else if d.config.GlobalFFRPC != nil {
 		handled, err := d.config.GlobalFFRPC(name, accessLevel, binaryData)
 		if handled {
 			return true, err
@@ -845,7 +862,13 @@ func (d *Device) FFRPCHandler(name string, accessLevel restream.AccessLevel, bin
 	if conn == nil {
 		return false, fmt.Errorf("no connected device available to handle request")
 	}
-	if err := conn.SendFFRPC(name, accessLevel, binaryData); err != nil {
+	var err error
+	if conn.Capabilities.RPCAnnotations {
+		err = conn.SendFFRPCWithAnnotations(name, accessLevel, binaryData, annotations)
+	} else {
+		err = conn.SendFFRPC(name, accessLevel, binaryData)
+	}
+	if err != nil {
 		return false, fmt.Errorf("error sending FFRPC: %w", err)
 	}
 	return true, nil

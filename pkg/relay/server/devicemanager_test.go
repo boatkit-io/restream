@@ -51,3 +51,19 @@ func TestDeviceManagerCreatesConfiguredStores(t *testing.T) {
 		t.Fatalf("configured after second GetDevice = %d, want 1", configured)
 	}
 }
+
+func TestDeviceManagerRejectsConflictingGlobalFFRPCHandlers(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewDeviceManager did not panic")
+		}
+	}()
+	NewDeviceManager(DeviceManagerConfig{
+		GlobalFFRPC: func(string, restream.AccessLevel, []byte) (bool, error) { return true, nil },
+		GlobalFFRPCWithAnnotations: func(
+			map[string]string, string, restream.AccessLevel, []byte,
+		) (bool, error) {
+			return true, nil
+		},
+	})
+}

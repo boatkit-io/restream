@@ -207,6 +207,7 @@ type FFRPCCallPacket struct {
 	MethodName  string
 	AccessLevel byte
 	Request     []byte
+	Annotations map[string]string
 }
 
 // Kind implements Packet.

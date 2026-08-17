@@ -90,8 +90,13 @@ type Config struct {
 	Endpoint    string
 	Credentials Credentials
 	// RPCHandlerWithAnnotations receives RPC calls with optional transport
-	// annotations that remain separate from the serialized request.
+	// annotations that remain separate from the serialized request. It is
+	// mutually exclusive with NewStreamer's legacy rpc argument.
 	RPCHandlerWithAnnotations restream.RPCHandlerWithAnnotationsFunc
+	// FFRPCHandlerWithAnnotations receives fire-and-forget calls with the same
+	// trusted transport annotations as ordinary RPCs. It is mutually exclusive
+	// with NewStreamer's optional legacy FFRPC argument.
+	FFRPCHandlerWithAnnotations restream.FFRPCHandlerWithAnnotationsFunc
 
 	StorePolicy StorePolicy
 	// DataStreams owns independently authorized high-bandwidth stream

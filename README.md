@@ -239,7 +239,7 @@ response, handled, err := rpcd.FireRPCWithAnnotations(
 )
 ```
 
-The device relay advertises RPC-annotation support when `relayclient.Config.RPCHandlerWithAnnotations` is configured. A cloud relay may then use `server.Connection.SendRPCWithAnnotations`; it must use the original `SendRPC` for a device whose `Capabilities.RPCAnnotations` is false. Annotations are an optional trailing field on capable relay RPC packets, while unannotated packets retain their legacy byte representation.
+The device relay advertises RPC-annotation support when `relayclient.Config.RPCHandlerWithAnnotations` or `FFRPCHandlerWithAnnotations` is configured. A cloud relay may then use `server.Connection.SendRPCWithAnnotations` or `SendFFRPCWithAnnotations`; it must use the corresponding original method for a device whose `Capabilities.RPCAnnotations` is false. Annotations are an optional trailing field on capable relay RPC and FFRPC packets, while unannotated packets retain their legacy byte representation.
 
 ## Fire-and-Forget RPCs
 
@@ -280,7 +280,7 @@ restream.AddSocketHandlers(
 )
 ```
 
-For a device relay, pass `rpcd.FireFFRPC` as the optional final argument to `relayclient.NewStreamer`. A cloud viewer websocket passes `device.FFRPCHandler` to `AddSocketHandlers`; the relay forwards the request without allocating an RPC ID or pending response.
+When caller annotations matter, use `AddSocketHandlersWithOptions` with `RPCAnnotations` and `FFRPCHandlerWithAnnotations: rpcd.FireFFRPCWithAnnotations`. Configure a device relay's `FFRPCHandlerWithAnnotations` the same way, and have a cloud viewer use `device.FFRPCHandlerWithAnnotations`. The relay forwards the request and its trusted transport metadata without allocating an RPC ID or pending response. The legacy unannotated handlers remain available for callers that do not need metadata. Legacy and annotated variants are mutually exclusive on every configuration surface; providing both is rejected instead of choosing one silently.
 
 FFRPC delivery still uses the underlying reliable websocket, but execution completion and application errors are deliberately invisible to the sender. Use a normal RPC when the caller must know whether an operation succeeded. For high-rate payloads, include a sequence number so the receiver can identify stale or reordered work.
 

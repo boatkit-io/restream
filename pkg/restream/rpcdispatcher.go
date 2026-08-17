@@ -64,6 +64,15 @@ func RPCCallInfoFromContext(ctx context.Context) (RPCCallInfo, bool) {
 // because FFRPCs never send a response to the caller.
 type FFRPCHandlerFunc func(name string, minAccessLevel AccessLevel, binaryData []byte) (bool, error)
 
+// FFRPCHandlerWithAnnotationsFunc handles a fire-and-forget RPC together with
+// trusted transport annotations.
+type FFRPCHandlerWithAnnotationsFunc func(
+	annotations map[string]string,
+	name string,
+	minAccessLevel AccessLevel,
+	binaryData []byte,
+) (bool, error)
+
 type ffrpcInfo struct {
 	MinAccessLevel AccessLevel
 	CallbackValue  reflect.Value
@@ -281,6 +290,17 @@ func (d *RPCDispatcher) FireRPCWithAnnotations(
 // FireFFRPC dispatches a fire-and-forget RPC. It reports local dispatch errors
 // to the transport for logging, but no response is serialized for the caller.
 func (d *RPCDispatcher) FireFFRPC(name string, accessLevel AccessLevel, binaryData []byte) (bool, error) {
+	return d.FireFFRPCWithAnnotations(nil, name, accessLevel, binaryData)
+}
+
+// FireFFRPCWithAnnotations dispatches a fire-and-forget RPC with trusted
+// transport annotations.
+func (d *RPCDispatcher) FireFFRPCWithAnnotations(
+	annotations map[string]string,
+	name string,
+	accessLevel AccessLevel,
+	binaryData []byte,
+) (bool, error) {
 	d.mutex.Lock()
 	ffrpc, exists := d.ffrpcLookup[name]
 	d.mutex.Unlock()
@@ -327,7 +347,7 @@ func (d *RPCDispatcher) FireFFRPC(name string, accessLevel AccessLevel, binaryDa
 	}
 	argValues := make([]reflect.Value, len(ffrpc.ArgKinds)+argOffset)
 	if ffrpc.HasContext {
-		argValues[0] = reflect.ValueOf(newRPCCallContext(accessLevel, nil))
+		argValues[0] = reflect.ValueOf(newRPCCallContext(accessLevel, annotations))
 	}
 	for index := range ffrpc.ArgKinds {
 		argValues[index+argOffset] = rve.Field(index)

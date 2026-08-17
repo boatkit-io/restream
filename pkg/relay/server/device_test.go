@@ -1,6 +1,7 @@
 package server
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/boatkit-io/restream/pkg/binarystreams"
@@ -64,6 +65,40 @@ func TestDeviceFFRPCHandlerForwardsWithoutPendingResponse(t *testing.T) {
 	device.rpcMutex.Unlock()
 	if pendingCount != 0 {
 		t.Fatalf("pending RPC count = %d, want 0", pendingCount)
+	}
+}
+
+func TestDeviceFFRPCHandlerForwardsAnnotations(t *testing.T) {
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	connection := NewConnection(serverConn)
+	connection.Capabilities.RPCAnnotations = true
+	device := NewDevice("device-1", mustStoreRegistry(t), DeviceManagerConfig{})
+	device.DeviceConnected(connection)
+	annotations := map[string]string{"principal_id": "cloud-user:42"}
+
+	handled, err := device.FFRPCHandlerWithAnnotations(
+		annotations,
+		"Radio.TransmitAudio",
+		restream.AccessLevel(3),
+		[]byte{7, 8, 9},
+	)
+	if err != nil || !handled {
+		t.Fatalf("FFRPCHandlerWithAnnotations = (%v, %v), want (true, nil)", handled, err)
+	}
+
+	_, message, err := clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read FFRPC packet failed: %v", err)
+	}
+	packetRaw, err := protocol.DecodePacket(message)
+	if err != nil {
+		t.Fatalf("Decode FFRPC packet failed: %v", err)
+	}
+	packet := packetRaw.(*protocol.FFRPCCallPacket)
+	if !reflect.DeepEqual(packet.Annotations, annotations) {
+		t.Fatalf("annotations = %#v, want %#v", packet.Annotations, annotations)
 	}
 }
 

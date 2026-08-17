@@ -272,6 +272,39 @@ func TestConnectionSendFFRPCWritesRequestWithoutID(t *testing.T) {
 	}
 }
 
+func TestConnectionSendFFRPCWithAnnotationsWritesExtendedPacket(t *testing.T) {
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	conn := NewConnection(serverConn)
+	conn.Capabilities.RPCAnnotations = true
+	annotations := map[string]string{"principal_id": "cloud-user:42"}
+	if err := conn.SendFFRPCWithAnnotations(
+		"Radio.TransmitAudio",
+		restream.AccessLevel(3),
+		[]byte{7, 8, 9},
+		annotations,
+	); err != nil {
+		t.Fatalf("SendFFRPCWithAnnotations failed: %v", err)
+	}
+
+	_, message, err := clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read FFRPC failed: %v", err)
+	}
+	packetRaw, err := protocol.DecodePacket(message)
+	if err != nil {
+		t.Fatalf("Decode FFRPC failed: %v", err)
+	}
+	packet, ok := packetRaw.(*protocol.FFRPCCallPacket)
+	if !ok {
+		t.Fatalf("FFRPC packet type = %T, want *FFRPCCallPacket", packetRaw)
+	}
+	if !reflect.DeepEqual(packet.Annotations, annotations) {
+		t.Fatalf("FFRPC annotations = %#v, want %#v", packet.Annotations, annotations)
+	}
+}
+
 func TestServerReadPacketsWrapsStorePacketError(t *testing.T) {
 	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
 	defer cleanup()

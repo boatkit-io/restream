@@ -438,10 +438,34 @@ func (c *Connection) SendRelayRPCResponse(rpcID uint32, response []byte, errorMe
 
 // SendFFRPC sends a fire-and-forget RPC command to the connected device.
 func (c *Connection) SendFFRPC(name string, accessLevel restream.AccessLevel, binaryData []byte) error {
+	return c.sendFFRPC(name, accessLevel, binaryData, nil)
+}
+
+// SendFFRPCWithAnnotations sends a fire-and-forget RPC with trusted transport
+// annotations to a device that advertises annotation support.
+func (c *Connection) SendFFRPCWithAnnotations(
+	name string,
+	accessLevel restream.AccessLevel,
+	binaryData []byte,
+	annotations map[string]string,
+) error {
+	if len(annotations) > 0 && !c.Capabilities.RPCAnnotations {
+		return fmt.Errorf("connected device does not advertise RPC-annotation support")
+	}
+	return c.sendFFRPC(name, accessLevel, binaryData, annotations)
+}
+
+func (c *Connection) sendFFRPC(
+	name string,
+	accessLevel restream.AccessLevel,
+	binaryData []byte,
+	annotations map[string]string,
+) error {
 	packetBytes, err := protocol.EncodePacket(&protocol.FFRPCCallPacket{
 		MethodName:  name,
 		AccessLevel: byte(accessLevel),
 		Request:     binaryData,
+		Annotations: annotations,
 	})
 	if err != nil {
 		return err

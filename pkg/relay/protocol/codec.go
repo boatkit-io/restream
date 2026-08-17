@@ -408,7 +408,13 @@ func encodeFFRPCCallPacket(w *binarystreams.Writer, packet *FFRPCCallPacket) err
 	if err := w.WriteByte(packet.AccessLevel); err != nil {
 		return err
 	}
-	return writeBytes(w, packet.Request)
+	if err := writeBytes(w, packet.Request); err != nil {
+		return err
+	}
+	if len(packet.Annotations) == 0 {
+		return nil
+	}
+	return writeStringMap(w, packet.Annotations)
 }
 
 func decodeFFRPCCallPacket(r *binarystreams.Reader) (*FFRPCCallPacket, error) {
@@ -424,11 +430,23 @@ func decodeFFRPCCallPacket(r *binarystreams.Reader) (*FFRPCCallPacket, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &FFRPCCallPacket{
+	packet := &FFRPCCallPacket{
 		MethodName:  methodName,
 		AccessLevel: accessLevel,
 		Request:     request,
-	}, nil
+	}
+	if _, err := r.PeekByte(); err != nil {
+		if err == io.EOF {
+			return packet, nil
+		}
+		return nil, err
+	}
+	annotations, err := readStringMap(r)
+	if err != nil {
+		return nil, err
+	}
+	packet.Annotations = annotations
+	return packet, nil
 }
 
 func encodeRPCResponsePacket(w *binarystreams.Writer, packet *RPCResponsePacket) error {

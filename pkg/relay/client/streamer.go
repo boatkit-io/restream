@@ -38,11 +38,12 @@ const (
 
 // Streamer streams local Restream state to a relay server.
 type Streamer struct {
-	sr                 *restream.StoreRegistry
-	rpc                restream.RPCHandlerFunc
-	rpcWithAnnotations restream.RPCHandlerWithAnnotationsFunc
-	ffrpc              restream.FFRPCHandlerFunc
-	ed                 *restream.EventDispatcher
+	sr                   *restream.StoreRegistry
+	rpc                  restream.RPCHandlerFunc
+	rpcWithAnnotations   restream.RPCHandlerWithAnnotationsFunc
+	ffrpc                restream.FFRPCHandlerFunc
+	ffrpcWithAnnotations restream.FFRPCHandlerWithAnnotationsFunc
+	ed                   *restream.EventDispatcher
 
 	opts Config
 
@@ -147,6 +148,12 @@ func NewStreamer(
 	if len(ffrpcHandlers) > 1 {
 		panic("NewStreamer accepts at most one FFRPC handler")
 	}
+	if len(ffrpcHandlers) == 1 && ffrpcHandlers[0] != nil && config.FFRPCHandlerWithAnnotations != nil {
+		panic("NewStreamer legacy FFRPC handler and Config.FFRPCHandlerWithAnnotations are mutually exclusive")
+	}
+	if rpc != nil && config.RPCHandlerWithAnnotations != nil {
+		panic("NewStreamer RPC handler and Config.RPCHandlerWithAnnotations are mutually exclusive")
+	}
 	var ffrpc restream.FFRPCHandlerFunc
 	if len(ffrpcHandlers) == 1 {
 		ffrpc = ffrpcHandlers[0]
@@ -154,11 +161,12 @@ func NewStreamer(
 	opts := applyDefaults(config)
 
 	s := &Streamer{
-		sr:                 sr,
-		rpc:                rpc,
-		rpcWithAnnotations: opts.RPCHandlerWithAnnotations,
-		ffrpc:              ffrpc,
-		ed:                 ed,
+		sr:                   sr,
+		rpc:                  rpc,
+		rpcWithAnnotations:   opts.RPCHandlerWithAnnotations,
+		ffrpc:                ffrpc,
+		ffrpcWithAnnotations: opts.FFRPCHandlerWithAnnotations,
+		ed:                   ed,
 
 		opts: opts,
 
@@ -431,7 +439,7 @@ func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials C
 			credentials.Metadata,
 			protocol.DeviceCapabilities{
 				DataStreams:    s.opts.DataStreams != nil && s.opts.DataStreams.HasRegistrations(),
-				RPCAnnotations: s.rpcWithAnnotations != nil,
+				RPCAnnotations: s.rpcWithAnnotations != nil || s.ffrpcWithAnnotations != nil,
 			},
 		),
 	})
@@ -835,10 +843,18 @@ func (s *Streamer) handleRPCCall(packet *protocol.RPCCallPacket) error {
 }
 
 func (s *Streamer) handleFFRPCCall(packet *protocol.FFRPCCallPacket) error {
-	if s.ffrpc == nil {
+	if s.ffrpcWithAnnotations == nil && s.ffrpc == nil {
 		return fmt.Errorf("relay FFRPC received but no FFRPC handler is configured")
 	}
-	handled, err := s.ffrpc(packet.MethodName, restream.AccessLevel(packet.AccessLevel), packet.Request)
+	var handled bool
+	var err error
+	if s.ffrpcWithAnnotations != nil {
+		handled, err = s.ffrpcWithAnnotations(
+			packet.Annotations, packet.MethodName, restream.AccessLevel(packet.AccessLevel), packet.Request,
+		)
+	} else {
+		handled, err = s.ffrpc(packet.MethodName, restream.AccessLevel(packet.AccessLevel), packet.Request)
+	}
 	if err != nil {
 		return err
 	}

@@ -59,19 +59,21 @@ const (
 
 // DeviceManagerConfig configures a DeviceManager.
 type DeviceManagerConfig struct {
-	Stores              StoreFactory
-	GlobalRPC           restream.RPCHandlerFunc
-	GlobalFFRPC         restream.FFRPCHandlerFunc
-	FullStateHandler    StoreStateHandler
-	PartialStateHandler StoreStateHandler
-	EventHandler        EventHandler
-	KeyedEventHandler   KeyedEventHandler
-	RPCResponseHandler  RPCResponseHandler
-	RelayRPCHandler     RelayRPCHandler
-	CustomPacketHandler CustomPacketHandler
-	RawPacketHandler    RawPacketHandler
-	UnknownStorePolicy  UnknownStorePolicy
-	ConfigureDevice     func(*Device) error
+	Stores    StoreFactory
+	GlobalRPC restream.RPCHandlerFunc
+	// GlobalFFRPC and GlobalFFRPCWithAnnotations are mutually exclusive.
+	GlobalFFRPC                restream.FFRPCHandlerFunc
+	GlobalFFRPCWithAnnotations restream.FFRPCHandlerWithAnnotationsFunc
+	FullStateHandler           StoreStateHandler
+	PartialStateHandler        StoreStateHandler
+	EventHandler               EventHandler
+	KeyedEventHandler          KeyedEventHandler
+	RPCResponseHandler         RPCResponseHandler
+	RelayRPCHandler            RelayRPCHandler
+	CustomPacketHandler        CustomPacketHandler
+	RawPacketHandler           RawPacketHandler
+	UnknownStorePolicy         UnknownStorePolicy
+	ConfigureDevice            func(*Device) error
 
 	OnDeviceConnected    func(*Device, *Connection)
 	OnDeviceDisconnected func(*Device, *Connection)
@@ -87,9 +89,16 @@ type DeviceManager struct {
 
 // NewDeviceManager creates a DeviceManager.
 func NewDeviceManager(config DeviceManagerConfig) *DeviceManager {
+	validateDeviceManagerFFRPCHandlers(config)
 	return &DeviceManager{
 		config:  config,
 		devices: map[string]*Device{},
+	}
+}
+
+func validateDeviceManagerFFRPCHandlers(config DeviceManagerConfig) {
+	if config.GlobalFFRPC != nil && config.GlobalFFRPCWithAnnotations != nil {
+		panic("GlobalFFRPC and GlobalFFRPCWithAnnotations are mutually exclusive")
 	}
 }
 

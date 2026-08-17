@@ -250,12 +250,15 @@ const (
 
 // SocketHandlerOptions configures optional Restream websocket surfaces.
 type SocketHandlerOptions struct {
-	FFRPCHandler          FFRPCHandlerFunc
-	DataStreamBroker      DataStreamBroker
-	SessionManager        *ViewerSessionManager
-	SessionIdentityLookup ViewerSessionIdentityLookupFunc
-	StoreDeliveryMode     StoreDeliveryMode
-	Limits                SocketHandlerLimits
+	// FFRPCHandler and FFRPCHandlerWithAnnotations are mutually exclusive.
+	FFRPCHandler                FFRPCHandlerFunc
+	FFRPCHandlerWithAnnotations FFRPCHandlerWithAnnotationsFunc
+	RPCAnnotations              map[string]string
+	DataStreamBroker            DataStreamBroker
+	SessionManager              *ViewerSessionManager
+	SessionIdentityLookup       ViewerSessionIdentityLookupFunc
+	StoreDeliveryMode           StoreDeliveryMode
+	Limits                      SocketHandlerLimits
 }
 
 // SocketHandlerLimits bounds state and work retained by one viewer connection.
@@ -335,7 +338,8 @@ type socketTrackerConfig struct {
 	log          *logrus.Logger
 	sr           *StoreRegistry
 	rpch         RPCHandlerFunc
-	ffrpch       FFRPCHandlerFunc
+	ffrpch       FFRPCHandlerWithAnnotationsFunc
+	annotations  map[string]string
 	ed           *EventDispatcher
 	dataStreams  DataStreamBroker
 	accessLookup AccessLookupFunc
@@ -348,7 +352,8 @@ type socketTracker struct {
 	log         *logrus.Logger
 	sr          *StoreRegistry
 	rpch        RPCHandlerFunc
-	ffrpch      FFRPCHandlerFunc
+	ffrpch      FFRPCHandlerWithAnnotationsFunc
+	annotations map[string]string
 	ed          *EventDispatcher
 	dataStreams DataStreamBroker
 	storeMode   StoreDeliveryMode
@@ -407,6 +412,7 @@ func newSocketTracker(config socketTrackerConfig) *socketTracker {
 		sr:           config.sr,
 		rpch:         config.rpch,
 		ffrpch:       config.ffrpch,
+		annotations:  config.annotations,
 		ed:           config.ed,
 		dataStreams:  config.dataStreams,
 		accessLookup: config.accessLookup,
@@ -476,11 +482,21 @@ func AddSocketHandlersWithOptions(
 		options.StoreDeliveryMode != StoreDeliveryModeFullStore {
 		return fmt.Errorf("invalid store delivery mode %d", options.StoreDeliveryMode)
 	}
+	if options.FFRPCHandler != nil && options.FFRPCHandlerWithAnnotations != nil {
+		return errors.New("FFRPCHandler and FFRPCHandlerWithAnnotations are mutually exclusive")
+	}
+	ffrpch := options.FFRPCHandlerWithAnnotations
+	if ffrpch == nil && options.FFRPCHandler != nil {
+		ffrpch = func(_ map[string]string, name string, accessLevel AccessLevel, binaryData []byte) (bool, error) {
+			return options.FFRPCHandler(name, accessLevel, binaryData)
+		}
+	}
 	config := socketTrackerConfig{
 		log:          log,
 		sr:           sr,
 		rpch:         rpch,
-		ffrpch:       options.FFRPCHandler,
+		ffrpch:       ffrpch,
+		annotations:  options.RPCAnnotations,
 		ed:           ed,
 		dataStreams:  options.DataStreamBroker,
 		accessLookup: accessLookup,
@@ -749,6 +765,8 @@ func (st *socketTracker) updateSessionConfig(
 	st.accessMutex.Lock()
 	st.accessLookup = config.accessLookup
 	st.rpch = config.rpch
+	st.ffrpch = config.ffrpch
+	st.annotations = config.annotations
 	st.sessionIdentity = identity
 	st.accessMutex.Unlock()
 }
@@ -1306,6 +1324,12 @@ func (st *socketTracker) lookupRPCHandler() RPCHandlerFunc {
 	handler := st.rpch
 	st.accessMutex.RUnlock()
 	return handler
+}
+
+func (st *socketTracker) lookupFFRPCHandler() (FFRPCHandlerWithAnnotationsFunc, map[string]string) {
+	st.accessMutex.RLock()
+	defer st.accessMutex.RUnlock()
+	return st.ffrpch, st.annotations
 }
 
 func (st *socketTracker) removeTrackedStoreSubscription(storeName string, key string) {
@@ -2335,7 +2359,8 @@ func (st *socketTracker) onRPCCall(params ...any) {
 // onFFRPCCall dispatches an FFRPC asynchronously without allocating a call ID,
 // retaining response state, or emitting anything back to the caller.
 func (st *socketTracker) onFFRPCCall(params ...any) {
-	if st.ffrpch == nil {
+	ffrpch, annotations := st.lookupFFRPCHandler()
+	if ffrpch == nil {
 		st.log.Errorf("FFRPC received but no FFRPCHandlerFunc was provided")
 		st.disconnect()
 		return
@@ -2380,7 +2405,7 @@ func (st *socketTracker) onFFRPCCall(params ...any) {
 			return
 		}
 
-		handled, err := st.ffrpch(rpcMsg.MethodName, userAccessLevel, requestBytes)
+		handled, err := ffrpch(annotations, rpcMsg.MethodName, userAccessLevel, requestBytes)
 		if err != nil {
 			st.log.WithField("ffrpcName", rpcMsg.MethodName).Errorf("Error handling FFRPC call: %+v", err)
 		} else if !handled {

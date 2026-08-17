@@ -85,13 +85,14 @@ applications must derive device identity from those values rather than trust
 an ID in the request payload. Calls are bounded, run outside the packet reader,
 and are cancelled when the relay connection ends.
 
-RPC call packets may carry an optional application-owned annotation map. A
-device advertises `Capabilities.RPCAnnotations` when its `client.Config`
-provides `RPCHandlerWithAnnotations`, and the streamer passes the decoded map to
-that handler separately from the serialized RPC request. Cloud code must check
-the capability before calling `Connection.SendRPCWithAnnotations`; use
-`Connection.SendRPC` for older devices. The unannotated encoding remains byte
-compatible with the legacy packet shape. See [RPC Context and Transport
+RPC and FFRPC call packets may carry an optional application-owned annotation
+map. A device advertises `Capabilities.RPCAnnotations` when its `client.Config`
+provides `RPCHandlerWithAnnotations` or `FFRPCHandlerWithAnnotations`, and the
+streamer passes the decoded map to that handler separately from the serialized
+request. Cloud code must check the capability before calling
+`Connection.SendRPCWithAnnotations` or `Connection.SendFFRPCWithAnnotations`;
+use the corresponding unannotated method for older devices. The unannotated
+encoding remains byte compatible with each legacy packet shape. See [RPC Context and Transport
 Annotations](../../README.md#rpc-context-and-transport-annotations) for
 dispatcher callback usage.
 
@@ -114,8 +115,9 @@ err := restream.AddSocketHandlersWithOptions(
     device.EventDispatcher,
     accessLookup,
     restream.SocketHandlerOptions{
-        FFRPCHandler:     device.FFRPCHandler,
-        DataStreamBroker: broker,
+        FFRPCHandlerWithAnnotations: device.FFRPCHandlerWithAnnotations,
+        RPCAnnotations:              authenticatedViewerAnnotations,
+        DataStreamBroker:            broker,
     },
 )
 ```

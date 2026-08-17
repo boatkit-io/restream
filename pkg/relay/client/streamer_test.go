@@ -348,6 +348,48 @@ func TestHandleConnDispatchesRPCAnnotations(t *testing.T) {
 	}
 }
 
+func TestNewStreamerRejectsConflictingAnnotatedHandlers(t *testing.T) {
+	t.Run("RPC", func(t *testing.T) {
+		assertPanics(t, func() {
+			NewStreamer(
+				nil,
+				func(string, restream.AccessLevel, []byte) ([]byte, bool, error) { return nil, true, nil },
+				nil,
+				Config{RPCHandlerWithAnnotations: func(
+					map[string]string, string, restream.AccessLevel, []byte,
+				) ([]byte, bool, error) {
+					return nil, true, nil
+				}},
+			)
+		})
+	})
+	t.Run("FFRPC", func(t *testing.T) {
+		assertPanics(t, func() {
+			NewStreamer(
+				nil,
+				nil,
+				nil,
+				Config{FFRPCHandlerWithAnnotations: func(
+					map[string]string, string, restream.AccessLevel, []byte,
+				) (bool, error) {
+					return true, nil
+				}},
+				func(string, restream.AccessLevel, []byte) (bool, error) { return true, nil },
+			)
+		})
+	})
+}
+
+func assertPanics(t *testing.T, callback func()) {
+	t.Helper()
+	defer func() {
+		if recover() == nil {
+			t.Fatal("callback did not panic")
+		}
+	}()
+	callback()
+}
+
 func TestHandleConnDispatchesFFRPCsWithoutWaitingForHandlers(t *testing.T) {
 	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
 	defer cleanup()
@@ -406,6 +448,65 @@ func TestHandleConnDispatchesFFRPCsWithoutWaitingForHandlers(t *testing.T) {
 		}
 	}
 	close(releaseFirst)
+}
+
+func TestHandleConnDispatchesFFRPCAnnotations(t *testing.T) {
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	received := make(chan map[string]string, 1)
+	s := NewStreamer(nil, nil, nil, Config{
+		FFRPCHandlerWithAnnotations: func(
+			annotations map[string]string,
+			_ string,
+			_ restream.AccessLevel,
+			_ []byte,
+		) (bool, error) {
+			received <- annotations
+			return true, nil
+		},
+	})
+	go func() {
+		_ = s.handleConn(context.Background(), clientConn, Credentials{DeviceID: "device-1"})
+	}()
+
+	_, helloBytes, err := serverConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read hello failed: %v", err)
+	}
+	hello, err := protocol.DecodeDeviceHello(helloBytes)
+	if err != nil {
+		t.Fatalf("Decode hello failed: %v", err)
+	}
+	if !protocol.CapabilitiesFromDeviceMetadata(hello.Metadata).RPCAnnotations {
+		t.Fatal("device did not advertise RPC-annotations support")
+	}
+	connectedBytes, err := protocol.EncodePacket(&protocol.ConnectedPacket{ProtocolVersion: protocol.CurrentVersion})
+	if err != nil {
+		t.Fatalf("Encode connected failed: %v", err)
+	}
+	if err := serverConn.WriteMessage(gws.BinaryMessage, connectedBytes); err != nil {
+		t.Fatalf("Write connected failed: %v", err)
+	}
+	annotations := map[string]string{"principal_id": "cloud-user:42"}
+	packetBytes, err := protocol.EncodePacket(&protocol.FFRPCCallPacket{
+		MethodName: "Radio.TransmitAudio", Annotations: annotations,
+	})
+	if err != nil {
+		t.Fatalf("Encode FFRPC failed: %v", err)
+	}
+	if err := serverConn.WriteMessage(gws.BinaryMessage, packetBytes); err != nil {
+		t.Fatalf("Write FFRPC failed: %v", err)
+	}
+
+	select {
+	case got := <-received:
+		if !reflect.DeepEqual(got, annotations) {
+			t.Fatalf("annotations = %#v, want %#v", got, annotations)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("FFRPC handler was not called")
+	}
 }
 
 func TestEnqueuePacketAfterDisconnectDoesNotPanic(t *testing.T) {

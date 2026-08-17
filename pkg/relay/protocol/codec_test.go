@@ -65,6 +65,26 @@ func TestRPCCallWithoutAnnotationsKeepsLegacyWireShape(t *testing.T) {
 	}
 }
 
+func TestFFRPCCallWithoutAnnotationsKeepsLegacyWireShape(t *testing.T) {
+	encoded, err := EncodePacket(&FFRPCCallPacket{
+		MethodName:  "M",
+		AccessLevel: 3,
+		Request:     []byte{9, 10},
+	})
+	if err != nil {
+		t.Fatalf("EncodePacket failed: %v", err)
+	}
+	want := []byte{
+		byte(KindFFRPCCall),
+		1, 0, 'M',
+		3,
+		2, 0, 0, 0, 9, 10,
+	}
+	if !bytes.Equal(encoded, want) {
+		t.Fatalf("legacy FFRPC encoding = %v, want %v", encoded, want)
+	}
+}
+
 func TestPacketRoundTrips(t *testing.T) {
 	tests := []struct {
 		name string
@@ -161,6 +181,7 @@ func TestPacketRoundTrips(t *testing.T) {
 				MethodName:  "Radio.TransmitAudio",
 				AccessLevel: 3,
 				Request:     []byte{14, 15, 16},
+				Annotations: map[string]string{"principal_id": "cloud-user:42"},
 			},
 			kind: KindFFRPCCall,
 		},

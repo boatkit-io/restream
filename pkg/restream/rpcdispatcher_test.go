@@ -146,10 +146,11 @@ func TestFFRPCCalls(t *testing.T) {
 		contextInfo, _ = RPCCallInfoFromContext(ctx)
 		return nil
 	}, reflect.TypeFor[notifyContextRequest]())
-	handled, err = rpcd.FireFFRPC("notifyContext", AccessLevelAdmin, requestBytes)
+	annotations := map[string]string{"principal_id": "cloud-user:42"}
+	handled, err = rpcd.FireFFRPCWithAnnotations(annotations, "notifyContext", AccessLevelAdmin, requestBytes)
 	assert.True(t, handled)
 	assert.NoError(t, err)
-	assert.Equal(t, RPCCallInfo{AccessLevel: AccessLevelAdmin}, contextInfo)
+	assert.Equal(t, RPCCallInfo{AccessLevel: AccessLevelAdmin, Annotations: annotations}, contextInfo)
 
 	var voidResult int
 	rpcd.RegisterFFRPCHandler("notifyVoid", AccessLevelAdmin, func(value int) {
