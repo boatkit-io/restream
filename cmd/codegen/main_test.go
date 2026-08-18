@@ -494,6 +494,57 @@ func Register(rpcd *testDispatcher) {
 	}
 }
 
+func TestProjectGenerationIgnoresCrossFileProductionRPCRegistrationInTest(t *testing.T) {
+	projectDir := t.TempDir()
+	modelDir := filepath.Join(projectDir, "model")
+	if err := os.MkdirAll(modelDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/test-rpc
+
+go 1.26.2
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(modelDir, "handler.go"), []byte(`package model
+
+type handler struct{}
+
+func (*handler) useRoute(string) error { return nil }
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(modelDir, "handler_test.go"), []byte(`package model
+
+import "testing"
+
+type testDispatcher struct{}
+
+func (*testDispatcher) RegisterRPCHandler(string, int, any, any, any) {}
+
+func TestUseRoute(t *testing.T) {
+	store := &handler{}
+	rpcd := &testDispatcher{}
+	rpcd.RegisterRPCHandler("ViewAssistant.UseRoute", 2, store.useRoute, nil, nil)
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	pt := NewProjTracking(projectDir, &restreamConfig{InputDirs: []string{"model"}})
+	if err := pt.parseProject(); err != nil {
+		t.Fatal(err)
+	}
+	for _, ft := range pt.files {
+		if err := ft.Run(); err != nil {
+			t.Fatalf("generate %s: %v", ft.inFile, err)
+		}
+		if ft.isTest && len(ft.tsGenEntries) != 0 {
+			t.Fatalf("test-only RPC registration generated protocol entries: %#v", ft.tsGenEntries)
+		}
+	}
+}
+
 func TestStoreAnnotationGeneratesStoreBoilerplate(t *testing.T) {
 	repoRoot, err := filepath.Abs("../..")
 	if err != nil {

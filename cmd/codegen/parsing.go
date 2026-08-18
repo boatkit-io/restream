@@ -1160,6 +1160,16 @@ func (ft *FileTracking) parseFuncDecls() error { //nolint:gocyclo,funlen
 				tn := st.X.(*dst.Ident).Obj.Decl.(*dst.AssignStmt).Rhs[0].(*dst.UnaryExpr).X.(*dst.CompositeLit).Type.(*dst.Ident).Name
 				ftt = receiverLookup[tn+"."+st.Sel.Name]
 			}
+			if ftt == nil {
+				// A test may register a production handler declared in another source
+				// file to exercise dispatcher authorization and wiring. Its wire
+				// protocol is generated from the production registration, and there is
+				// no local function declaration to regenerate here.
+				if ft.isTest {
+					continue
+				}
+				return fmt.Errorf("unable to resolve RPC handler function for %s in %s", rpcn, ft.inFile)
+			}
 
 			ftp := ftt.Params
 			ftr := ftt.Results
