@@ -21,16 +21,12 @@ export default class BinaryWriter {
     }
 
     private _ensureFits(numBytes: number): void {
-        if (this._offset + numBytes >= this._length) {
-            if (numBytes < this._length) {
-                // Safe to double it
-                this._length *= 2;
-            } else {
-                // Round to the next higher multiple of this._length..?
-                this._length = Math.ceil((this._length + numBytes) / numBytes) * this._length;
-            }
-            this._realloc();
+        const requiredLength = this._offset + numBytes;
+        if (requiredLength <= this._length) {
+            return;
         }
+        this._length = Math.max(this._length * 2, requiredLength);
+        this._realloc();
     }
 
     writeUint8(val: number): void {
