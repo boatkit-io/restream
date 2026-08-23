@@ -203,6 +203,10 @@ export interface ViewerSessionCloseMessage {
 export interface ReStreamSocketOptions {
     viewerSessions?: boolean;
     sessionAttachTimeoutMs?: number;
+    /** Restricts this socket to an explicit subset of globally registered TriggerStores. */
+    storeNames?: readonly string[];
+    /** Excludes stores owned by another Restream socket/data plane. */
+    excludedStoreNames?: readonly string[];
 }
 
 export type DataStreamEndpointCallback = (
@@ -239,6 +243,8 @@ export class ReStreamSocket {
     private _authenticated = false;
     private _viewerSessions: boolean;
     private readonly _sessionAttachTimeoutMs: number;
+    private readonly _storeNames: ReadonlySet<string> | undefined;
+    private readonly _excludedStoreNames: ReadonlySet<string>;
     private _sessionID: string | undefined;
     private _sessionAttach: Deferred<void> | undefined;
     private _sessionAttachTimer: ReturnType<typeof setTimeout> | undefined;
@@ -257,6 +263,12 @@ export class ReStreamSocket {
         this._socket = socket;
         this._viewerSessions = options.viewerSessions ?? false;
         this._sessionAttachTimeoutMs = options.sessionAttachTimeoutMs ?? 10_000;
+        this._storeNames = options.storeNames
+            ? new Set(options.storeNames.map(name => name.trim()).filter(Boolean))
+            : undefined;
+        this._excludedStoreNames = new Set(
+            options.excludedStoreNames?.map(name => name.trim()).filter(Boolean) ?? [],
+        );
 
         socket.on('disconnect', () => {
             if (!this._viewerSessions) {
@@ -314,6 +326,9 @@ export class ReStreamSocket {
         });
 
         socket.on(SocketEventNames.StoreUpdate, (message: StoreUpdateMessage) => {
+            if (!this._usesStore(message.storeName)) {
+                return;
+            }
             this._timestampOffset = Date.now() - message.time;
 
             TriggerStore.handleUpdateMessage(message);
@@ -384,7 +399,10 @@ export class ReStreamSocket {
         });
 
         TriggerStore.eventSubscriptionStarted.subscribe((storeName, key) => {
-            if (TriggerStore.getStoreSubs().length > maxSocketStoreSubscriptions) {
+            if (!this._usesStore(storeName)) {
+                return;
+            }
+            if (this._storeSubscriptions().length > maxSocketStoreSubscriptions) {
                 this._socket.disconnect();
                 throw new Error(`ReStream store subscription limit exceeded (${maxSocketStoreSubscriptions})`);
             }
@@ -408,6 +426,9 @@ export class ReStreamSocket {
         });
 
         TriggerStore.eventSubscriptionStopped.subscribe((storeName, key) => {
+            if (!this._usesStore(storeName)) {
+                return;
+            }
             if (this._authenticated) {
                 const message: StoreSubscriptionMessage = {
                     action: StoreSubscriptionAction.Unsubscribe,
@@ -439,7 +460,7 @@ export class ReStreamSocket {
             return this._sessionAttach.promise;
         }
 
-        const storeSubscriptions = TriggerStore.getStoreSubs();
+        const storeSubscriptions = this._storeSubscriptions();
         if (storeSubscriptions.length > maxSocketStoreSubscriptions) {
             this._socket.disconnect();
             throw new Error(`ReStream store subscription limit exceeded (${maxSocketStoreSubscriptions})`);
@@ -464,6 +485,15 @@ export class ReStreamSocket {
             this._emitDataStreamSubscription(group, StoreSubscriptionAction.Subscribe);
         }
         return Promise.resolve();
+    }
+
+    private _usesStore(storeName: string): boolean {
+        return !this._excludedStoreNames.has(storeName) &&
+            (this._storeNames === undefined || this._storeNames.has(storeName));
+    }
+
+    private _storeSubscriptions(): { storeName: string; key: string | undefined }[] {
+        return TriggerStore.getStoreSubs().filter(subscription => this._usesStore(subscription.storeName));
     }
 
     /** Enables the optional session handshake before the first authentication. */
@@ -726,7 +756,7 @@ export class ReStreamSocket {
         this._sessionAttachOperations = [];
         const request: ViewerSessionAttachRequest = {
             sessionID: this._sessionID ?? '',
-            storeSubscriptions: TriggerStore.getStoreSubs().map(subscription => ({
+            storeSubscriptions: this._storeSubscriptions().map(subscription => ({
                 storeName: subscription.storeName,
                 key: subscription.key ?? '',
             })),

@@ -43,6 +43,10 @@ class TriggerStoreSpecStore extends TriggerStore<TriggerStoreSpecState> {
     fireField(field: (string | number)[]): void {
         (this as unknown as TriggerStorePrivate)._triggerFieldUpdate(field);
     }
+
+    resetForIdentityChange(): void {
+        this.resetToInitialState();
+    }
 }
 
 interface GeneratedDevicePGNState {
@@ -144,6 +148,21 @@ describe('TriggerStore keyed subscriptions', () => {
         expect(store.hasReceivedFullState()).toBe(true);
         expect(callback).toHaveBeenCalledTimes(1);
         store.unsubscribe(token);
+    });
+
+    test('can clear received state before rebinding to another identity', () => {
+        const store = new TriggerStoreSpecStore(uniqueStoreName());
+        TriggerStore.handleUpdateMessage({
+            time: 1,
+            kind: StoreUpdateMessageKind.Full,
+            storeName: store.testStoreName,
+            state: new ArrayBuffer(0),
+        });
+        expect(store.hasReceivedFullState()).toBe(true);
+
+        store.resetForIdentityChange();
+
+        expect(store.hasReceivedFullState()).toBe(false);
     });
 
     test('refcounts duplicate subscriptions for the same key', () => {

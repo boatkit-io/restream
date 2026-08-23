@@ -1,6 +1,7 @@
 import type { Socket } from 'socket.io-client';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
+import TriggerStore from '../stores/TriggerStore.js';
 import BinaryReader from '../utils/BinaryReader.js';
 import BinaryWriter from '../utils/BinaryWriter.js';
 import type { VarInfoStruct } from '../utils/SerializationTypes.js';
@@ -15,6 +16,7 @@ import {
     KeyedEventSubscriptionMessage,
     ReStreamSocket,
     StoreSubscriptionAction,
+    StoreUpdateMessageKind,
     ViewerSessionAttachRequest,
     ViewerSessionAttachResponse,
 } from './SocketHelper.js';
@@ -86,6 +88,79 @@ function viewerSessionAttachMessages(socket: FakeSocket): ViewerSessionAttachReq
         .filter(({ name }) => name === 'viewersessionattach')
         .map(({ message }) => message as ViewerSessionAttachRequest);
 }
+
+function storeSubscriptionMessages(socket: FakeSocket) {
+    return socket.emitted
+        .filter(({ name }) => name === 'storesub')
+        .map(({ message }) => message);
+}
+
+describe('ReStreamSocket store scoping', () => {
+    test('partitions global store subscriptions between isolated sockets', async () => {
+        const subscriptions = vi.spyOn(TriggerStore, 'getStoreSubs').mockReturnValue([
+            { storeName: 'VesselInfo', key: undefined },
+            { storeName: 'FollowedBoats', key: 'boats%&friend-a' },
+        ]);
+        const vesselSocket = new FakeSocket();
+        const accountSocket = new FakeSocket();
+        const vesselRestream = new ReStreamSocket(vesselSocket as unknown as Socket, {
+            excludedStoreNames: ['FollowedBoats'],
+        });
+        const accountRestream = new ReStreamSocket(accountSocket as unknown as Socket, {
+            storeNames: ['FollowedBoats'],
+        });
+
+        await vesselRestream.markAuthenticated();
+        await accountRestream.markAuthenticated();
+
+        expect(storeSubscriptionMessages(vesselSocket)).toEqual([{
+            action: StoreSubscriptionAction.Subscribe,
+            storeName: 'VesselInfo',
+            key: undefined,
+        }]);
+        expect(storeSubscriptionMessages(accountSocket)).toEqual([{
+            action: StoreSubscriptionAction.Subscribe,
+            storeName: 'FollowedBoats',
+            key: 'boats%&friend-a',
+        }]);
+        subscriptions.mockRestore();
+    });
+
+    test('routes store updates only through the socket that owns the store', () => {
+        const handleUpdate = vi.spyOn(TriggerStore, 'handleUpdateMessage').mockImplementation(() => undefined);
+        const vesselSocket = new FakeSocket();
+        const accountSocket = new FakeSocket();
+        new ReStreamSocket(vesselSocket as unknown as Socket, {
+            excludedStoreNames: ['FollowedBoats'],
+        });
+        new ReStreamSocket(accountSocket as unknown as Socket, {
+            storeNames: ['FollowedBoats'],
+        });
+        const followedUpdate = {
+            time: Date.now(),
+            kind: StoreUpdateMessageKind.Full,
+            storeName: 'FollowedBoats',
+            state: new ArrayBuffer(0),
+        } as const;
+        const vesselUpdate = {
+            time: Date.now(),
+            kind: StoreUpdateMessageKind.Full,
+            storeName: 'VesselInfo',
+            state: new ArrayBuffer(0),
+        } as const;
+
+        vesselSocket.fire('storeupdate', followedUpdate);
+        accountSocket.fire('storeupdate', vesselUpdate);
+        expect(handleUpdate).not.toHaveBeenCalled();
+
+        vesselSocket.fire('storeupdate', vesselUpdate);
+        accountSocket.fire('storeupdate', followedUpdate);
+        expect(handleUpdate).toHaveBeenCalledTimes(2);
+        expect(handleUpdate).toHaveBeenNthCalledWith(1, vesselUpdate);
+        expect(handleUpdate).toHaveBeenNthCalledWith(2, followedUpdate);
+        handleUpdate.mockRestore();
+    });
+});
 
 describe('ReStreamSocket viewer sessions', () => {
     test('can be enabled after server capability negotiation but before authentication', () => {

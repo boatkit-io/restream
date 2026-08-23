@@ -87,6 +87,13 @@ export default abstract class TriggerStore<S extends object> extends StoreBase {
         return this._hasReceivedFullState;
     }
 
+    /** Clears transport-owned state before rebinding this store to another identity. */
+    protected resetToInitialState(): void {
+        this._state = this._stateType.fromValues();
+        this._hasReceivedFullState = false;
+        this.trigger();
+    }
+
     // Track when the app first starts caring and last stops caring about this store, for the streaming service
     protected override _startedTrackingSub(key?: string) {
         const wireKey = this._canonicalSubscriptionKey(key);
