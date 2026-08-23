@@ -1150,6 +1150,9 @@ func runGoimports(outPath string) error {
 // rewriteSourceFile re-prints-out the source golang file for input-side codegen fixes.
 func (ft *FileTracking) rewriteSourceFile() error {
 	fmt.Printf("Writing out updated golang source file: %s\n", ft.inFile)
+	if err := normalizeFieldedStructMaxFields(ft.f); err != nil {
+		return err
+	}
 
 	fw, err := os.Create(ft.inFile)
 	if err != nil {

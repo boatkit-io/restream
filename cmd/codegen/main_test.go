@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/boatkit-io/restream/pkg/restream"
+	"github.com/dave/dst"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -1933,6 +1934,77 @@ type Model struct {
 	}
 	if !strings.Contains(string(sourceOut), "// MAXFIELD(3)") {
 		t.Fatalf("source MAXFIELD was not advanced for manually assigned fID:\n%s", string(sourceOut))
+	}
+}
+
+func TestFieldedStructMaxFieldGenerationIsIdempotent(t *testing.T) {
+	projectDir, serverDir := setupFieldCompatibilityGitProject(t)
+	sourcePath := filepath.Join(serverDir, "model.go")
+	if err := os.WriteFile(sourcePath, []byte(`package main
+
+import "time"
+
+var _ = time.Time{}
+
+// @restream.fields
+type EarlierModel struct {
+	// MAXFIELD(1)
+	ID uint32 `+"`restream:\",fID=1\"`"+`
+}
+
+// @restream.fields
+type Model struct {
+	// MAXFIELD(2)
+	Name  string `+"`restream:\",fID=1\"`"+`
+	Count int    `+"`restream:\",fID=2\"`"+`
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, projectDir, "add", ".")
+	runGit(t, projectDir, "-c", "user.name=Codegen Test", "-c", "user.email=codegen@example.com", "commit", "-m", "add imported declaration")
+
+	for range 2 {
+		if err := runFieldCompatibilityCodegenProject(projectDir); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sourceOut, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(string(sourceOut), "// MAXFIELD(2)"); count != 1 {
+		t.Fatalf("source contains %d MAXFIELD markers after repeated generation:\n%s", count, string(sourceOut))
+	}
+	if strings.Contains(string(sourceOut), "struct { // MAXFIELD") {
+		t.Fatalf("source contains an inline MAXFIELD marker after repeated generation:\n%s", string(sourceOut))
+	}
+}
+
+func TestSetMaxFieldForStructNormalizesOpeningDecorations(t *testing.T) {
+	field := &dst.Field{Names: []*dst.Ident{dst.NewIdent("Name")}, Type: dst.NewIdent("string")}
+	structType := &dst.StructType{
+		Fields: &dst.FieldList{List: []*dst.Field{field}},
+	}
+	structType.Fields.Decs.Opening = dst.Decorations{
+		"// MAXFIELD(4)",
+		"// MAXFIELD(4)",
+		"// MAXFIELD(4)",
+	}
+	field.Decorations().Start = dst.Decorations{"// MAXFIELD(4)"}
+
+	if !setMaxFieldForStruct(structType, "// MAXFIELD(4)") {
+		t.Fatal("expected duplicate MAXFIELD decorations to be normalized")
+	}
+	if got := structType.Fields.Decs.Opening.All(); len(got) != 1 || got[0] != "// MAXFIELD(4)" {
+		t.Fatalf("unexpected opening decorations after normalization: %q", got)
+	}
+	if got := field.Decorations().Start.All(); len(got) != 0 {
+		t.Fatalf("unexpected field decorations after normalization: %q", got)
+	}
+	if setMaxFieldForStruct(structType, "// MAXFIELD(4)") {
+		t.Fatal("expected normalized MAXFIELD decorations to be idempotent")
 	}
 }
 

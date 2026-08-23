@@ -165,18 +165,121 @@ func maxFieldForStruct(st *dst.StructType) (byte, error) {
 	if st.Fields == nil || len(st.Fields.List) == 0 {
 		return 0, nil
 	}
-	for _, dec := range st.Fields.List[0].Decorations().Start.All() {
-		match := maxFieldCommentRE.FindStringSubmatch(dec)
-		if len(match) != 2 {
-			continue
+	for _, decorations := range []dst.Decorations{
+		st.Fields.Decs.Opening,
+		st.Fields.List[0].Decorations().Start,
+	} {
+		for _, dec := range decorations.All() {
+			match := maxFieldCommentRE.FindStringSubmatch(dec)
+			if len(match) != 2 {
+				continue
+			}
+			maxField, err := strconv.ParseUint(match[1], 10, 8)
+			if err != nil {
+				return 0, err
+			}
+			return byte(maxField), nil
 		}
-		maxField, err := strconv.ParseUint(match[1], 10, 8)
-		if err != nil {
-			return 0, err
-		}
-		return byte(maxField), nil
 	}
 	return 0, nil
+}
+
+func setMaxFieldForStruct(st *dst.StructType, maxFieldLine string) bool {
+	opening, foundInOpening, openingChanged := normalizeMaxFieldDecorations(
+		st.Fields.Decs.Opening,
+		maxFieldLine,
+	)
+	if foundInOpening {
+		fieldStart, fieldStartChanged := removeMaxFieldDecorations(st.Fields.List[0].Decorations().Start)
+		st.Fields.Decs.Opening = opening
+		st.Fields.List[0].Decorations().Start = fieldStart
+		return openingChanged || fieldStartChanged
+	}
+
+	fieldStart, foundInFieldStart, fieldStartChanged := normalizeMaxFieldDecorations(
+		st.Fields.List[0].Decorations().Start,
+		maxFieldLine,
+	)
+	if foundInFieldStart {
+		st.Fields.List[0].Decorations().Start = fieldStart
+		return fieldStartChanged
+	}
+
+	st.Fields.Decs.Opening.Append(maxFieldLine)
+	return true
+}
+
+func normalizeMaxFieldDecorations(
+	decorations dst.Decorations,
+	maxFieldLine string,
+) (dst.Decorations, bool, bool) {
+	result := make(dst.Decorations, 0, len(decorations))
+	found := false
+	changed := false
+	for _, decoration := range decorations {
+		if !maxFieldCommentRE.MatchString(decoration) {
+			result = append(result, decoration)
+			continue
+		}
+		if found {
+			changed = true
+			continue
+		}
+		found = true
+		result = append(result, maxFieldLine)
+		if decoration != maxFieldLine {
+			changed = true
+		}
+	}
+	return result, found, changed
+}
+
+func removeMaxFieldDecorations(decorations dst.Decorations) (dst.Decorations, bool) {
+	result := make(dst.Decorations, 0, len(decorations))
+	changed := false
+	for _, decoration := range decorations {
+		if maxFieldCommentRE.MatchString(decoration) {
+			changed = true
+			continue
+		}
+		result = append(result, decoration)
+	}
+	return result, changed
+}
+
+func normalizeFieldedStructMaxFields(file *dst.File) error {
+	for _, declaration := range file.Decls {
+		genDecl, ok := declaration.(*dst.GenDecl)
+		if !ok || !genDeclHasFieldedRestreamAnnotation(genDecl) {
+			continue
+		}
+		for _, spec := range genDecl.Specs {
+			typeSpec, ok := spec.(*dst.TypeSpec)
+			if !ok {
+				continue
+			}
+			structType, ok := typeSpec.Type.(*dst.StructType)
+			if !ok || structType.Fields == nil || len(structType.Fields.List) == 0 {
+				continue
+			}
+
+			maxField, err := maxFieldForStruct(structType)
+			if err != nil {
+				return fmt.Errorf("fielded struct %s: %w", typeSpec.Name.Name, err)
+			}
+			for _, field := range structType.Fields.List {
+				fieldID, err := restreamFieldID(field)
+				if err != nil {
+					return fmt.Errorf("fielded struct %s: %w", typeSpec.Name.Name, err)
+				}
+				if fieldID > maxField {
+					maxField = fieldID
+				}
+			}
+			setMaxFieldForStruct(structType, fmt.Sprintf("// MAXFIELD(%d)", maxField))
+		}
+	}
+	return nil
 }
 
 func restreamFieldID(fd *dst.Field) (byte, error) {

@@ -141,8 +141,6 @@ func (ft *FileTracking) parseStructDecls() error { //nolint:gocyclo,funlen
 
 			if len(st.Fields.List) > 0 {
 				// Get the highest field count off the struct, if it exists
-				dec := st.Fields.List[0].Decorations()
-				decAll := dec.Start.All()
 				maxFieldNum, err := maxFieldForStruct(st)
 				if err != nil {
 					return err
@@ -172,8 +170,7 @@ func (ft *FileTracking) parseStructDecls() error { //nolint:gocyclo,funlen
 
 				// update MAXFIELD as needed
 				newMaxFieldLine := fmt.Sprintf("// MAXFIELD(%d)", maxFieldNum)
-				if decAll == nil || (len(decAll) > 0 && decAll[0] != newMaxFieldLine) {
-					dec.Start = []string{newMaxFieldLine}
+				if setMaxFieldForStruct(st, newMaxFieldLine) {
 					ft.inputFileDirty = true
 				}
 			}
