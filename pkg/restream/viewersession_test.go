@@ -1,9 +1,13 @@
 package restream
 
 import (
+	"bytes"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/sirupsen/logrus"
 )
 
 func TestViewerSessionManagerCreatesAndResumesUUIDSession(t *testing.T) {
@@ -93,7 +97,7 @@ func TestViewerSessionFullStoreModeManifestBuffersCompleteBaseline(t *testing.T)
 	if err != nil {
 		t.Fatalf("manager.attach failed: %v", err)
 	}
-	if err := tracker.reconcileSessionManifest(ViewerSessionAttachRequest{
+	if _, err := tracker.reconcileSessionManifest(ViewerSessionAttachRequest{
 		StoreSubscriptions: []ViewerSessionStoreSubscription{{
 			StoreName: viewerSocketTestStoreName,
 			Key:       "values%&a",
@@ -111,6 +115,65 @@ func TestViewerSessionFullStoreModeManifestBuffersCompleteBaseline(t *testing.T)
 	state := update.fullState.(*viewerSocketTestState)
 	tracker.sessionBufferMutex.Unlock()
 	assertMapEqual(t, map[string]int{"a": 1, "b": 2}, state.Values)
+}
+
+func TestViewerSessionManifestRejectsOnlyUnauthorizedStores(t *testing.T) {
+	const adminStoreName = "admin-store"
+	publicStore := NewRelayStore[
+		viewerSocketTestState,
+		*viewerSocketTestState,
+		*viewerSocketTestPartial,
+	](viewerSocketTestStoreName, &viewerSocketTestState{Values: map[string]int{"public": 1}}, AccessLevelPublic)
+	adminStore := NewRelayStore[
+		viewerSocketTestState,
+		*viewerSocketTestState,
+		*viewerSocketTestPartial,
+	](adminStoreName, &viewerSocketTestState{Values: map[string]int{"private": 2}}, AccessLevel(2))
+	registry, err := NewStoreRegistry([]Store{publicStore, adminStore})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	var logOutput bytes.Buffer
+	log := logrus.New()
+	log.SetOutput(&logOutput)
+	manager := NewViewerSessionManager(ViewerSessionManagerOptions{})
+	t.Cleanup(manager.Close)
+	tracker, _, err := manager.attach(
+		ViewerSessionAttachRequest{},
+		ViewerSessionIdentity{OwnerID: "viewer-a", ScopeID: "boat-a"},
+		socketTrackerConfig{
+			log:    log,
+			sr:     registry,
+			limits: SocketHandlerLimits{}.withDefaults(),
+		},
+	)
+	if err != nil {
+		t.Fatalf("manager.attach failed: %v", err)
+	}
+	rejections, err := tracker.reconcileSessionManifest(ViewerSessionAttachRequest{
+		StoreSubscriptions: []ViewerSessionStoreSubscription{
+			{StoreName: viewerSocketTestStoreName},
+			{StoreName: adminStoreName, Key: "values%&private"},
+		},
+	}, AccessLevel(1))
+	if err != nil {
+		t.Fatalf("manifest failed: %v", err)
+	}
+	if len(rejections) != 1 || rejections[0].SubscriptionType != "store" ||
+		rejections[0].StoreName != adminStoreName ||
+		!strings.Contains(rejections[0].Error, "requires access level 2, caller has 1") {
+		t.Fatalf("manifest rejections = %#v", rejections)
+	}
+	if _, subscribed := tracker.storeSubscriptions[viewerSocketTestStoreName]; !subscribed {
+		t.Fatal("permitted store was not attached")
+	}
+	if _, subscribed := tracker.storeSubscriptions[adminStoreName]; subscribed {
+		t.Fatal("unauthorized store was attached")
+	}
+	if !strings.Contains(logOutput.String(), "Rejected unauthorized viewer subscription") ||
+		!strings.Contains(logOutput.String(), adminStoreName) {
+		t.Fatalf("manifest rejection was not logged: %q", logOutput.String())
+	}
 }
 
 func TestViewerSessionDetachedStoreAccumulatorTransitions(t *testing.T) {
@@ -141,7 +204,7 @@ func TestViewerSessionDetachedStoreAccumulatorTransitions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("manager.attach failed: %v", err)
 	}
-	if err := tracker.reconcileSessionManifest(ViewerSessionAttachRequest{
+	if _, err := tracker.reconcileSessionManifest(ViewerSessionAttachRequest{
 		StoreSubscriptions: []ViewerSessionStoreSubscription{{
 			StoreName: viewerSocketTestStoreName,
 		}},
@@ -269,7 +332,7 @@ func TestViewerSessionManifestChangeRebuildsRetainedKeyBaseline(t *testing.T) {
 			{StoreName: viewerSocketTestStoreName, Key: "values%&b"},
 		},
 	}
-	if err := tracker.reconcileSessionManifest(initial, AccessLevelPublic); err != nil {
+	if _, err := tracker.reconcileSessionManifest(initial, AccessLevelPublic); err != nil {
 		t.Fatalf("initial manifest failed: %v", err)
 	}
 	tracker.sessionBufferMutex.Lock()
@@ -285,7 +348,7 @@ func TestViewerSessionManifestChangeRebuildsRetainedKeyBaseline(t *testing.T) {
 	if !store.GetStoreData().(StoreDataOutputWaiter).WaitForOutputIdle(time.Second) {
 		t.Fatal("timed out waiting for retained keyed update")
 	}
-	if err := tracker.reconcileSessionManifest(ViewerSessionAttachRequest{
+	if _, err := tracker.reconcileSessionManifest(ViewerSessionAttachRequest{
 		StoreSubscriptions: []ViewerSessionStoreSubscription{{
 			StoreName: viewerSocketTestStoreName,
 			Key:       "values%&b",

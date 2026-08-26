@@ -38,6 +38,19 @@ type StoreSubscriptionMessage struct {
 	Key       string                  `json:"key"`
 }
 
+// SubscriptionRejectionMessage reports one well-formed subscription that the
+// authenticated viewer is not authorized to receive. Rejections are scoped to
+// the individual subscription and do not invalidate the viewer session.
+type SubscriptionRejectionMessage struct {
+	SubscriptionType string `json:"subscriptionType"`
+	StoreName        string `json:"storeName"`
+	Key              string `json:"key,omitempty"`
+	EventName        string `json:"eventName,omitempty"`
+	StreamName       string `json:"streamName,omitempty"`
+	SubscriptionID   string `json:"subscriptionID,omitempty"`
+	Error            string `json:"error"`
+}
+
 // KeyedEventSubscriptionMessage is a message for subscribing/unsubscribing from a store-owned keyed event.
 type KeyedEventSubscriptionMessage struct {
 	StoreName string                  `json:"storeName"`
@@ -96,10 +109,11 @@ type ViewerSessionCapabilities struct {
 
 // ViewerSessionAttachResponse resolves one attachment request.
 type ViewerSessionAttachResponse struct {
-	SessionID    string                    `json:"sessionID"`
-	Resumed      bool                      `json:"resumed"`
-	Capabilities ViewerSessionCapabilities `json:"capabilities"`
-	Error        string                    `json:"error,omitempty"`
+	SessionID             string                         `json:"sessionID"`
+	Resumed               bool                           `json:"resumed"`
+	Capabilities          ViewerSessionCapabilities      `json:"capabilities"`
+	RejectedSubscriptions []SubscriptionRejectionMessage `json:"rejectedSubscriptions,omitempty"`
+	Error                 string                         `json:"error,omitempty"`
 }
 
 // ViewerSessionCloseMessage explicitly destroys an authenticated viewer
@@ -189,6 +203,8 @@ const (
 	SocketEventNameStoreUpdate = "storeupdate"
 	// SocketEventNameStoreSubscription - Store Subscription
 	SocketEventNameStoreSubscription = "storesub"
+	// SocketEventNameSubscriptionRejected reports an individually denied subscription.
+	SocketEventNameSubscriptionRejected = "subscriptionrejected"
 
 	// SocketEventNameEvent - Server-originated EventDispatcher event
 	SocketEventNameEvent = "event"
@@ -607,7 +623,8 @@ func (s *viewerSessionSocket) onAttach(params ...any) {
 		s.emitAttachError("could not attach viewer session handlers")
 		return
 	}
-	if err := tracker.reconcileSessionManifest(request, identity.AccessLevel); err != nil {
+	rejectedSubscriptions, err := tracker.reconcileSessionManifest(request, identity.AccessLevel)
+	if err != nil {
 		tracker.detachSocket(generation)
 		s.manager.abort(tracker.sessionID, tracker)
 		if previous != nil && previous != s.conn {
@@ -630,8 +647,9 @@ func (s *viewerSessionSocket) onAttach(params ...any) {
 	s.mu.Unlock()
 
 	if err := s.conn.Emit(SocketEventNameViewerSessionAttached, ViewerSessionAttachResponse{
-		SessionID: tracker.sessionID,
-		Resumed:   resumed,
+		SessionID:             tracker.sessionID,
+		Resumed:               resumed,
+		RejectedSubscriptions: rejectedSubscriptions,
 		Capabilities: ViewerSessionCapabilities{
 			DataStreams: tracker.dataStreams != nil,
 		},
@@ -1405,6 +1423,15 @@ func (st *socketTracker) onStoreSubscription(params ...any) {
 			return
 		}
 		if err := st.subscribeStoreKey(subMsg.StoreName, subMsg.Key, userAccessLevel); err != nil {
+			if errors.Is(err, ErrInsufficientStoreAccess) {
+				st.rejectSubscription(SubscriptionRejectionMessage{
+					SubscriptionType: "store",
+					StoreName:        subMsg.StoreName,
+					Key:              subMsg.Key,
+					Error:            err.Error(),
+				})
+				return
+			}
 			st.log.Errorf("Store subscription failed for %s/%s: %+v", subMsg.StoreName, subMsg.Key, err)
 			st.disconnect()
 			return
@@ -1562,6 +1589,16 @@ func (st *socketTracker) onKeyedEventSubscription(params ...any) {
 			return
 		}
 		if err := st.subscribeKeyedEvent(subscription, userAccessLevel); err != nil {
+			if errors.Is(err, ErrInsufficientStoreAccess) {
+				st.rejectSubscription(SubscriptionRejectionMessage{
+					SubscriptionType: "keyedEvent",
+					StoreName:        subMsg.StoreName,
+					EventName:        subMsg.EventName,
+					Key:              subMsg.Key,
+					Error:            err.Error(),
+				})
+				return
+			}
 			st.log.Errorf("Keyed event subscription failed for %s/%s/%s: %+v",
 				subMsg.StoreName, subMsg.EventName, subMsg.Key, err)
 			st.disconnect()
@@ -1646,7 +1683,8 @@ type viewerSessionStoreSubscriptionKey struct {
 func (st *socketTracker) reconcileSessionManifest(
 	request ViewerSessionAttachRequest,
 	accessLevel AccessLevel,
-) error {
+) ([]SubscriptionRejectionMessage, error) {
+	rejectedSubscriptions := make([]SubscriptionRejectionMessage, 0)
 	manifestBytes := len(request.SessionID)
 	for _, subscription := range request.StoreSubscriptions {
 		manifestBytes += len(subscription.StoreName) + len(subscription.Key)
@@ -1663,22 +1701,22 @@ func (st *socketTracker) reconcileSessionManifest(
 			len(subscription.Key)
 	}
 	if manifestBytes > st.limits.MaxSessionManifestBytes {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"viewer session manifest byte limit exceeded (%d)",
 			st.limits.MaxSessionManifestBytes,
 		)
 	}
 	if len(request.StoreSubscriptions) > st.limits.MaxStoreSubscriptions {
-		return fmt.Errorf("store subscription limit exceeded (%d)", st.limits.MaxStoreSubscriptions)
+		return nil, fmt.Errorf("store subscription limit exceeded (%d)", st.limits.MaxStoreSubscriptions)
 	}
 	if len(request.KeyedEventSubscriptions) > st.limits.MaxKeyedEventSubscriptions {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"keyed event subscription limit exceeded (%d)",
 			st.limits.MaxKeyedEventSubscriptions,
 		)
 	}
 	if len(request.DataStreamSubscriptions) > st.limits.MaxDataStreamSubscriptions {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"data stream subscription limit exceeded (%d)",
 			st.limits.MaxDataStreamSubscriptions,
 		)
@@ -1688,13 +1726,24 @@ func (st *socketTracker) reconcileSessionManifest(
 	for _, subscription := range request.StoreSubscriptions {
 		if len(subscription.StoreName) > maxSocketMethodNameBytes ||
 			st.sr == nil || !st.sr.IsStoreValid(subscription.StoreName) {
-			return fmt.Errorf("invalid store subscription %q", subscription.StoreName)
+			return nil, fmt.Errorf("invalid store subscription %q", subscription.StoreName)
 		}
 		if len(subscription.Key) > 4096 {
-			return errors.New("oversized store subscription key")
+			return nil, errors.New("oversized store subscription key")
 		}
 		if err := st.sr.CheckStoreAccess(subscription.StoreName, accessLevel); err != nil {
-			return err
+			if !errors.Is(err, ErrInsufficientStoreAccess) {
+				return nil, err
+			}
+			rejection := SubscriptionRejectionMessage{
+				SubscriptionType: "store",
+				StoreName:        subscription.StoreName,
+				Key:              subscription.Key,
+				Error:            err.Error(),
+			}
+			st.logSubscriptionRejection(rejection)
+			rejectedSubscriptions = append(rejectedSubscriptions, rejection)
+			continue
 		}
 		desiredStores[viewerSessionStoreSubscriptionKey{
 			storeName: subscription.StoreName,
@@ -1712,7 +1761,7 @@ func (st *socketTracker) reconcileSessionManifest(
 		if st.ed == nil || st.sr == nil || !st.sr.IsStoreValid(keyed.StoreName) ||
 			keyed.EventName == "" || keyed.Key == "" ||
 			len(keyed.EventName) > 256 || len(keyed.Key) > 4096 {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"invalid keyed event subscription %q/%q/%q",
 				keyed.StoreName,
 				keyed.EventName,
@@ -1720,7 +1769,19 @@ func (st *socketTracker) reconcileSessionManifest(
 			)
 		}
 		if err := st.sr.CheckStoreAccess(keyed.StoreName, accessLevel); err != nil {
-			return err
+			if !errors.Is(err, ErrInsufficientStoreAccess) {
+				return nil, err
+			}
+			rejection := SubscriptionRejectionMessage{
+				SubscriptionType: "keyedEvent",
+				StoreName:        keyed.StoreName,
+				EventName:        keyed.EventName,
+				Key:              keyed.Key,
+				Error:            err.Error(),
+			}
+			st.logSubscriptionRejection(rejection)
+			rejectedSubscriptions = append(rejectedSubscriptions, rejection)
+			continue
 		}
 		desiredKeyedEvents[keyed] = struct{}{}
 	}
@@ -1728,10 +1789,10 @@ func (st *socketTracker) reconcileSessionManifest(
 	desiredDataStreams := map[string]DataStreamSubscription{}
 	for _, subscription := range request.DataStreamSubscriptions {
 		if st.dataStreams == nil || st.sr == nil {
-			return errors.New("data streaming is not available")
+			return nil, errors.New("data streaming is not available")
 		}
 		if subscription.SubscriptionID == "" || len(subscription.SubscriptionID) > 256 {
-			return errors.New("invalid data stream subscription ID")
+			return nil, errors.New("invalid data stream subscription ID")
 		}
 		stream := DataStreamSubscription{
 			StoreName:  subscription.StoreName,
@@ -1739,14 +1800,27 @@ func (st *socketTracker) reconcileSessionManifest(
 			Key:        subscription.Key,
 		}
 		if err := stream.Validate(); err != nil {
-			return err
+			return nil, err
 		}
 		if err := st.sr.CheckStoreAccess(stream.StoreName, accessLevel); err != nil {
-			return err
+			if !errors.Is(err, ErrInsufficientStoreAccess) {
+				return nil, err
+			}
+			rejection := SubscriptionRejectionMessage{
+				SubscriptionType: "dataStream",
+				StoreName:        stream.StoreName,
+				StreamName:       stream.StreamName,
+				Key:              stream.Key,
+				SubscriptionID:   subscription.SubscriptionID,
+				Error:            err.Error(),
+			}
+			st.logSubscriptionRejection(rejection)
+			rejectedSubscriptions = append(rejectedSubscriptions, rejection)
+			continue
 		}
 		if existing, duplicate := desiredDataStreams[subscription.SubscriptionID]; duplicate &&
 			existing != stream {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"data stream subscription ID %q is duplicated",
 				subscription.SubscriptionID,
 			)
@@ -1806,7 +1880,7 @@ func (st *socketTracker) reconcileSessionManifest(
 			continue
 		}
 		if err := st.unsubscribeStoreKey(subscription.storeName, subscription.key); err != nil {
-			return err
+			return rejectedSubscriptions, err
 		}
 	}
 	for subscription := range desiredStores {
@@ -1819,7 +1893,7 @@ func (st *socketTracker) reconcileSessionManifest(
 			accessLevel,
 			false,
 		); err != nil {
-			return err
+			return rejectedSubscriptions, err
 		}
 	}
 	for storeName := range changedStores {
@@ -1831,7 +1905,7 @@ func (st *socketTracker) reconcileSessionManifest(
 		}
 		sort.Strings(keys)
 		if err := st.queueSessionManifestBaseline(storeName, keys, accessLevel); err != nil {
-			return err
+			return rejectedSubscriptions, err
 		}
 	}
 
@@ -1840,7 +1914,7 @@ func (st *socketTracker) reconcileSessionManifest(
 			continue
 		}
 		if err := st.unsubscribeKeyedEvent(subscription); err != nil {
-			return err
+			return rejectedSubscriptions, err
 		}
 	}
 	for subscription := range desiredKeyedEvents {
@@ -1848,7 +1922,7 @@ func (st *socketTracker) reconcileSessionManifest(
 			continue
 		}
 		if err := st.subscribeKeyedEvent(subscription, accessLevel); err != nil {
-			return err
+			return rejectedSubscriptions, err
 		}
 	}
 	st.dropUnsubscribedBufferedKeyedEvents(desiredKeyedEvents)
@@ -1867,7 +1941,7 @@ func (st *socketTracker) reconcileSessionManifest(
 		}
 		st.openDataStream(subscriptionID, subscription)
 	}
-	return nil
+	return rejectedSubscriptions, nil
 }
 
 func (st *socketTracker) dropUnsubscribedBufferedKeyedEvents(
@@ -1945,6 +2019,16 @@ func (st *socketTracker) openDataStream(
 		return
 	}
 	if err := st.sr.CheckStoreAccess(subscription.StoreName, userAccessLevel); err != nil {
+		if errors.Is(err, ErrInsufficientStoreAccess) {
+			st.rejectSubscription(SubscriptionRejectionMessage{
+				SubscriptionType: "dataStream",
+				StoreName:        subscription.StoreName,
+				StreamName:       subscription.StreamName,
+				Key:              subscription.Key,
+				SubscriptionID:   subscriptionID,
+				Error:            err.Error(),
+			})
+		}
 		st.emitDataStreamError(subscriptionID, "data stream access denied")
 		return
 	}
@@ -2047,6 +2131,25 @@ func (st *socketTracker) emitDataStreamError(subscriptionID string, message stri
 		SubscriptionID: subscriptionID,
 		Error:          message,
 	})
+}
+
+func (st *socketTracker) rejectSubscription(rejection SubscriptionRejectionMessage) {
+	st.logSubscriptionRejection(rejection)
+	st.emitMessage(SocketEventNameSubscriptionRejected, rejection)
+}
+
+func (st *socketTracker) logSubscriptionRejection(rejection SubscriptionRejectionMessage) {
+	if st.log == nil {
+		return
+	}
+	st.log.WithFields(logrus.Fields{
+		"subscriptionType": rejection.SubscriptionType,
+		"storeName":        rejection.StoreName,
+		"key":              rejection.Key,
+		"eventName":        rejection.EventName,
+		"streamName":       rejection.StreamName,
+		"subscriptionID":   rejection.SubscriptionID,
+	}).WithField("reason", rejection.Error).Warn("Rejected unauthorized viewer subscription")
 }
 
 func (st *socketTracker) emitSubscriptionCatchup(storeName string, key string, accessLevel AccessLevel) error {

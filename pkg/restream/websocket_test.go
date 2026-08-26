@@ -761,8 +761,9 @@ func TestViewerSocketRejectsSubscriptionBelowStoreMinimumAccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStoreRegistry failed: %v", err)
 	}
+	var logOutput bytes.Buffer
 	log := logrus.New()
-	log.SetOutput(io.Discard)
+	log.SetOutput(&logOutput)
 	socket := &socketTracker{
 		log:                log,
 		sr:                 registry,
@@ -780,10 +781,16 @@ func TestViewerSocketRejectsSubscriptionBelowStoreMinimumAccess(t *testing.T) {
 		Key:       "values%&a",
 	})
 
-	select {
-	case emitted := <-socket.emitQueue:
-		t.Fatalf("unexpected store update for denied subscription: %#v", emitted)
-	default:
+	emitted := resolveEmitMessage(t, <-socket.emitQueue)
+	rejection, ok := emitted.Message.(SubscriptionRejectionMessage)
+	if emitted.Name != SocketEventNameSubscriptionRejected || !ok {
+		t.Fatalf("denied subscription message = %#v", emitted)
+	}
+	if rejection.SubscriptionType != "store" ||
+		rejection.StoreName != viewerSocketTestStoreName ||
+		rejection.Key != "values%&a" ||
+		!strings.Contains(rejection.Error, "requires access level 2, caller has 1") {
+		t.Fatalf("denied subscription rejection = %#v", rejection)
 	}
 	if _, subscribed := socket.storeSubscriptions[viewerSocketTestStoreName]; subscribed {
 		t.Fatalf("denied subscription should not be tracked: %#v", socket.storeSubscriptions)
@@ -791,6 +798,10 @@ func TestViewerSocketRejectsSubscriptionBelowStoreMinimumAccess(t *testing.T) {
 	info := registry.storeMap[viewerSocketTestStoreName]
 	if info.ActiveSubCount != 0 {
 		t.Fatalf("denied subscription incremented registry count to %d", info.ActiveSubCount)
+	}
+	if !strings.Contains(logOutput.String(), "Rejected unauthorized viewer subscription") ||
+		!strings.Contains(logOutput.String(), viewerSocketTestStoreName) {
+		t.Fatalf("denied subscription was not logged: %q", logOutput.String())
 	}
 }
 
@@ -925,6 +936,12 @@ func TestViewerSocketRejectsKeyedEventSubscriptionBelowStoreMinimumAccess(t *tes
 	if eventd.HasKeyedEventSubscribers(viewerSocketTestStoreName, "audio", "radio-a") {
 		t.Fatal("denied keyed event subscription reached the event dispatcher")
 	}
+	emitted := resolveEmitMessage(t, <-socket.emitQueue)
+	rejection, ok := emitted.Message.(SubscriptionRejectionMessage)
+	if emitted.Name != SocketEventNameSubscriptionRejected || !ok ||
+		rejection.SubscriptionType != "keyedEvent" || rejection.EventName != "audio" {
+		t.Fatalf("denied keyed event rejection = %#v", emitted)
+	}
 }
 
 func TestViewerSocketAllocatesAndReleasesDataStreamEndpoint(t *testing.T) {
@@ -1009,7 +1026,7 @@ func TestViewerSocketRejectsDataStreamBelowStoreMinimumAccessBeforeAllocation(t 
 	socket := &socketTracker{
 		sr:                      registry,
 		dataStreams:             broker,
-		emitQueue:               make(chan emitMessage, 1),
+		emitQueue:               make(chan emitMessage, 2),
 		dataStreamSubscriptions: map[string]trackedDataStreamSubscription{},
 		accessLookup:            func() (AccessLevel, error) { return AccessLevel(2), nil },
 	}
@@ -1026,6 +1043,13 @@ func TestViewerSocketRejectsDataStreamBelowStoreMinimumAccessBeforeAllocation(t 
 	case opened := <-broker.opened:
 		t.Fatalf("unauthorized subscription reached broker: %#v", opened)
 	default:
+	}
+	rejected := resolveEmitMessage(t, <-socket.emitQueue)
+	rejection, ok := rejected.Message.(SubscriptionRejectionMessage)
+	if rejected.Name != SocketEventNameSubscriptionRejected || !ok ||
+		rejection.SubscriptionType != "dataStream" ||
+		rejection.SubscriptionID != "subscription-a" {
+		t.Fatalf("denied data stream rejection = %#v", rejected)
 	}
 	emitted := <-socket.emitQueue
 	endpointMessage, ok := emitted.Message.(DataStreamEndpointMessage)

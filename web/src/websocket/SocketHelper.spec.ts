@@ -17,6 +17,7 @@ import {
     ReStreamSocket,
     StoreSubscriptionAction,
     StoreUpdateMessageKind,
+    SubscriptionRejectionMessage,
     ViewerSessionAttachRequest,
     ViewerSessionAttachResponse,
 } from './SocketHelper.js';
@@ -314,6 +315,62 @@ describe('ReStreamSocket viewer sessions', () => {
             action: StoreSubscriptionAction.Subscribe,
             key: 'camera-a',
         }]);
+    });
+});
+
+describe('ReStreamSocket subscription rejections', () => {
+    test('warns about denied session subscriptions without rejecting attachment', async () => {
+        const socket = new FakeSocket();
+        const restreamSocket = new ReStreamSocket(socket as unknown as Socket, {
+            viewerSessions: true,
+        });
+        const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const rejectedSubscription: SubscriptionRejectionMessage = {
+            subscriptionType: 'store',
+            storeName: 'CloudVesselSettings',
+            key: 'viewerSlug',
+            error: 'store CloudVesselSettings requires access level 2, caller has 1',
+        };
+
+        try {
+            const attached = restreamSocket.markAuthenticated();
+            socket.fire('viewersessionattached', {
+                sessionID: 'a0b304c9-d5d0-4ce4-89a6-baf510956968',
+                resumed: false,
+                capabilities: { dataStreams: false },
+                rejectedSubscriptions: [rejectedSubscription],
+            } satisfies ViewerSessionAttachResponse);
+
+            await expect(attached).resolves.toBeUndefined();
+            expect(restreamSocket.getSessionID()).toBe('a0b304c9-d5d0-4ce4-89a6-baf510956968');
+            expect(warning).toHaveBeenCalledWith(expect.stringContaining(
+                'ReStream rejected unauthorized store subscription CloudVesselSettings/viewerSlug',
+            ));
+        } finally {
+            warning.mockRestore();
+        }
+    });
+
+    test('warns about a denied subscription added after authentication', async () => {
+        const socket = new FakeSocket();
+        const rejections: SubscriptionRejectionMessage[] = [];
+        const restreamSocket = new ReStreamSocket(socket as unknown as Socket, {
+            onSubscriptionRejected: rejection => rejections.push(rejection),
+        });
+        await restreamSocket.markAuthenticated();
+
+        socket.fire('subscriptionrejected', {
+            subscriptionType: 'keyedEvent',
+            storeName: 'Log',
+            eventName: 'Log.Line',
+            key: 'recent',
+            error: 'store Log requires access level 2, caller has 1',
+        } satisfies SubscriptionRejectionMessage);
+
+        expect(rejections).toEqual([expect.objectContaining({
+            subscriptionType: 'keyedEvent',
+            storeName: 'Log',
+        })]);
     });
 });
 

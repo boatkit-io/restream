@@ -74,6 +74,7 @@ export type EventStructType<ES extends EventStruct> = Deserializable<ES> & { rea
 enum SocketEventNames {
     StoreUpdate = 'storeupdate',
     StoreSubscription = 'storesub',
+    SubscriptionRejected = 'subscriptionrejected',
 
     Event = 'event',
     KeyedEvent = 'keyedevent',
@@ -98,6 +99,18 @@ export interface StoreSubscriptionMessage {
     storeName: string;
     action: StoreSubscriptionAction;
     key?: string;
+}
+
+export type SubscriptionType = 'store' | 'keyedEvent' | 'dataStream';
+
+export interface SubscriptionRejectionMessage {
+    subscriptionType: SubscriptionType;
+    storeName: string;
+    key?: string;
+    eventName?: string;
+    streamName?: string;
+    subscriptionID?: string;
+    error: string;
 }
 
 export enum StoreUpdateMessageKind {
@@ -193,6 +206,7 @@ export interface ViewerSessionAttachResponse {
     sessionID: string;
     resumed: boolean;
     capabilities: ViewerSessionCapabilities;
+    rejectedSubscriptions?: SubscriptionRejectionMessage[];
     error?: string;
 }
 
@@ -207,6 +221,8 @@ export interface ReStreamSocketOptions {
     storeNames?: readonly string[];
     /** Excludes stores owned by another Restream socket/data plane. */
     excludedStoreNames?: readonly string[];
+    /** Overrides the default DevTools warning for individually denied subscriptions. */
+    onSubscriptionRejected?: (rejection: SubscriptionRejectionMessage) => void;
 }
 
 export type DataStreamEndpointCallback = (
@@ -245,6 +261,7 @@ export class ReStreamSocket {
     private readonly _sessionAttachTimeoutMs: number;
     private readonly _storeNames: ReadonlySet<string> | undefined;
     private readonly _excludedStoreNames: ReadonlySet<string>;
+    private readonly _onSubscriptionRejected: (rejection: SubscriptionRejectionMessage) => void;
     private _sessionID: string | undefined;
     private _sessionAttach: Deferred<void> | undefined;
     private _sessionAttachTimer: ReturnType<typeof setTimeout> | undefined;
@@ -269,6 +286,7 @@ export class ReStreamSocket {
         this._excludedStoreNames = new Set(
             options.excludedStoreNames?.map(name => name.trim()).filter(Boolean) ?? [],
         );
+        this._onSubscriptionRejected = options.onSubscriptionRejected ?? warnSubscriptionRejected;
 
         socket.on('disconnect', () => {
             if (!this._viewerSessions) {
@@ -311,6 +329,9 @@ export class ReStreamSocket {
                 this._clearSessionAttach(new Error("Server returned an empty viewer session ID"));
                 return;
             }
+            for (const rejection of message.rejectedSubscriptions ?? []) {
+                this._onSubscriptionRejected(rejection);
+            }
             this._sessionID = message.sessionID;
             this._capabilities = message.capabilities ?? { dataStreams: false };
             this._authenticated = true;
@@ -323,6 +344,10 @@ export class ReStreamSocket {
                 this._socket.emit(operation.name, operation.message);
             }
             attaching.resolve(undefined);
+        });
+
+        socket.on(SocketEventNames.SubscriptionRejected, (message: SubscriptionRejectionMessage) => {
+            this._onSubscriptionRejected(message);
         });
 
         socket.on(SocketEventNames.StoreUpdate, (message: StoreUpdateMessage) => {
@@ -860,6 +885,17 @@ export class ReStreamSocket {
         }
         this._sessionAttachOperations.push({ name, message });
     }
+}
+
+function warnSubscriptionRejected(rejection: SubscriptionRejectionMessage): void {
+    const detail = [
+        rejection.storeName,
+        rejection.eventName ?? rejection.streamName,
+        rejection.key,
+    ].filter(Boolean).join('/');
+    console.warn(
+        `ReStream rejected unauthorized ${rejection.subscriptionType} subscription ${detail}: ${rejection.error}`,
+    );
 }
 
 function keyedEventSubscriptionIdentity(storeName: string, eventName: string, key: string): string {

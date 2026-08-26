@@ -31,6 +31,8 @@ export {
     RPCCallMessage,
     RPCResponseStruct,
     RPCStruct,
+    SubscriptionRejectionMessage,
+    SubscriptionType,
     ViewerSessionAttachRequest,
     ViewerSessionAttachResponse,
     ViewerSessionCapabilities,
