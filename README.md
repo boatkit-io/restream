@@ -19,13 +19,19 @@ In ReStream, we use the same store model as in ReSub, but the stores are created
 
 ### Field-Keyed TypeScript Subscriptions
 
-Generated ReStream store states support field-keyed ReSub subscriptions on the TypeScript side. Use `@autoSubscribeWithKey` with a generated field name or nested key path when a getter should only re-run for partial updates that touch that part of the store.
+Generated ReStream store states support field-keyed ReSub subscriptions on the TypeScript side. Use `@autoSubscribeWithKey` with generated stable field-ID constants when a getter should only re-run for partial updates that touch that part of the store.
 
 ```typescript
 import { AutoSubscribeStore, autoSubscribeWithKey, formCompoundKey } from '@boatkit-io/resub';
 import { TriggerStore } from '@boatkit-io/restream';
 
-import { DeviceStoreName, DeviceStoreState, DeviceStoreStatePartial } from './restream/PackageDevice';
+import {
+    DeviceStoreName,
+    DevicePGNInfoFieldIDRxCount,
+    DeviceStoreState,
+    DeviceStoreStateFieldIDDevicePGNs,
+    DeviceStoreStatePartial,
+} from './restream/PackageDevice';
 
 @AutoSubscribeStore
 class DeviceStore extends TriggerStore<DeviceStoreState> {
@@ -33,23 +39,37 @@ class DeviceStore extends TriggerStore<DeviceStoreState> {
         super(DeviceStoreName, DeviceStoreState, DeviceStoreStatePartial);
     }
 
-    @autoSubscribeWithKey("DevicePGNs")
+    @autoSubscribeWithKey(DeviceStoreStateFieldIDDevicePGNs)
     getAllDevicePGNs() {
         return this._state.devicePGNs;
     }
 }
 ```
 
-For generated ReStream stores, subscription keys are treated as store-state field paths rather than arbitrary opaque tokens. Field names are normalized between Go-style names and generated TypeScript names, so `DevicePGNs` and `devicePGNs` refer to the same field. Build nested key paths with ReSub's compound-key helper:
+For generated ReStream stores, subscription keys are treated as store-state field paths rather than arbitrary opaque tokens. Build nested key paths with ReSub's compound-key helper and the generated constants for every struct field. Map keys and array indexes remain literal path segments:
 
 ```typescript
-@autoSubscribeWithKey(formCompoundKey("DevicePGNs", "CAN0", "RxCount"))
+@autoSubscribeWithKey(formCompoundKey(
+    DeviceStoreStateFieldIDDevicePGNs,
+    "CAN0",
+    DevicePGNInfoFieldIDRxCount,
+))
 getCAN0RxCount() {
     return this._state.devicePGNs?.get("CAN0")?.rxCount;
 }
 ```
 
-Struct field names in nested paths are normalized the same way, but map keys are exact. In the example above, `CAN0` is a map key and will not match `can0`. Full-store subscriptions still update for any store change, while field-keyed subscriptions update only when the generated partial reports that exact field path or one of its parent/child paths.
+The TypeScript runtime tracks generated paths by field ID. When field-ID wire keys are enabled, it serializes them with a version marker, for example `~1%&3%&CAN0%&7`. Go normalizes that key through the stable `restream:",fID=N"` tags before filtering and forwarding it, so upgraded servers can bridge an ID-key client to an older relay peer. Readable Go- or TypeScript-style field names are still accepted as a migration aid, but new source should use the generated constants so refactors remain typechecked and production bundles do not retain those names. Map keys are exact: in the example above, `CAN0` will not match `can0`. Full-store subscriptions still update for any store change, while field-keyed subscriptions update only when the generated partial reports that exact field path or one of its parent/child paths.
+
+ID-key emission defaults off so a new client can still connect directly to an older server. Advertise support in the application's existing login capability response and opt in before authentication; a missing flag safely retains readable legacy wire keys:
+
+```typescript
+const restreamSocket = new ReStreamSocket(socket);
+restreamSocket.setFieldIDSubscriptionKeysEnabled(
+    loginResponse.restreamFieldIDSubscriptionKeys === true,
+);
+await restreamSocket.markAuthenticated();
+```
 
 Viewer sockets use keyed delivery by default. For a direct local viewer where
 bandwidth is inexpensive and the client should retain complete store state,

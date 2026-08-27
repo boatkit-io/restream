@@ -1463,6 +1463,11 @@ func (st *socketTracker) subscribeStoreKeyWithCatchup(
 	if err := st.sr.CheckStoreAccess(storeName, accessLevel); err != nil {
 		return err
 	}
+	var err error
+	key, err = st.sr.NormalizeSubscriptionKey(storeName, key)
+	if err != nil {
+		return err
+	}
 
 	st.storeUpdateQueueMutex.Lock()
 	st.subscriptionMutex.Lock()
@@ -1512,6 +1517,11 @@ func (st *socketTracker) subscribeStoreKeyWithCatchup(
 }
 
 func (st *socketTracker) unsubscribeStoreKey(storeName string, key string) error {
+	var err error
+	key, err = st.sr.NormalizeSubscriptionKey(storeName, key)
+	if err != nil {
+		return err
+	}
 	st.storeUpdateQueueMutex.Lock()
 	st.subscriptionMutex.Lock()
 	keySubs, exists := st.storeSubscriptions[storeName]
@@ -1745,9 +1755,13 @@ func (st *socketTracker) reconcileSessionManifest(
 			rejectedSubscriptions = append(rejectedSubscriptions, rejection)
 			continue
 		}
+		normalizedKey, err := st.sr.NormalizeSubscriptionKey(subscription.StoreName, subscription.Key)
+		if err != nil {
+			return nil, err
+		}
 		desiredStores[viewerSessionStoreSubscriptionKey{
 			storeName: subscription.StoreName,
-			key:       subscription.Key,
+			key:       normalizedKey,
 		}] = struct{}{}
 	}
 

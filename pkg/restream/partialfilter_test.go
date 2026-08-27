@@ -5,6 +5,14 @@ import (
 	"testing"
 )
 
+type fieldIDSubscriptionTestState struct {
+	Devices map[string]*fieldIDSubscriptionTestDevice `restream:",fID=3"`
+}
+
+type fieldIDSubscriptionTestDevice struct {
+	Count uint64 `restream:",fID=7"`
+}
+
 func TestFieldPathReductionRemovesDescendantsAndDuplicates(t *testing.T) {
 	fields := [][]any{
 		{"key"},
@@ -71,5 +79,41 @@ func BenchmarkFieldPathReductionLargeMapPartial(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = reduceFieldPaths(fields)
+	}
+}
+
+func TestNormalizeFieldIDSubscriptionKey(t *testing.T) {
+	key := SubscriptionKeyFromFieldIDPath([]any{3, "CAN0", 7})
+	if key != "~1%&3%&CAN0%&7" {
+		t.Fatalf("field-ID key = %q", key)
+	}
+
+	got, err := normalizeFieldIDSubscriptionKey(key, reflect.TypeFor[fieldIDSubscriptionTestState]())
+	if err != nil {
+		t.Fatalf("normalize field-ID key: %v", err)
+	}
+	if got != "devices%&CAN0%&count" {
+		t.Fatalf("normalized key = %q", got)
+	}
+}
+
+func TestNormalizeFieldIDSubscriptionKeyKeepsLegacyKeys(t *testing.T) {
+	const key = "devices%&CAN0%&count"
+	got, err := normalizeFieldIDSubscriptionKey(key, reflect.TypeFor[fieldIDSubscriptionTestState]())
+	if err != nil {
+		t.Fatalf("normalize legacy key: %v", err)
+	}
+	if got != key {
+		t.Fatalf("normalized legacy key = %q", got)
+	}
+}
+
+func TestNormalizeFieldIDSubscriptionKeyRejectsUnknownFields(t *testing.T) {
+	_, err := normalizeFieldIDSubscriptionKey(
+		SubscriptionKeyFromFieldIDPath([]any{4}),
+		reflect.TypeFor[fieldIDSubscriptionTestState](),
+	)
+	if err == nil {
+		t.Fatal("expected unknown field ID to fail")
 	}
 }

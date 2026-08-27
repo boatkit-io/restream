@@ -695,6 +695,55 @@ func TestFieldPathAffectsSubscriptionCascadesBothDirections(t *testing.T) {
 	assert.Equal(t, [][]any{{}}, restream.ChildFieldsForField([][]any{{"number"}}, "Number"))
 }
 
+func TestStoreRegistryCanonicalizesFieldIDSubscriptionKeys(t *testing.T) {
+	state := &TestState{
+		MapPtrTest: map[uint8]*TestMapData{
+			5: {Number: 42},
+		},
+	}
+	store := &TestStore{}
+	store.Sd = restream.NewStoreData[TestState, *TestState, *TestStatePartial](store, state)
+	registry, err := restream.NewStoreRegistry([]restream.Store{store})
+	assert.NoError(t, err)
+
+	var transitions []string
+	registry.SubscribeToStoreSubscriptions(func(_ string, key string, subscribed bool) {
+		transitions = append(transitions, key+":"+map[bool]string{true: "start", false: "stop"}[subscribed])
+	})
+
+	fieldIDKey := restream.SubscriptionKeyFromFieldIDPath([]any{1, uint8(5), 1})
+	assert.Equal(t, "~1%&1%&5%&1", fieldIDKey)
+	assert.NoError(t, registry.ListeningToStoreKey(store.GetName(), fieldIDKey, restream.AccessLevelPublic))
+
+	keys, err := registry.GetActiveStoreSubscriptionKeys(store.GetName())
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"mapPtrTest%&5%&number"}, keys)
+	activity, active, err := registry.GetStoreSubscriptionActivity(store.GetName(), fieldIDKey)
+	assert.NoError(t, err)
+	assert.True(t, active)
+	assert.Equal(t, 1, activity.ReferenceCount)
+	assert.Equal(t, []string{"mapPtrTest%&5%&number:start"}, transitions)
+
+	serializable, exists, err := registry.GetPartialSnapshotForSubscriptionKey(
+		store.GetName(),
+		fieldIDKey,
+		restream.AccessLevelPublic,
+	)
+	assert.NoError(t, err)
+	assert.True(t, exists)
+	partial, ok := serializable.(*TestStatePartial)
+	assert.True(t, ok)
+	partialState := TestState{MapPtrTest: map[uint8]*TestMapData{}}
+	assert.Equal(t, [][]any{{"MapPtrTest", uint8(5), "Number"}}, partial.ApplyTo(&partialState))
+	assert.Equal(t, uint(42), partialState.MapPtrTest[5].Number)
+
+	assert.NoError(t, registry.StopListeningToStoreKey(store.GetName(), fieldIDKey))
+	assert.Equal(t, []string{
+		"mapPtrTest%&5%&number:start",
+		"mapPtrTest%&5%&number:stop",
+	}, transitions)
+}
+
 func TestRelayStoreProvidesKeyedInitialPartial(t *testing.T) {
 	mapValueFive := &TestMapData{Number: 5}
 	mapValueSix := &TestMapData{Number: 6}

@@ -151,8 +151,8 @@ func TestViewerSocketFFRPCReceivesAnnotations(t *testing.T) {
 }
 
 type viewerSocketTestState struct {
-	Values             map[string]int
-	Other              int
+	Values             map[string]int `restream:",fID=1"`
+	Other              int            `restream:",fID=2"`
 	onPartialForFields func()
 }
 
@@ -551,11 +551,12 @@ func TestViewerSocketKeyedCatchupUsesRelayStorePartial(t *testing.T) {
 		storeSubscriptions: map[string]map[string]int{},
 	}
 	initializeTestSocketRuntime(socket)
+	fieldIDKey := SubscriptionKeyFromFieldIDPath([]any{1, sourceKey})
 
 	socket.onStoreSubscription(StoreSubscriptionMessage{
 		StoreName: viewerSocketTestStoreName,
 		Action:    Subscribe,
-		Key:       "values%&" + sourceKey,
+		Key:       fieldIDKey,
 	})
 
 	emitted := resolveEmitMessage(t, <-socket.emitQueue)
@@ -581,6 +582,18 @@ func TestViewerSocketKeyedCatchupUsesRelayStorePartial(t *testing.T) {
 
 	if _, subscribed := socket.storeSubscriptions[viewerSocketTestStoreName]["values%&"+sourceKey]; !subscribed {
 		t.Fatalf("expected socket to track keyed subscription for %s", sourceKey)
+	}
+	if keys := store.ActiveSubscriptionKeys(); len(keys) != 1 || keys[0] != "values%&"+sourceKey {
+		t.Fatalf("relay forwarded subscription keys = %#v", keys)
+	}
+
+	socket.onStoreSubscription(StoreSubscriptionMessage{
+		StoreName: viewerSocketTestStoreName,
+		Action:    Unsubscribe,
+		Key:       fieldIDKey,
+	})
+	if keys := store.ActiveSubscriptionKeys(); len(keys) != 0 {
+		t.Fatalf("relay subscription keys after unsubscribe = %#v", keys)
 	}
 }
 

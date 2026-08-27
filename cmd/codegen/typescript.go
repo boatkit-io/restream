@@ -187,6 +187,10 @@ func (ft *FileTracking) genTSClass(si StructInfo, fields []*restream.FieldInfo, 
 		out += "        const ret: (string | number)[][] = [];\n"
 		for _, fi := range fields {
 			fn := getTSFieldName(fi)
+			fieldID := fi.FieldID
+			if fieldID == 0 {
+				panic(fmt.Sprintf("partial field %s.%s has no stable field ID", fullType, fi.Name))
+			}
 			isPartial := ft.supportsPartials(fi.VarInfo)
 			isApplyOnTop := false
 			if fip, is := fi.VarInfo.(*restream.VarInfoPointer); is && isPartial {
@@ -198,8 +202,8 @@ func (ft *FileTracking) genTSClass(si StructInfo, fields []*restream.FieldInfo, 
 			if isPartial {
 				if isApplyOnTop {
 					out += fmt.Sprintf("        if (this.%s !== undefined) { let fs; [por.%s,fs] = this.%s.applyOnTop(por.%s); "+
-						"for (const f of fs) { ret.push([\"%s\",...f]); }}\n",
-						fn, fn, fn, fn, fn)
+						"for (const f of fs) { ret.push([%d,...f]); }}\n",
+						fn, fn, fn, fn, fieldID)
 				} else {
 					switch getTSPartialCollectionKind(fi.VarInfo) {
 					case "array":
@@ -208,34 +212,34 @@ func (ft *FileTracking) genTSClass(si StructInfo, fields []*restream.FieldInfo, 
 								"const value = Array.from(por.%s ?? []); "+
 								"const fs = this.%s.applyTo(value); "+
 								"por.%s = Uint8Array.from(value); "+
-								"for (const f of fs) { ret.push([\"%s\",...f]); }}\n",
-								fn, fn, fn, fn, fn)
+								"for (const f of fs) { ret.push([%d,...f]); }}\n",
+								fn, fn, fn, fn, fieldID)
 						} else {
 							out += fmt.Sprintf("        if (this.%s !== undefined) { "+
 								"if (!Array.isArray(por.%s)) { por.%s = Array.from(por.%s ?? []); } "+
 								"const fs = this.%s.applyTo(por.%s!); "+
-								"for (const f of fs) { ret.push([\"%s\",...f]); }}\n",
-								fn, fn, fn, fn, fn, fn, fn)
+								"for (const f of fs) { ret.push([%d,...f]); }}\n",
+								fn, fn, fn, fn, fn, fn, fieldID)
 						}
 					case "map":
 						out += fmt.Sprintf("        if (this.%s !== undefined) { "+
 							"if (!(por.%s instanceof Map)) { por.%s = new Map(); } "+
 							"const fs = this.%s.applyTo(por.%s!); "+
-							"for (const f of fs) { ret.push([\"%s\",...f]); }}\n",
-							fn, fn, fn, fn, fn, fn)
+							"for (const f of fs) { ret.push([%d,...f]); }}\n",
+							fn, fn, fn, fn, fn, fieldID)
 					default:
 						out += fmt.Sprintf("        if (this.%s !== undefined) { const fs = this.%s.applyTo(por.%s!); "+
-							"for (const f of fs) { ret.push([\"%s\",...f]); }}\n",
-							fn, fn, fn, fn)
+							"for (const f of fs) { ret.push([%d,...f]); }}\n",
+							fn, fn, fn, fieldID)
 					}
 				}
 			} else {
 				if isPointerToPointer(fi.VarInfo) {
-					out += fmt.Sprintf("        if (this.%s !== undefined) { por.%s = this.%s === null ? undefined : this.%s; ret.push([\"%s\"]); }\n",
-						fn, fn, fn, fn, fn)
+					out += fmt.Sprintf("        if (this.%s !== undefined) { por.%s = this.%s === null ? undefined : this.%s; ret.push([%d]); }\n",
+						fn, fn, fn, fn, fieldID)
 				} else {
-					out += fmt.Sprintf("        if (this.%s !== undefined) { por.%s = this.%s; ret.push([\"%s\"]); }\n",
-						fn, fn, fn, fn)
+					out += fmt.Sprintf("        if (this.%s !== undefined) { por.%s = this.%s; ret.push([%d]); }\n",
+						fn, fn, fn, fieldID)
 				}
 			}
 		}
@@ -251,6 +255,20 @@ func (ft *FileTracking) genTSClass(si StructInfo, fields []*restream.FieldInfo, 
 	out += genTSPartialAugmentations(si)
 
 	out += "}\n"
+	if !partial {
+		out += genTSFieldIDConstants(si.Name, fields)
+	}
+	return out
+}
+
+func genTSFieldIDConstants(structName string, fields []*restream.FieldInfo) string {
+	var out string
+	for _, fi := range fields {
+		if fi.FieldID == 0 {
+			continue
+		}
+		out += fmt.Sprintf("\nexport const %sFieldID%s = %d;\n", structName, fi.Name, fi.FieldID)
+	}
 	return out
 }
 

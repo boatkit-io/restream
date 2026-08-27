@@ -16,6 +16,7 @@ import {
 import SubscribableEvent from '../utils/SubscribableEvent.js';
 
 const compoundKeyJoinerString = "%&";
+const fieldIDSubscriptionKeyPrefix = "~1";
 
 type GeneratedStateType<S extends object> = {
     fromValues: () => S;
@@ -46,14 +47,33 @@ export default abstract class TriggerStore<S extends object> extends StoreBase {
         store._processUpdateMessage(message);
     }
 
-    static getStoreSubs() {
+    static getStoreSubs(fieldIDSubscriptionKeys = false) {
         const ret: { storeName: string, key: string|undefined }[] = [];
         for (const [storeName, keys] of this._storeSubs.entries()) {
             for (const key of keys.keys()) {
-                ret.push({ storeName, key: key === "" ? undefined : key });
+                ret.push({
+                    storeName,
+                    key: key === "" ? undefined : this.subscriptionKeyForTransport(
+                        storeName,
+                        key,
+                        fieldIDSubscriptionKeys,
+                    ),
+                });
             }
         }
         return ret;
+    }
+
+    static subscriptionKeyForTransport(storeName: string, key: string,
+        fieldIDSubscriptionKeys: boolean): string {
+        const store = this._storeMap[storeName];
+        if (!store) {
+            return key;
+        }
+        return store._canonicalFieldKey(
+            key.split(compoundKeyJoinerString),
+            fieldIDSubscriptionKeys,
+        );
     }
 
     static getAllStores(): TriggerStore<object>[] {
@@ -200,8 +220,16 @@ export default abstract class TriggerStore<S extends object> extends StoreBase {
         return this._canonicalFieldKey(key.split(compoundKeyJoinerString));
     }
 
-    private _canonicalFieldKey(field: (string | number)[]): string {
-        return formCompoundKey(...canonicalFieldPath(field, this._stateType.fieldInfo));
+    private _canonicalFieldKey(field: (string | number)[], fieldIDSubscriptionKeys = true): string {
+        const canonical = canonicalFieldPath(
+            field,
+            this._stateType.fieldInfo,
+            fieldIDSubscriptionKeys,
+        );
+        if (fieldIDSubscriptionKeys && typeof canonical[0] === "number") {
+            return formCompoundKey(fieldIDSubscriptionKeyPrefix, ...canonical);
+        }
+        return formCompoundKey(...canonical);
     }
 
     private _hasActiveSubscriptionForCanonicalKey(wireKey: string): boolean {
@@ -232,20 +260,27 @@ function subscriptionKeyAffectsField(fieldKey: string, subscriptionKey: string):
     return true;
 }
 
-function canonicalFieldPath(field: (string | number)[], rootFields: readonly FieldInfo[] | undefined): (string | number)[] {
+function canonicalFieldPath(field: (string | number)[], rootFields: readonly FieldInfo[] | undefined,
+    fieldIDSubscriptionKeys: boolean): (string | number)[] {
     const ret: (string | number)[] = [];
     let fields = rootFields;
     let valueInfo: VarInfo | undefined;
 
+    if (field[0] === fieldIDSubscriptionKeyPrefix) {
+        field = field.slice(1);
+    }
+
     for (let idx = 0; idx < field.length;) {
         if (fields) {
-            const fieldInfo = fields.find(fi => fieldNameMatches(field[idx], fi.name));
+            const fieldInfo = fields.find(fi => fieldPartMatches(field[idx], fi));
             if (!fieldInfo) {
                 ret.push(...field.slice(idx));
                 break;
             }
 
-            ret.push(clientFieldName(fieldInfo.name));
+            ret.push(fieldIDSubscriptionKeys && fieldInfo.fieldID !== undefined
+                ? fieldInfo.fieldID
+                : clientFieldName(fieldInfo.name));
             valueInfo = fieldInfo.varInfo;
             fields = undefined;
             idx++;
@@ -280,8 +315,11 @@ function canonicalFieldPath(field: (string | number)[], rootFields: readonly Fie
     return ret;
 }
 
-function fieldNameMatches(part: string | number, fieldName: string): boolean {
-    return typeof part === "string" && clientFieldName(part) === clientFieldName(fieldName);
+function fieldPartMatches(part: string | number, fieldInfo: FieldInfo): boolean {
+    if (fieldInfo.fieldID !== undefined && String(part) === String(fieldInfo.fieldID)) {
+        return true;
+    }
+    return typeof part === "string" && clientFieldName(part) === clientFieldName(fieldInfo.name);
 }
 
 function clientFieldName(name: string): string {

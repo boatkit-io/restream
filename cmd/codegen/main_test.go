@@ -1822,6 +1822,26 @@ func TestGenTSFieldInfoUsesPublicReadonlyMetadata(t *testing.T) {
 	}
 }
 
+func TestGenTSFieldIDConstantsUsesStableWireIDs(t *testing.T) {
+	got := genTSFieldIDConstants("DeviceStoreState", []*restream.FieldInfo{
+		{Name: "DevicePGNs", FieldID: 3},
+		{Name: "LegacyWithoutID"},
+		{Name: "ConnectionState", FieldID: 9},
+	})
+
+	for _, expected := range []string{
+		"export const DeviceStoreStateFieldIDDevicePGNs = 3;",
+		"export const DeviceStoreStateFieldIDConnectionState = 9;",
+	} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("generated TypeScript field constants missing expected %q:\n%s", expected, got)
+		}
+	}
+	if strings.Contains(got, "LegacyWithoutID") {
+		t.Fatalf("generated TypeScript emitted a constant for an unnumbered field:\n%s", got)
+	}
+}
+
 func TestRestreamPackageImportsUseRuntimePackageForConsumers(t *testing.T) {
 	projectDir := t.TempDir()
 	restreamPkg := &packages.Package{

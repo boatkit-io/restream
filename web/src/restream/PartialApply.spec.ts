@@ -85,7 +85,7 @@ describe('partial apply field paths', () => {
 
         expect(target.get(5)?.number).toBe(42);
         expect(target.get(5)?.data).toEqual(new Uint8Array());
-        expect(fields).toEqual([[5, 'number']]);
+        expect(fields).toEqual([[5, 1]]);
     });
 
     test('mod map preserves an existing parent while applying a generated nested partial', () => {
@@ -103,7 +103,7 @@ describe('partial apply field paths', () => {
 
         expect(target.get(5)?.number).toBe(42);
         expect(target.get(5)?.data).toEqual(new Uint8Array([7, 8]));
-        expect(fields).toEqual([[5, 'number']]);
+        expect(fields).toEqual([[5, 1]]);
     });
 
     test('mod array suppresses nested fields when the index was set', () => {
@@ -132,7 +132,7 @@ describe('partial apply field paths', () => {
 
         expect(target[2]?.number).toBe(84);
         expect(target[2]?.data).toEqual(new Uint8Array());
-        expect(fields).toEqual([[2, 'number']]);
+        expect(fields).toEqual([[2, 1]]);
     });
 
     test('partial value materializes a missing parent for a generated nested partial', () => {
@@ -145,6 +145,6 @@ describe('partial apply field paths', () => {
 
         expect(target?.number).toBe(126);
         expect(target?.data).toEqual(new Uint8Array());
-        expect(fields).toEqual([['number']]);
+        expect(fields).toEqual([[1]]);
     });
 });

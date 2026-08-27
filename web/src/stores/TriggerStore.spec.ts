@@ -266,8 +266,11 @@ describe('TriggerStore keyed subscriptions', () => {
         expect(TriggerStore.getStoreSubs().filter(sub => sub.storeName === store.testStoreName)).toEqual([
             { storeName: store.testStoreName, key: 'devicePGNs' },
         ]);
+        expect(TriggerStore.getStoreSubs(true).filter(sub => sub.storeName === store.testStoreName)).toEqual([
+            { storeName: store.testStoreName, key: '~1%&1' },
+        ]);
 
-        store.fireField(['devicePGNs']);
+        store.fireField([1]);
 
         expect(callback).toHaveBeenCalledTimes(1);
 
@@ -285,8 +288,12 @@ describe('TriggerStore keyed subscriptions', () => {
             { storeName: store.testStoreName, key: 'devicePGNs%&CAN0%&rxCount' },
             { storeName: store.testStoreName, key: 'devicePGNs%&can0%&rxCount' },
         ]);
+        expect(TriggerStore.getStoreSubs(true).filter(sub => sub.storeName === store.testStoreName)).toEqual([
+            { storeName: store.testStoreName, key: '~1%&1%&CAN0%&1' },
+            { storeName: store.testStoreName, key: '~1%&1%&can0%&1' },
+        ]);
 
-        store.fireField(['devicePGNs', 'CAN0', 'rxCount']);
+        store.fireField([1, 'CAN0', 1]);
 
         expect(matchingCallback).toHaveBeenCalledTimes(1);
         expect(wrongMapKeyCallback).not.toHaveBeenCalled();

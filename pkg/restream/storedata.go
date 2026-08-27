@@ -148,6 +148,12 @@ type StoreDataOutputWaiter interface {
 	WaitForOutputIdle(time.Duration) bool
 }
 
+// NormalizeSubscriptionKey converts a versioned field-ID key into the legacy
+// named representation used by Go partial filtering and relay forwarding.
+func (d *StoreData[S, SP, PS]) NormalizeSubscriptionKey(key string) (string, error) {
+	return normalizeFieldIDSubscriptionKey(key, reflect.TypeFor[S]())
+}
+
 // StoreDataOptions controls optional StoreData update delivery behavior.
 type StoreDataOptions struct {
 	// OutputBufferDuration gathers changed partials for this duration before the

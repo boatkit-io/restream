@@ -7,7 +7,10 @@ import (
 	"strings"
 )
 
-const compoundKeyJoinerString = "%&"
+const (
+	compoundKeyJoinerString      = "%&"
+	fieldIDSubscriptionKeyPrefix = "~1"
+)
 
 // FieldFilteredPartial can be implemented by partial structures that can narrow themselves to a subset of changed fields.
 type FieldFilteredPartial interface {
@@ -152,6 +155,106 @@ func SubscriptionKeyFromFieldPath(field []any) string {
 		parts = append(parts, subscriptionKeyPart(part))
 	}
 	return strings.Join(parts, compoundKeyJoinerString)
+}
+
+// SubscriptionKeyFromFieldIDPath converts a field path whose struct segments
+// are stable Restream field IDs into the versioned client subscription-key
+// representation. Collection keys and indexes remain literal path segments.
+func SubscriptionKeyFromFieldIDPath(field []any) string {
+	if len(field) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(field)+1)
+	parts = append(parts, fieldIDSubscriptionKeyPrefix)
+	for _, part := range field {
+		parts = append(parts, fmt.Sprint(part))
+	}
+	return strings.Join(parts, compoundKeyJoinerString)
+}
+
+func normalizeFieldIDSubscriptionKey(key string, stateType reflect.Type) (string, error) {
+	parts := SplitSubscriptionKey(key)
+	if len(parts) == 0 || parts[0] != fieldIDSubscriptionKeyPrefix {
+		return key, nil
+	}
+	if len(parts) == 1 {
+		return "", fmt.Errorf("field-ID subscription key has no field path")
+	}
+
+	keyParts, err := namedSubscriptionKeyPartsForFieldIDs(stateType, parts[1:])
+	if err != nil {
+		return "", err
+	}
+	return strings.Join(keyParts, compoundKeyJoinerString), nil
+}
+
+func namedSubscriptionKeyPartsForFieldIDs(stateType reflect.Type, parts []string) ([]string, error) {
+	ret := make([]string, 0, len(parts))
+	currentType := stateType
+	for idx, part := range parts {
+		for currentType.Kind() == reflect.Pointer {
+			currentType = currentType.Elem()
+		}
+
+		switch currentType.Kind() { //nolint:exhaustive // Subscription paths support structs and their collections.
+		case reflect.Struct:
+			fieldID, err := strconv.ParseUint(part, 10, 8)
+			if err != nil || fieldID == 0 {
+				return nil, fmt.Errorf(
+					"subscription field path segment %q is not a valid field ID for %s",
+					part,
+					currentType,
+				)
+			}
+			field, ok := structFieldForRestreamID(currentType, byte(fieldID))
+			if !ok {
+				return nil, fmt.Errorf(
+					"subscription field ID %d does not exist on %s",
+					fieldID,
+					currentType,
+				)
+			}
+			ret = append(ret, clientFieldName(field.Name))
+			currentType = field.Type
+		case reflect.Map:
+			ret = append(ret, part)
+			currentType = currentType.Elem()
+		case reflect.Array, reflect.Slice:
+			if _, err := strconv.Atoi(part); err != nil {
+				return nil, fmt.Errorf(
+					"subscription array path segment %q is not an index for %s",
+					part,
+					currentType,
+				)
+			}
+			ret = append(ret, part)
+			currentType = currentType.Elem()
+		default:
+			return nil, fmt.Errorf(
+				"subscription field path continues through non-container %s at segment %d",
+				currentType,
+				idx,
+			)
+		}
+	}
+	return ret, nil
+}
+
+func structFieldForRestreamID(structType reflect.Type, fieldID byte) (reflect.StructField, bool) {
+	for idx := 0; idx < structType.NumField(); idx++ {
+		field := structType.Field(idx)
+		for _, option := range strings.Split(field.Tag.Get("restream"), ",") {
+			value, found := strings.CutPrefix(option, "fID=")
+			if !found {
+				continue
+			}
+			parsed, err := strconv.ParseUint(value, 10, 8)
+			if err == nil && byte(parsed) == fieldID {
+				return field, true
+			}
+		}
+	}
+	return reflect.StructField{}, false
 }
 
 // SplitSubscriptionKey splits a client ReSub compound key into its parts.

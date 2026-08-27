@@ -90,6 +90,10 @@ type subscriptionKeySnapshotStoreData interface {
 	GetPartialSnapshotForSubscriptionKey(key string) (Serializable, bool, error)
 }
 
+type subscriptionKeyNormalizer interface {
+	NormalizeSubscriptionKey(key string) (string, error)
+}
+
 // NewStoreRegistry brings up a StoreRegistry, holding an explicit list of Stores/StoreDatas (this list may not grow
 // over time -- has to be initted up front).
 func NewStoreRegistry(storeList []Store) (*StoreRegistry, error) {
@@ -196,6 +200,19 @@ func (s *StoreRegistry) IsStoreValid(storeName string) bool {
 	return has
 }
 
+// NormalizeSubscriptionKey converts a versioned field-ID subscription key to
+// the canonical key representation used by the registered store.
+func (s *StoreRegistry) NormalizeSubscriptionKey(storeName string, key string) (string, error) {
+	si, has := s.storeMap[storeName]
+	if !has {
+		return "", fmt.Errorf("no store found (%s) in NormalizeSubscriptionKey", storeName)
+	}
+	if normalizer, ok := si.StoreData.(subscriptionKeyNormalizer); ok {
+		return normalizer.NormalizeSubscriptionKey(key)
+	}
+	return key, nil
+}
+
 // GetFullStateSnapshot returns a serializable full-state snapshot for a store.
 func (s *StoreRegistry) GetFullStateSnapshot(storeName string, accessLevel AccessLevel) (Serializable, error) {
 	si, has := s.storeMap[storeName]
@@ -255,6 +272,11 @@ func (s *StoreRegistry) GetPartialSnapshotForSubscriptionKey(storeName string, k
 	if err := requireStoreAccess(si, accessLevel); err != nil {
 		return nil, false, err
 	}
+	var err error
+	key, err = s.NormalizeSubscriptionKey(storeName, key)
+	if err != nil {
+		return nil, false, err
+	}
 	if provider, ok := si.StoreData.(subscriptionKeySnapshotStoreData); ok {
 		return provider.GetPartialSnapshotForSubscriptionKey(key)
 	}
@@ -295,6 +317,14 @@ func (s *StoreRegistry) ListeningToStoreKey(storeName string, key string, access
 	if err := requireStoreAccess(si, accessLevel); err != nil {
 		s.subscriptionMutex.Unlock()
 		return err
+	}
+	if normalizer, ok := si.StoreData.(subscriptionKeyNormalizer); ok {
+		var err error
+		key, err = normalizer.NormalizeSubscriptionKey(key)
+		if err != nil {
+			s.subscriptionMutex.Unlock()
+			return err
+		}
 	}
 
 	var keySubCallbacks KeySubscriptionAwareStore
@@ -352,6 +382,14 @@ func (s *StoreRegistry) StopListeningToStoreKey(storeName string, key string) er
 	if !has {
 		s.subscriptionMutex.Unlock()
 		return fmt.Errorf("no store found (%s) in StopListeningToStoreKey", storeName)
+	}
+	if normalizer, ok := si.StoreData.(subscriptionKeyNormalizer); ok {
+		var err error
+		key, err = normalizer.NormalizeSubscriptionKey(key)
+		if err != nil {
+			s.subscriptionMutex.Unlock()
+			return err
+		}
 	}
 
 	if si.ActiveSubCount == 0 {
@@ -433,6 +471,13 @@ func (s *StoreRegistry) GetStoreSubscriptionActivity(
 	if !has {
 		return StoreSubscriptionActivity{}, false,
 			fmt.Errorf("no store found (%s) in GetStoreSubscriptionActivity", storeName)
+	}
+	if normalizer, ok := si.StoreData.(subscriptionKeyNormalizer); ok {
+		var err error
+		key, err = normalizer.NormalizeSubscriptionKey(key)
+		if err != nil {
+			return StoreSubscriptionActivity{}, false, err
+		}
 	}
 	activity, active := si.keyActivity[key]
 	if !active || activity.ReferenceCount <= 0 {
