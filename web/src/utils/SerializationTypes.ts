@@ -63,7 +63,6 @@ export class VarInfoDynamic implements VarInfo {
 export class VarInfoPrimitive implements VarInfo {
     constructor(
         public readonly dataType: SerializationType,
-        public readonly mappedType?: string,
     ) { }
 
     getSerializationData(): Uint8Array {
@@ -138,10 +137,7 @@ export class VarInfoMap implements VarInfo {
 
 export class VarInfoStruct implements VarInfo {
     constructor(
-        public readonly name: string,
-        public readonly packageName: string,
         public readonly deserializer?: Deserializable,
-        public readonly fieldList?: readonly FieldInfo[],
         public readonly genericTypes?: readonly VarInfo[],
     ) { }
 
@@ -294,15 +290,13 @@ export function varInfoFromObj(obj: unknown): VarInfo {
             }
             // TODO: not sure if this works at all
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            return new VarInfoStruct(obj.constructor.name, "", ((obj as any).prototype as Deserializable));
+            return new VarInfoStruct(((obj as any).prototype as Deserializable));
         default:
             throw new Error("can't create varinfo for unknown type: " + typeof obj);
     }
 }
 
 export interface FieldInfo {
-    readonly name: string;
-    readonly fieldIdx: number;
     readonly fieldID?: number;
     readonly varInfo: VarInfo;
 }

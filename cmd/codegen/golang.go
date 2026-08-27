@@ -126,7 +126,7 @@ func (ft *FileTracking) createGoStructSerializers(si StructInfo, fields []*restr
 				outPartial += fmt.Sprintf("        fs := s.%s.ApplyTo(&po.%s)\n", fn, fn)
 				outPartial += fmt.Sprintf("        if len(fs) == 0 { s.%s = nil }\n", fn)
 				outPartial += "        for _, f := range fs {\n"
-				outPartial += fmt.Sprintf("            ret = append(ret, append(append([]any{}, \"%s\"), f...))\n", fn)
+				outPartial += fmt.Sprintf("            ret = append(ret, append(append([]any{}, %sFieldID%s), f...))\n", si.Name, fn)
 				outPartial += "        }\n"
 				outPartial += "    }\n"
 				continue
@@ -140,7 +140,7 @@ func (ft *FileTracking) createGoStructSerializers(si StructInfo, fields []*restr
 			}
 			outPartial += fmt.Sprintf("    if s.%s != nil {\n", fn)
 			outPartial += fmt.Sprintf("        po.%s = %s\n", fn, nextValue)
-			outPartial += fmt.Sprintf("        ret = append(ret, []any{\"%s\"})\n", fn)
+			outPartial += fmt.Sprintf("        ret = append(ret, []any{%sFieldID%s})\n", si.Name, fn)
 			outPartial += "    }\n"
 		}
 		outPartial += "    return ret\n"
@@ -157,7 +157,7 @@ func (ft *FileTracking) createGoStructSerializers(si StructInfo, fields []*restr
 		for _, pfi := range partialFields {
 			fn := pfi.Name
 			outPartial += fmt.Sprintf("    if s.%s != nil {\n", fn)
-			outPartial += fmt.Sprintf("        childFields := restream.ChildFieldsForField(fields, \"%s\")\n", fn)
+			outPartial += fmt.Sprintf("        childFields := restream.ChildFieldsForFieldID(fields, %sFieldID%s)\n", si.Name, fn)
 			outPartial += "        if len(childFields) > 0 {\n"
 			if ft.supportsPartials(pfi.VarInfo) {
 				outPartial += fmt.Sprintf("            filtered, ok := restream.FilterPartialToFields(s.%s, childFields)\n", fn)
@@ -224,7 +224,7 @@ func (ft *FileTracking) createGolangPartialForFields(
 	out += fmt.Sprintf("    ret := &%sPartial{}\n", si.Name)
 	out += "    included := false\n"
 	for _, pfi := range partialFields {
-		out += fmt.Sprintf("    if partial, ok := s.partialForFields%s(restream.ChildFieldsForField(fields, %q)); ok {\n", pfi.Name, pfi.Name)
+		out += fmt.Sprintf("    if partial, ok := s.partialForFields%s(restream.ChildFieldsForFieldID(fields, %sFieldID%s)); ok {\n", pfi.Name, si.Name, pfi.Name)
 		out += fmt.Sprintf("        ret.%s = partial\n", pfi.Name)
 		out += "        included = true\n"
 		out += "    }\n"
@@ -815,7 +815,15 @@ func createGolangStructNonFieldedSerializers(si StructInfo, fields []*restream.F
 
 // genGolangFieldInfo is a reusable helper to build the static fieldinfo struct for a given set of fields/a struct
 func genGolangFieldInfo(structName string, fields []*restream.FieldInfo) string {
-	out := fmt.Sprintf("// %sFieldInfo is the static field info for the %s struct\n", structName, structName)
+	out := ""
+	if lo.SomeBy(fields, func(fi *restream.FieldInfo) bool { return fi.FieldID != 0 }) {
+		out += "const (\n"
+		for _, fi := range fields {
+			out += fmt.Sprintf("    %sFieldID%s byte = %d\n", structName, fi.Name, fi.FieldID)
+		}
+		out += ")\n\n"
+	}
+	out += fmt.Sprintf("// %sFieldInfo is the static field info for the %s struct\n", structName, structName)
 	out += fmt.Sprintf("var %sFieldInfo = []restream.FieldInfo{\n", structName)
 	for _, fi := range fields {
 		out += "    " + fi.ToGolangString()

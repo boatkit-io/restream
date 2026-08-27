@@ -264,11 +264,7 @@ func (v *VarInfoPrimitive) ToGolangString() string {
 
 // ToTSString implements VarInfo.
 func (v *VarInfoPrimitive) ToTSString() string {
-	mt := ""
-	if v.MappedType != nil {
-		mt = fmt.Sprintf(", %q", *v.MappedType)
-	}
-	return fmt.Sprintf("new VarInfoPrimitive(SerializationType.%s%s)", v.DataType, mt)
+	return fmt.Sprintf("new VarInfoPrimitive(SerializationType.%s)", v.DataType)
 }
 
 // GetSerializationData implements VarInfo.
@@ -598,22 +594,13 @@ func (v *VarInfoStruct) ToGolangString() string {
 // ToTSString implements VarInfo.
 func (v *VarInfoStruct) ToTSString() string {
 	gt := ""
-	if v.FieldList != nil {
-		fields := strings.Join(lo.Map(v.FieldList, func(fi FieldInfo, _ int) string {
-			return fi.ToTSString()
-		}), ", ")
-		gt += ", [" + fields + "]"
-	}
 	if v.GenericTypes != nil {
-		if v.FieldList == nil {
-			gt += ", undefined"
-		}
 		gts := strings.Join(lo.Map(v.GenericTypes, func(gti VarInfo, _ int) string {
 			return gti.ToTSString()
 		}), ", ")
 		gt += ", [" + gts + "]"
 	}
-	return fmt.Sprintf("new VarInfoStruct(%q, %q, %s%s)", v.Name, v.Package, v.Name, gt)
+	return fmt.Sprintf("new VarInfoStruct(%s%s)", v.Name, gt)
 }
 
 // GetSerializationData implements VarInfo.

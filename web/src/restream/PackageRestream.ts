@@ -100,8 +100,8 @@ export class PartialArray<V> {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "dataSets", fieldIdx: 0, varInfo: new VarInfoMap(true, new VarInfoPrimitive(SerializationType.Int64, "int"), new VarInfoGenericParam("V"))},
-        {name: "whole", fieldIdx: 1, varInfo: new VarInfoArray(false, new VarInfoGenericParam("V"))},
+        {varInfo: new VarInfoMap(true, new VarInfoPrimitive(SerializationType.Int64), new VarInfoGenericParam("V"))},
+        {varInfo: new VarInfoArray(false, new VarInfoGenericParam("V"))},
     ];
 
     applyTo(por: V[]): (string | number)[][] {
@@ -162,9 +162,9 @@ export class PartialMap<K extends string|number, V> {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "dataSets", fieldIdx: 0, varInfo: new VarInfoMap(true, new VarInfoGenericParam("K"), new VarInfoGenericParam("V"))},
-        {name: "dataDeletes", fieldIdx: 1, varInfo: new VarInfoMap(true, new VarInfoGenericParam("K"), undefined)},
-        {name: "whole", fieldIdx: 2, varInfo: new VarInfoMap(false, new VarInfoGenericParam("K"), new VarInfoGenericParam("V"))},
+        {varInfo: new VarInfoMap(true, new VarInfoGenericParam("K"), new VarInfoGenericParam("V"))},
+        {varInfo: new VarInfoMap(true, new VarInfoGenericParam("K"), undefined)},
+        {varInfo: new VarInfoMap(false, new VarInfoGenericParam("K"), new VarInfoGenericParam("V"))},
     ];
 
 	applyTo(por: Map<K, V>): (string | number)[][] {
@@ -235,9 +235,9 @@ export class PartialModArray<V, P extends AppliablePartial<V>|AppliableOnTopPart
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "dataSets", fieldIdx: 0, varInfo: new VarInfoMap(true, new VarInfoPrimitive(SerializationType.Int64, "int"), new VarInfoGenericParam("V"))},
-        {name: "dataMods", fieldIdx: 1, varInfo: new VarInfoMap(true, new VarInfoPrimitive(SerializationType.Int64, "int"), new VarInfoGenericParam("P"))},
-        {name: "whole", fieldIdx: 2, varInfo: new VarInfoArray(false, new VarInfoGenericParam("V"))},
+        {varInfo: new VarInfoMap(true, new VarInfoPrimitive(SerializationType.Int64), new VarInfoGenericParam("V"))},
+        {varInfo: new VarInfoMap(true, new VarInfoPrimitive(SerializationType.Int64), new VarInfoGenericParam("P"))},
+        {varInfo: new VarInfoArray(false, new VarInfoGenericParam("V"))},
     ];
 
     applyTo(por: V[]): (string | number)[][] {
@@ -321,10 +321,10 @@ export class PartialModMap<K extends string|number, V, P extends AppliablePartia
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "dataSets", fieldIdx: 0, varInfo: new VarInfoMap(true, new VarInfoGenericParam("K"), new VarInfoGenericParam("V"))},
-        {name: "dataDeletes", fieldIdx: 1, varInfo: new VarInfoMap(true, new VarInfoGenericParam("K"), undefined)},
-        {name: "dataMods", fieldIdx: 2, varInfo: new VarInfoMap(true, new VarInfoGenericParam("K"), new VarInfoGenericParam("P"))},
-        {name: "whole", fieldIdx: 3, varInfo: new VarInfoMap(false, new VarInfoGenericParam("K"), new VarInfoGenericParam("V"))},
+        {varInfo: new VarInfoMap(true, new VarInfoGenericParam("K"), new VarInfoGenericParam("V"))},
+        {varInfo: new VarInfoMap(true, new VarInfoGenericParam("K"), undefined)},
+        {varInfo: new VarInfoMap(true, new VarInfoGenericParam("K"), new VarInfoGenericParam("P"))},
+        {varInfo: new VarInfoMap(false, new VarInfoGenericParam("K"), new VarInfoGenericParam("V"))},
     ];
 
 	applyTo(por: Map<K, V>): (string | number)[][] {
@@ -405,8 +405,8 @@ export class PartialValue<V, P extends AppliablePartial<V>|AppliableOnTopPartial
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "whole", fieldIdx: 0, varInfo: new VarInfoPointer(false, new VarInfoGenericParam("V"))},
-        {name: "partial", fieldIdx: 1, varInfo: new VarInfoPointer(false, new VarInfoGenericParam("P"))},
+        {varInfo: new VarInfoPointer(false, new VarInfoGenericParam("V"))},
+        {varInfo: new VarInfoPointer(false, new VarInfoGenericParam("P"))},
     ];
 
     applyOnTop(por: V): [V, (string | number)[][]] {

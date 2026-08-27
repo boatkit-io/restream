@@ -44,8 +44,8 @@ export class LatLong {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "Lat", fieldIdx: 0, varInfo: new VarInfoPrimitive(SerializationType.Float64)},
-        {name: "Long", fieldIdx: 1, varInfo: new VarInfoPrimitive(SerializationType.Float64)},
+        {varInfo: new VarInfoPrimitive(SerializationType.Float64)},
+        {varInfo: new VarInfoPrimitive(SerializationType.Float64)},
     ];
 }
 
@@ -64,7 +64,7 @@ export class call2Event extends EventStruct {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "Test", fieldIdx: 0, varInfo: new VarInfoPrimitive(SerializationType.Int64, "int")},
+        {varInfo: new VarInfoPrimitive(SerializationType.Int64)},
     ];
     public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
         const o = new call2Event();
@@ -90,7 +90,7 @@ export class call2Request extends RPCStruct<call2Response,number|undefined> {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "Test", fieldIdx: 0, varInfo: new VarInfoStruct("LatLong", "restream", LatLong)},
+        {varInfo: new VarInfoStruct(LatLong)},
     ];
     public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
         const o = new call2Request();
@@ -132,8 +132,8 @@ export class call2Response {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "Result", fieldIdx: 0, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Int64, "int"))},
-        {name: "Error", fieldIdx: 1, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.String))},
+        {varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Int64))},
+        {varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.String))},
     ];
 }
 
@@ -150,7 +150,7 @@ export class call3Request extends RPCStruct<call3Response,number|undefined> {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "Test", fieldIdx: 0, varInfo: new VarInfoArray(false, new VarInfoPrimitive(SerializationType.Int64, "int"))},
+        {varInfo: new VarInfoArray(false, new VarInfoPrimitive(SerializationType.Int64))},
     ];
     public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
         const o = new call3Request();
@@ -192,8 +192,8 @@ export class call3Response {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "Result", fieldIdx: 0, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Int64, "int"))},
-        {name: "Error", fieldIdx: 1, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.String))},
+        {varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Int64))},
+        {varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.String))},
     ];
 }
 
@@ -210,7 +210,7 @@ export class call5Request extends RPCStruct<call5Response,number> {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "Test", fieldIdx: 0, varInfo: new VarInfoPrimitive(SerializationType.Int64, "int")},
+        {varInfo: new VarInfoPrimitive(SerializationType.Int64)},
     ];
     public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
         const o = new call5Request();
@@ -252,8 +252,8 @@ export class call5Response {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "Result", fieldIdx: 0, varInfo: new VarInfoPrimitive(SerializationType.Int64, "int")},
-        {name: "Error", fieldIdx: 1, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.String))},
+        {varInfo: new VarInfoPrimitive(SerializationType.Int64)},
+        {varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.String))},
     ];
 }
 
@@ -272,7 +272,7 @@ export class callEvent extends EventStruct {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "Test", fieldIdx: 0, varInfo: new VarInfoPrimitive(SerializationType.Int64, "int")},
+        {varInfo: new VarInfoPrimitive(SerializationType.Int64)},
     ];
     public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
         const o = new callEvent();
@@ -298,7 +298,7 @@ export class callRequest extends RPCStruct<callResponse,number> {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "Test", fieldIdx: 0, varInfo: new VarInfoPrimitive(SerializationType.Int64, "int")},
+        {varInfo: new VarInfoPrimitive(SerializationType.Int64)},
     ];
     public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
         const o = new callRequest();
@@ -340,8 +340,8 @@ export class callResponse {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "Result", fieldIdx: 0, varInfo: new VarInfoPrimitive(SerializationType.Int64, "int")},
-        {name: "Error", fieldIdx: 1, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.String))},
+        {varInfo: new VarInfoPrimitive(SerializationType.Int64)},
+        {varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.String))},
     ];
 }
 
@@ -360,7 +360,7 @@ export class keyedcallEvent extends EventStruct {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "Test", fieldIdx: 0, varInfo: new VarInfoPrimitive(SerializationType.Int64, "int")},
+        {varInfo: new VarInfoPrimitive(SerializationType.Int64)},
     ];
     public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
         const o = new keyedcallEvent();
@@ -386,7 +386,7 @@ export class notifyContextRequest extends FFRPCStruct {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "SomeBytes", fieldIdx: 0, varInfo: new VarInfoArray(false, new VarInfoPrimitive(SerializationType.Uint8, "byte"))},
+        {varInfo: new VarInfoArray(false, new VarInfoPrimitive(SerializationType.Uint8))},
     ];
     public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
         const o = new notifyContextRequest();
@@ -412,7 +412,7 @@ export class notifyErrorRequest extends FFRPCStruct {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "Trigger", fieldIdx: 0, varInfo: new VarInfoPrimitive(SerializationType.Bool)},
+        {varInfo: new VarInfoPrimitive(SerializationType.Bool)},
     ];
     public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
         const o = new notifyErrorRequest();
@@ -438,7 +438,7 @@ export class notifyRequest extends FFRPCStruct {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "Payload", fieldIdx: 0, varInfo: new VarInfoArray(false, new VarInfoPrimitive(SerializationType.Uint8, "byte"))},
+        {varInfo: new VarInfoArray(false, new VarInfoPrimitive(SerializationType.Uint8))},
     ];
     public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
         const o = new notifyRequest();
@@ -464,7 +464,7 @@ export class notifyVoidRequest extends FFRPCStruct {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "Value", fieldIdx: 0, varInfo: new VarInfoPrimitive(SerializationType.Int64, "int")},
+        {varInfo: new VarInfoPrimitive(SerializationType.Int64)},
     ];
     public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
         const o = new notifyVoidRequest();

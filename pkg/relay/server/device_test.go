@@ -277,7 +277,7 @@ func (s *serverTypedRelayStore) GetStoreType() restream.StoreType {
 }
 
 type testState struct {
-	Value string
+	Value string `restream:",fID=1"`
 }
 
 func (s *testState) RestreamClone() *testState {
@@ -297,7 +297,7 @@ func (s *testState) Deserialize(r *binarystreams.Reader, _ *restream.VarInfoStru
 }
 
 type testPartial struct {
-	Value *string
+	Value *string `restream:",fID=1"`
 }
 
 func (p *testPartial) Serialize(w *binarystreams.Writer, _ *restream.VarInfoStruct) error {
@@ -327,5 +327,5 @@ func (p *testPartial) ApplyTo(state any) [][]any {
 		return nil
 	}
 	st.Value = *p.Value
-	return [][]any{{"Value"}}
+	return [][]any{{byte(1)}}
 }

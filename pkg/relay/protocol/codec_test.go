@@ -189,7 +189,7 @@ func TestPacketRoundTrips(t *testing.T) {
 			name: "store subscription",
 			in: &StoreSubscriptionPacket{
 				StoreName: "TimeSeriesHistory",
-				Key:       "samples%&Water_Depth_Auto",
+				Key:       "~1%&1%&Water_Depth_Auto",
 				Action:    StoreSubscribe,
 			},
 			kind: KindStoreSubscription,
@@ -388,7 +388,7 @@ func TestCustomPacketRequiresName(t *testing.T) {
 func TestStoreSubscriptionRejectsInvalidAction(t *testing.T) {
 	if _, err := EncodePacket(&StoreSubscriptionPacket{
 		StoreName: "TestStore",
-		Key:       "values%&a",
+		Key:       "~1%&1%&a",
 		Action:    StoreSubscriptionAction(99),
 	}); err == nil {
 		t.Fatal("EncodePacket accepted an invalid store subscription action")
@@ -396,7 +396,7 @@ func TestStoreSubscriptionRejectsInvalidAction(t *testing.T) {
 
 	encoded, err := EncodePacket(&StoreSubscriptionPacket{
 		StoreName: "TestStore",
-		Key:       "values%&a",
+		Key:       "~1%&1%&a",
 		Action:    StoreSubscribe,
 	})
 	if err != nil {

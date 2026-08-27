@@ -216,8 +216,6 @@ export interface ViewerSessionCloseMessage {
 
 export interface ReStreamSocketOptions {
     viewerSessions?: boolean;
-    /** Uses stable generated field IDs for store subscription paths when the server advertises support. */
-    fieldIDSubscriptionKeys?: boolean;
     sessionAttachTimeoutMs?: number;
     /** Restricts this socket to an explicit subset of globally registered TriggerStores. */
     storeNames?: readonly string[];
@@ -260,7 +258,6 @@ export class ReStreamSocket {
     private _timestampOffset = 0;
     private _authenticated = false;
     private _viewerSessions: boolean;
-    private _fieldIDSubscriptionKeys: boolean;
     private readonly _sessionAttachTimeoutMs: number;
     private readonly _storeNames: ReadonlySet<string> | undefined;
     private readonly _excludedStoreNames: ReadonlySet<string>;
@@ -282,7 +279,6 @@ export class ReStreamSocket {
     constructor(socket: Socket, options: ReStreamSocketOptions = {}) {
         this._socket = socket;
         this._viewerSessions = options.viewerSessions ?? false;
-        this._fieldIDSubscriptionKeys = options.fieldIDSubscriptionKeys ?? false;
         this._sessionAttachTimeoutMs = options.sessionAttachTimeoutMs ?? 10_000;
         this._storeNames = options.storeNames
             ? new Set(options.storeNames.map(name => name.trim()).filter(Boolean))
@@ -522,7 +518,7 @@ export class ReStreamSocket {
     }
 
     private _storeSubscriptions(): { storeName: string; key: string | undefined }[] {
-        return TriggerStore.getStoreSubs(this._fieldIDSubscriptionKeys)
+        return TriggerStore.getStoreSubs()
             .filter(subscription => this._usesStore(subscription.storeName));
     }
 
@@ -530,24 +526,12 @@ export class ReStreamSocket {
         if (key === undefined) {
             return undefined;
         }
-        return TriggerStore.subscriptionKeyForTransport(
-            storeName,
-            key,
-            this._fieldIDSubscriptionKeys,
-        );
+        return TriggerStore.subscriptionKeyForTransport(storeName, key);
     }
 
     /** Enables the optional session handshake before the first authentication. */
     enableViewerSessions(): void {
         this.setViewerSessionsEnabled(true);
-    }
-
-    /** Enables stable field-ID store subscription keys after application-level capability negotiation. */
-    setFieldIDSubscriptionKeysEnabled(enabled: boolean): void {
-        if (this._authenticated || this._sessionAttach) {
-            throw new Error("Store subscription key capability must be set before authentication");
-        }
-        this._fieldIDSubscriptionKeys = enabled;
     }
 
     /** Applies the capability negotiated for the next authenticated transport. */

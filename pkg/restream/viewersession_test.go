@@ -100,7 +100,7 @@ func TestViewerSessionFullStoreModeManifestBuffersCompleteBaseline(t *testing.T)
 	if _, err := tracker.reconcileSessionManifest(ViewerSessionAttachRequest{
 		StoreSubscriptions: []ViewerSessionStoreSubscription{{
 			StoreName: viewerSocketTestStoreName,
-			Key:       "values%&a",
+			Key:       "~1%&1%&a",
 		}},
 	}, AccessLevelPublic); err != nil {
 		t.Fatalf("manifest failed: %v", err)
@@ -153,7 +153,7 @@ func TestViewerSessionManifestRejectsOnlyUnauthorizedStores(t *testing.T) {
 	rejections, err := tracker.reconcileSessionManifest(ViewerSessionAttachRequest{
 		StoreSubscriptions: []ViewerSessionStoreSubscription{
 			{StoreName: viewerSocketTestStoreName},
-			{StoreName: adminStoreName, Key: "values%&private"},
+			{StoreName: adminStoreName, Key: "~1%&1%&private"},
 		},
 	}, AccessLevel(1))
 	if err != nil {
@@ -328,8 +328,8 @@ func TestViewerSessionManifestChangeRebuildsRetainedKeyBaseline(t *testing.T) {
 	}
 	initial := ViewerSessionAttachRequest{
 		StoreSubscriptions: []ViewerSessionStoreSubscription{
-			{StoreName: viewerSocketTestStoreName, Key: "values%&a"},
-			{StoreName: viewerSocketTestStoreName, Key: "values%&b"},
+			{StoreName: viewerSocketTestStoreName, Key: "~1%&1%&a"},
+			{StoreName: viewerSocketTestStoreName, Key: "~1%&1%&b"},
 		},
 	}
 	if _, err := tracker.reconcileSessionManifest(initial, AccessLevelPublic); err != nil {
@@ -351,7 +351,7 @@ func TestViewerSessionManifestChangeRebuildsRetainedKeyBaseline(t *testing.T) {
 	if _, err := tracker.reconcileSessionManifest(ViewerSessionAttachRequest{
 		StoreSubscriptions: []ViewerSessionStoreSubscription{{
 			StoreName: viewerSocketTestStoreName,
-			Key:       "values%&b",
+			Key:       "~1%&1%&b",
 		}},
 	}, AccessLevelPublic); err != nil {
 		t.Fatalf("resumed manifest failed: %v", err)

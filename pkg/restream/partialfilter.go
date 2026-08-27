@@ -38,16 +38,16 @@ func FilterPartialToFields[P Partial](partial P, fields [][]any) (P, bool) {
 	return partial, true
 }
 
-// ChildFieldsForField filters full field paths down to the children under a named top-level field.
-func ChildFieldsForField(fields [][]any, fieldName string) [][]any {
+// ChildFieldsForFieldID filters full field paths down to the children under a
+// stable top-level Restream field ID.
+func ChildFieldsForFieldID(fields [][]any, fieldID byte) [][]any {
 	ret := [][]any{}
 	for _, field := range fields {
 		if len(field) == 0 {
 			ret = append(ret, []any{})
 			continue
 		}
-		fieldNamePart, ok := field[0].(string)
-		if !ok || subscriptionKeyPart(fieldNamePart) != subscriptionKeyPart(fieldName) {
+		if subscriptionKeyPart(field[0]) != subscriptionKeyPart(fieldID) {
 			continue
 		}
 		ret = append(ret, append([]any{}, field[1:]...))
@@ -174,21 +174,24 @@ func SubscriptionKeyFromFieldIDPath(field []any) string {
 
 func normalizeFieldIDSubscriptionKey(key string, stateType reflect.Type) (string, error) {
 	parts := SplitSubscriptionKey(key)
-	if len(parts) == 0 || parts[0] != fieldIDSubscriptionKeyPrefix {
-		return key, nil
+	if len(parts) == 0 {
+		return "", nil
+	}
+	if parts[0] != fieldIDSubscriptionKeyPrefix {
+		return "", fmt.Errorf("subscription key must use the %s field-ID format", fieldIDSubscriptionKeyPrefix)
 	}
 	if len(parts) == 1 {
 		return "", fmt.Errorf("field-ID subscription key has no field path")
 	}
 
-	keyParts, err := namedSubscriptionKeyPartsForFieldIDs(stateType, parts[1:])
+	keyParts, err := validateFieldIDSubscriptionKeyParts(stateType, parts[1:])
 	if err != nil {
 		return "", err
 	}
-	return strings.Join(keyParts, compoundKeyJoinerString), nil
+	return strings.Join(append([]string{fieldIDSubscriptionKeyPrefix}, keyParts...), compoundKeyJoinerString), nil
 }
 
-func namedSubscriptionKeyPartsForFieldIDs(stateType reflect.Type, parts []string) ([]string, error) {
+func validateFieldIDSubscriptionKeyParts(stateType reflect.Type, parts []string) ([]string, error) {
 	ret := make([]string, 0, len(parts))
 	currentType := stateType
 	for idx, part := range parts {
@@ -214,9 +217,16 @@ func namedSubscriptionKeyPartsForFieldIDs(stateType reflect.Type, parts []string
 					currentType,
 				)
 			}
-			ret = append(ret, clientFieldName(field.Name))
+			ret = append(ret, strconv.FormatUint(fieldID, 10))
 			currentType = field.Type
 		case reflect.Map:
+			if _, ok := fieldPathPartToReflectValue(part, currentType.Key()); !ok {
+				return nil, fmt.Errorf(
+					"subscription map path segment %q is not a valid key for %s",
+					part,
+					currentType,
+				)
+			}
 			ret = append(ret, part)
 			currentType = currentType.Elem()
 		case reflect.Array, reflect.Slice:
@@ -257,6 +267,14 @@ func structFieldForRestreamID(structType reflect.Type, fieldID byte) (reflect.St
 	return reflect.StructField{}, false
 }
 
+func restreamFieldIDFromPathPart(part any) (byte, bool) {
+	value, err := strconv.ParseUint(fmt.Sprint(part), 10, 8)
+	if err != nil || value == 0 {
+		return 0, false
+	}
+	return byte(value), true
+}
+
 // SplitSubscriptionKey splits a client ReSub compound key into its parts.
 func SplitSubscriptionKey(key string) []string {
 	if key == "" {
@@ -268,12 +286,11 @@ func SplitSubscriptionKey(key string) []string {
 // FieldPathFromSubscriptionKey converts a client ReSub subscription key into a server-side field path.
 func FieldPathFromSubscriptionKey(key string) []any {
 	parts := SplitSubscriptionKey(key)
-	if len(parts) == 0 {
+	if len(parts) < 2 || parts[0] != fieldIDSubscriptionKeyPrefix {
 		return nil
 	}
 
-	ret := make([]any, 0, len(parts))
-	ret = append(ret, serverFieldName(parts[0]))
+	ret := make([]any, 0, len(parts)-1)
 	for _, part := range parts[1:] {
 		ret = append(ret, part)
 	}
@@ -295,26 +312,7 @@ func FieldPathAffectsSubscription(changedField []any, subscribedField []any) boo
 }
 
 func subscriptionKeyPart(part any) string {
-	switch v := part.(type) {
-	case string:
-		return clientFieldName(v)
-	default:
-		return fmt.Sprint(v)
-	}
-}
-
-func clientFieldName(name string) string {
-	if name == "" || strings.Contains(name, "_") {
-		return name
-	}
-	return strings.ToLower(name[:1]) + name[1:]
-}
-
-func serverFieldName(name string) string {
-	if name == "" || strings.Contains(name, "_") {
-		return name
-	}
-	return strings.ToUpper(name[:1]) + name[1:]
+	return fmt.Sprint(part)
 }
 
 func partialFieldKey[K comparable](raw any) (K, bool) {

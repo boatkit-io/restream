@@ -8,6 +8,11 @@ import (
 	"github.com/boatkit-io/restream/pkg/restream"
 )
 
+const (
+	TestAFieldIDA byte = 1
+	TestAFieldIDB byte = 2
+)
+
 // TestAFieldInfo is the static field info for the TestA struct
 var TestAFieldInfo = []restream.FieldInfo{
 	{Name: "A", FieldIdx: 0, FieldID: 1, VarInfo: &restream.VarInfoStruct{Name: "TestB", Package: "storetest"}},
@@ -160,7 +165,7 @@ func (s *TestAPartial) ApplyTo(por any) [][]any {
 			s.A = nil
 		}
 		for _, f := range fs {
-			ret = append(ret, append(append([]any{}, "A"), f...))
+			ret = append(ret, append(append([]any{}, TestAFieldIDA), f...))
 		}
 	}
 	if s.B != nil {
@@ -169,7 +174,7 @@ func (s *TestAPartial) ApplyTo(por any) [][]any {
 			s.B = nil
 		}
 		for _, f := range fs {
-			ret = append(ret, append(append([]any{}, "B"), f...))
+			ret = append(ret, append(append([]any{}, TestAFieldIDB), f...))
 		}
 	}
 	return ret
@@ -185,7 +190,7 @@ func (s *TestAPartial) FilterToFields(fields [][]any) (restream.Partial, bool) {
 		}
 	}
 	if s.A != nil {
-		childFields := restream.ChildFieldsForField(fields, "A")
+		childFields := restream.ChildFieldsForFieldID(fields, TestAFieldIDA)
 		if len(childFields) > 0 {
 			filtered, ok := restream.FilterPartialToFields(s.A, childFields)
 			if ok {
@@ -195,7 +200,7 @@ func (s *TestAPartial) FilterToFields(fields [][]any) (restream.Partial, bool) {
 		}
 	}
 	if s.B != nil {
-		childFields := restream.ChildFieldsForField(fields, "B")
+		childFields := restream.ChildFieldsForFieldID(fields, TestAFieldIDB)
 		if len(childFields) > 0 {
 			filtered, ok := restream.FilterPartialToFields(s.B, childFields)
 			if ok {
@@ -211,11 +216,11 @@ func (s *TestAPartial) FilterToFields(fields [][]any) (restream.Partial, bool) {
 func (s *TestA) PartialForFields(fields [][]any) (restream.Partial, bool) {
 	ret := &TestAPartial{}
 	included := false
-	if partial, ok := s.partialForFieldsA(restream.ChildFieldsForField(fields, "A")); ok {
+	if partial, ok := s.partialForFieldsA(restream.ChildFieldsForFieldID(fields, TestAFieldIDA)); ok {
 		ret.A = partial
 		included = true
 	}
-	if partial, ok := s.partialForFieldsB(restream.ChildFieldsForField(fields, "B")); ok {
+	if partial, ok := s.partialForFieldsB(restream.ChildFieldsForFieldID(fields, TestAFieldIDB)); ok {
 		ret.B = partial
 		included = true
 	}
@@ -280,6 +285,11 @@ func (s *TestA) partialForFieldsB(fields [][]any) (*restream.PartialValue[TestB,
 	return ret, included
 }
 
+const (
+	TestAPartialFieldIDA byte = 1
+	TestAPartialFieldIDB byte = 2
+)
+
 // TestAPartialFieldInfo is the static field info for the TestAPartial struct
 var TestAPartialFieldInfo = []restream.FieldInfo{
 	{Name: "A", FieldIdx: 0, FieldID: 1, VarInfo: &restream.VarInfoPointer{NotNil: false, SubType: &restream.VarInfoStruct{Name: "PartialValue", Package: "restream", GenericTypes: []restream.VarInfo{&restream.VarInfoStruct{Name: "TestB", Package: "storetest"}, &restream.VarInfoPointer{NotNil: false, SubType: &restream.VarInfoStruct{Name: "TestBPartial", Package: "storetest"}}}}}},
@@ -327,6 +337,12 @@ func (s *TestAPartial) Deserialize(r *binarystreams.Reader, _ *restream.VarInfoS
 	}
 	return restream.DeserializeFielded(ri, TestAPartialFieldInfo, TestAPartialFieldMap, fieldPtrs)
 }
+
+const (
+	TestArrayStateFieldIDNumbers  byte = 1
+	TestArrayStateFieldIDItems    byte = 2
+	TestArrayStateFieldIDPtrItems byte = 3
+)
 
 // TestArrayStateFieldInfo is the static field info for the TestArrayState struct
 var TestArrayStateFieldInfo = []restream.FieldInfo{
@@ -523,7 +539,7 @@ func (s *TestArrayStatePartial) ApplyTo(por any) [][]any {
 			s.Numbers = nil
 		}
 		for _, f := range fs {
-			ret = append(ret, append(append([]any{}, "Numbers"), f...))
+			ret = append(ret, append(append([]any{}, TestArrayStateFieldIDNumbers), f...))
 		}
 	}
 	if s.Items != nil {
@@ -532,7 +548,7 @@ func (s *TestArrayStatePartial) ApplyTo(por any) [][]any {
 			s.Items = nil
 		}
 		for _, f := range fs {
-			ret = append(ret, append(append([]any{}, "Items"), f...))
+			ret = append(ret, append(append([]any{}, TestArrayStateFieldIDItems), f...))
 		}
 	}
 	if s.PtrItems != nil {
@@ -541,7 +557,7 @@ func (s *TestArrayStatePartial) ApplyTo(por any) [][]any {
 			s.PtrItems = nil
 		}
 		for _, f := range fs {
-			ret = append(ret, append(append([]any{}, "PtrItems"), f...))
+			ret = append(ret, append(append([]any{}, TestArrayStateFieldIDPtrItems), f...))
 		}
 	}
 	return ret
@@ -557,7 +573,7 @@ func (s *TestArrayStatePartial) FilterToFields(fields [][]any) (restream.Partial
 		}
 	}
 	if s.Numbers != nil {
-		childFields := restream.ChildFieldsForField(fields, "Numbers")
+		childFields := restream.ChildFieldsForFieldID(fields, TestArrayStateFieldIDNumbers)
 		if len(childFields) > 0 {
 			filtered, ok := restream.FilterPartialToFields(s.Numbers, childFields)
 			if ok {
@@ -567,7 +583,7 @@ func (s *TestArrayStatePartial) FilterToFields(fields [][]any) (restream.Partial
 		}
 	}
 	if s.Items != nil {
-		childFields := restream.ChildFieldsForField(fields, "Items")
+		childFields := restream.ChildFieldsForFieldID(fields, TestArrayStateFieldIDItems)
 		if len(childFields) > 0 {
 			filtered, ok := restream.FilterPartialToFields(s.Items, childFields)
 			if ok {
@@ -577,7 +593,7 @@ func (s *TestArrayStatePartial) FilterToFields(fields [][]any) (restream.Partial
 		}
 	}
 	if s.PtrItems != nil {
-		childFields := restream.ChildFieldsForField(fields, "PtrItems")
+		childFields := restream.ChildFieldsForFieldID(fields, TestArrayStateFieldIDPtrItems)
 		if len(childFields) > 0 {
 			filtered, ok := restream.FilterPartialToFields(s.PtrItems, childFields)
 			if ok {
@@ -593,15 +609,15 @@ func (s *TestArrayStatePartial) FilterToFields(fields [][]any) (restream.Partial
 func (s *TestArrayState) PartialForFields(fields [][]any) (restream.Partial, bool) {
 	ret := &TestArrayStatePartial{}
 	included := false
-	if partial, ok := s.partialForFieldsNumbers(restream.ChildFieldsForField(fields, "Numbers")); ok {
+	if partial, ok := s.partialForFieldsNumbers(restream.ChildFieldsForFieldID(fields, TestArrayStateFieldIDNumbers)); ok {
 		ret.Numbers = partial
 		included = true
 	}
-	if partial, ok := s.partialForFieldsItems(restream.ChildFieldsForField(fields, "Items")); ok {
+	if partial, ok := s.partialForFieldsItems(restream.ChildFieldsForFieldID(fields, TestArrayStateFieldIDItems)); ok {
 		ret.Items = partial
 		included = true
 	}
-	if partial, ok := s.partialForFieldsPtrItems(restream.ChildFieldsForField(fields, "PtrItems")); ok {
+	if partial, ok := s.partialForFieldsPtrItems(restream.ChildFieldsForFieldID(fields, TestArrayStateFieldIDPtrItems)); ok {
 		ret.PtrItems = partial
 		included = true
 	}
@@ -760,6 +776,12 @@ func (s *TestArrayState) partialForFieldsPtrItems(fields [][]any) (*restream.Par
 	return ret, included
 }
 
+const (
+	TestArrayStatePartialFieldIDNumbers  byte = 1
+	TestArrayStatePartialFieldIDItems    byte = 2
+	TestArrayStatePartialFieldIDPtrItems byte = 3
+)
+
 // TestArrayStatePartialFieldInfo is the static field info for the TestArrayStatePartial struct
 var TestArrayStatePartialFieldInfo = []restream.FieldInfo{
 	{Name: "Numbers", FieldIdx: 0, FieldID: 1, VarInfo: &restream.VarInfoPointer{NotNil: false, SubType: &restream.VarInfoStruct{Name: "PartialArray", Package: "restream", GenericTypes: []restream.VarInfo{&restream.VarInfoPrimitive{DataType: restream.SerializationTypeUint64, MappedType: restream.Ptr("uint")}}}}},
@@ -813,6 +835,11 @@ func (s *TestArrayStatePartial) Deserialize(r *binarystreams.Reader, _ *restream
 	}
 	return restream.DeserializeFielded(ri, TestArrayStatePartialFieldInfo, TestArrayStatePartialFieldMap, fieldPtrs)
 }
+
+const (
+	TestBFieldIDA byte = 1
+	TestBFieldIDB byte = 2
+)
 
 // TestBFieldInfo is the static field info for the TestB struct
 var TestBFieldInfo = []restream.FieldInfo{
@@ -966,7 +993,7 @@ func (s *TestBPartial) ApplyTo(por any) [][]any {
 			s.A = nil
 		}
 		for _, f := range fs {
-			ret = append(ret, append(append([]any{}, "A"), f...))
+			ret = append(ret, append(append([]any{}, TestBFieldIDA), f...))
 		}
 	}
 	if s.B != nil {
@@ -975,7 +1002,7 @@ func (s *TestBPartial) ApplyTo(por any) [][]any {
 			s.B = nil
 		}
 		for _, f := range fs {
-			ret = append(ret, append(append([]any{}, "B"), f...))
+			ret = append(ret, append(append([]any{}, TestBFieldIDB), f...))
 		}
 	}
 	return ret
@@ -991,7 +1018,7 @@ func (s *TestBPartial) FilterToFields(fields [][]any) (restream.Partial, bool) {
 		}
 	}
 	if s.A != nil {
-		childFields := restream.ChildFieldsForField(fields, "A")
+		childFields := restream.ChildFieldsForFieldID(fields, TestBFieldIDA)
 		if len(childFields) > 0 {
 			filtered, ok := restream.FilterPartialToFields(s.A, childFields)
 			if ok {
@@ -1001,7 +1028,7 @@ func (s *TestBPartial) FilterToFields(fields [][]any) (restream.Partial, bool) {
 		}
 	}
 	if s.B != nil {
-		childFields := restream.ChildFieldsForField(fields, "B")
+		childFields := restream.ChildFieldsForFieldID(fields, TestBFieldIDB)
 		if len(childFields) > 0 {
 			filtered, ok := restream.FilterPartialToFields(s.B, childFields)
 			if ok {
@@ -1017,11 +1044,11 @@ func (s *TestBPartial) FilterToFields(fields [][]any) (restream.Partial, bool) {
 func (s *TestB) PartialForFields(fields [][]any) (restream.Partial, bool) {
 	ret := &TestBPartial{}
 	included := false
-	if partial, ok := s.partialForFieldsA(restream.ChildFieldsForField(fields, "A")); ok {
+	if partial, ok := s.partialForFieldsA(restream.ChildFieldsForFieldID(fields, TestBFieldIDA)); ok {
 		ret.A = partial
 		included = true
 	}
-	if partial, ok := s.partialForFieldsB(restream.ChildFieldsForField(fields, "B")); ok {
+	if partial, ok := s.partialForFieldsB(restream.ChildFieldsForFieldID(fields, TestBFieldIDB)); ok {
 		ret.B = partial
 		included = true
 	}
@@ -1086,6 +1113,11 @@ func (s *TestB) partialForFieldsB(fields [][]any) (*restream.PartialValue[TestC,
 	return ret, included
 }
 
+const (
+	TestBPartialFieldIDA byte = 1
+	TestBPartialFieldIDB byte = 2
+)
+
 // TestBPartialFieldInfo is the static field info for the TestBPartial struct
 var TestBPartialFieldInfo = []restream.FieldInfo{
 	{Name: "A", FieldIdx: 0, FieldID: 1, VarInfo: &restream.VarInfoPointer{NotNil: false, SubType: &restream.VarInfoStruct{Name: "PartialValue", Package: "restream", GenericTypes: []restream.VarInfo{&restream.VarInfoStruct{Name: "TestC", Package: "storetest"}, &restream.VarInfoPointer{NotNil: false, SubType: &restream.VarInfoStruct{Name: "TestCPartial", Package: "storetest"}}}}}},
@@ -1133,6 +1165,11 @@ func (s *TestBPartial) Deserialize(r *binarystreams.Reader, _ *restream.VarInfoS
 	}
 	return restream.DeserializeFielded(ri, TestBPartialFieldInfo, TestBPartialFieldMap, fieldPtrs)
 }
+
+const (
+	TestCFieldIDA byte = 1
+	TestCFieldIDB byte = 2
+)
 
 // TestCFieldInfo is the static field info for the TestC struct
 var TestCFieldInfo = []restream.FieldInfo{
@@ -1258,11 +1295,11 @@ func (s *TestCPartial) ApplyTo(por any) [][]any {
 	ret := [][]any{}
 	if s.A != nil {
 		po.A = *s.A
-		ret = append(ret, []any{"A"})
+		ret = append(ret, []any{TestCFieldIDA})
 	}
 	if s.B != nil {
 		po.B = *s.B
-		ret = append(ret, []any{"B"})
+		ret = append(ret, []any{TestCFieldIDB})
 	}
 	return ret
 }
@@ -1277,14 +1314,14 @@ func (s *TestCPartial) FilterToFields(fields [][]any) (restream.Partial, bool) {
 		}
 	}
 	if s.A != nil {
-		childFields := restream.ChildFieldsForField(fields, "A")
+		childFields := restream.ChildFieldsForFieldID(fields, TestCFieldIDA)
 		if len(childFields) > 0 {
 			ret.A = s.A
 			included = true
 		}
 	}
 	if s.B != nil {
-		childFields := restream.ChildFieldsForField(fields, "B")
+		childFields := restream.ChildFieldsForFieldID(fields, TestCFieldIDB)
 		if len(childFields) > 0 {
 			ret.B = s.B
 			included = true
@@ -1297,11 +1334,11 @@ func (s *TestCPartial) FilterToFields(fields [][]any) (restream.Partial, bool) {
 func (s *TestC) PartialForFields(fields [][]any) (restream.Partial, bool) {
 	ret := &TestCPartial{}
 	included := false
-	if partial, ok := s.partialForFieldsA(restream.ChildFieldsForField(fields, "A")); ok {
+	if partial, ok := s.partialForFieldsA(restream.ChildFieldsForFieldID(fields, TestCFieldIDA)); ok {
 		ret.A = partial
 		included = true
 	}
-	if partial, ok := s.partialForFieldsB(restream.ChildFieldsForField(fields, "B")); ok {
+	if partial, ok := s.partialForFieldsB(restream.ChildFieldsForFieldID(fields, TestCFieldIDB)); ok {
 		ret.B = partial
 		included = true
 	}
@@ -1333,6 +1370,11 @@ func (s *TestC) partialForFieldsB(fields [][]any) (*int, bool) {
 	}
 	return nil, false
 }
+
+const (
+	TestCPartialFieldIDA byte = 1
+	TestCPartialFieldIDB byte = 2
+)
 
 // TestCPartialFieldInfo is the static field info for the TestCPartial struct
 var TestCPartialFieldInfo = []restream.FieldInfo{
@@ -1381,6 +1423,11 @@ func (s *TestCPartial) Deserialize(r *binarystreams.Reader, _ *restream.VarInfoS
 	}
 	return restream.DeserializeFielded(ri, TestCPartialFieldInfo, TestCPartialFieldMap, fieldPtrs)
 }
+
+const (
+	TestMapDataFieldIDNumber byte = 1
+	TestMapDataFieldIDData   byte = 2
+)
 
 // TestMapDataFieldInfo is the static field info for the TestMapData struct
 var TestMapDataFieldInfo = []restream.FieldInfo{
@@ -1513,7 +1560,7 @@ func (s *TestMapDataPartial) ApplyTo(por any) [][]any {
 	ret := [][]any{}
 	if s.Number != nil {
 		po.Number = *s.Number
-		ret = append(ret, []any{"Number"})
+		ret = append(ret, []any{TestMapDataFieldIDNumber})
 	}
 	if s.Data != nil {
 		fs := s.Data.ApplyTo(&po.Data)
@@ -1521,7 +1568,7 @@ func (s *TestMapDataPartial) ApplyTo(por any) [][]any {
 			s.Data = nil
 		}
 		for _, f := range fs {
-			ret = append(ret, append(append([]any{}, "Data"), f...))
+			ret = append(ret, append(append([]any{}, TestMapDataFieldIDData), f...))
 		}
 	}
 	return ret
@@ -1537,14 +1584,14 @@ func (s *TestMapDataPartial) FilterToFields(fields [][]any) (restream.Partial, b
 		}
 	}
 	if s.Number != nil {
-		childFields := restream.ChildFieldsForField(fields, "Number")
+		childFields := restream.ChildFieldsForFieldID(fields, TestMapDataFieldIDNumber)
 		if len(childFields) > 0 {
 			ret.Number = s.Number
 			included = true
 		}
 	}
 	if s.Data != nil {
-		childFields := restream.ChildFieldsForField(fields, "Data")
+		childFields := restream.ChildFieldsForFieldID(fields, TestMapDataFieldIDData)
 		if len(childFields) > 0 {
 			filtered, ok := restream.FilterPartialToFields(s.Data, childFields)
 			if ok {
@@ -1560,11 +1607,11 @@ func (s *TestMapDataPartial) FilterToFields(fields [][]any) (restream.Partial, b
 func (s *TestMapData) PartialForFields(fields [][]any) (restream.Partial, bool) {
 	ret := &TestMapDataPartial{}
 	included := false
-	if partial, ok := s.partialForFieldsNumber(restream.ChildFieldsForField(fields, "Number")); ok {
+	if partial, ok := s.partialForFieldsNumber(restream.ChildFieldsForFieldID(fields, TestMapDataFieldIDNumber)); ok {
 		ret.Number = partial
 		included = true
 	}
-	if partial, ok := s.partialForFieldsData(restream.ChildFieldsForField(fields, "Data")); ok {
+	if partial, ok := s.partialForFieldsData(restream.ChildFieldsForFieldID(fields, TestMapDataFieldIDData)); ok {
 		ret.Data = partial
 		included = true
 	}
@@ -1609,6 +1656,11 @@ func (s *TestMapData) partialForFieldsData(fields [][]any) (*restream.PartialArr
 	}
 	return ret, included
 }
+
+const (
+	TestMapDataPartialFieldIDNumber byte = 1
+	TestMapDataPartialFieldIDData   byte = 2
+)
 
 // TestMapDataPartialFieldInfo is the static field info for the TestMapDataPartial struct
 var TestMapDataPartialFieldInfo = []restream.FieldInfo{
@@ -1657,6 +1709,11 @@ func (s *TestMapDataPartial) Deserialize(r *binarystreams.Reader, _ *restream.Va
 	}
 	return restream.DeserializeFielded(ri, TestMapDataPartialFieldInfo, TestMapDataPartialFieldMap, fieldPtrs)
 }
+
+const (
+	TestPrimitiveOptionalStateFieldIDPrimitive byte = 1
+	TestPrimitiveOptionalStateFieldIDOptional  byte = 2
+)
 
 // TestPrimitiveOptionalStateFieldInfo is the static field info for the TestPrimitiveOptionalState struct
 var TestPrimitiveOptionalStateFieldInfo = []restream.FieldInfo{
@@ -1785,11 +1842,11 @@ func (s *TestPrimitiveOptionalStatePartial) ApplyTo(por any) [][]any {
 	ret := [][]any{}
 	if s.Primitive != nil {
 		po.Primitive = *s.Primitive
-		ret = append(ret, []any{"Primitive"})
+		ret = append(ret, []any{TestPrimitiveOptionalStateFieldIDPrimitive})
 	}
 	if s.Optional != nil {
 		po.Optional = *s.Optional
-		ret = append(ret, []any{"Optional"})
+		ret = append(ret, []any{TestPrimitiveOptionalStateFieldIDOptional})
 	}
 	return ret
 }
@@ -1804,14 +1861,14 @@ func (s *TestPrimitiveOptionalStatePartial) FilterToFields(fields [][]any) (rest
 		}
 	}
 	if s.Primitive != nil {
-		childFields := restream.ChildFieldsForField(fields, "Primitive")
+		childFields := restream.ChildFieldsForFieldID(fields, TestPrimitiveOptionalStateFieldIDPrimitive)
 		if len(childFields) > 0 {
 			ret.Primitive = s.Primitive
 			included = true
 		}
 	}
 	if s.Optional != nil {
-		childFields := restream.ChildFieldsForField(fields, "Optional")
+		childFields := restream.ChildFieldsForFieldID(fields, TestPrimitiveOptionalStateFieldIDOptional)
 		if len(childFields) > 0 {
 			ret.Optional = s.Optional
 			included = true
@@ -1824,11 +1881,11 @@ func (s *TestPrimitiveOptionalStatePartial) FilterToFields(fields [][]any) (rest
 func (s *TestPrimitiveOptionalState) PartialForFields(fields [][]any) (restream.Partial, bool) {
 	ret := &TestPrimitiveOptionalStatePartial{}
 	included := false
-	if partial, ok := s.partialForFieldsPrimitive(restream.ChildFieldsForField(fields, "Primitive")); ok {
+	if partial, ok := s.partialForFieldsPrimitive(restream.ChildFieldsForFieldID(fields, TestPrimitiveOptionalStateFieldIDPrimitive)); ok {
 		ret.Primitive = partial
 		included = true
 	}
-	if partial, ok := s.partialForFieldsOptional(restream.ChildFieldsForField(fields, "Optional")); ok {
+	if partial, ok := s.partialForFieldsOptional(restream.ChildFieldsForFieldID(fields, TestPrimitiveOptionalStateFieldIDOptional)); ok {
 		ret.Optional = partial
 		included = true
 	}
@@ -1864,6 +1921,11 @@ func (s *TestPrimitiveOptionalState) partialForFieldsOptional(fields [][]any) (*
 	}
 	return nil, false
 }
+
+const (
+	TestPrimitiveOptionalStatePartialFieldIDPrimitive byte = 1
+	TestPrimitiveOptionalStatePartialFieldIDOptional  byte = 2
+)
 
 // TestPrimitiveOptionalStatePartialFieldInfo is the static field info for the TestPrimitiveOptionalStatePartial struct
 var TestPrimitiveOptionalStatePartialFieldInfo = []restream.FieldInfo{
@@ -1912,6 +1974,13 @@ func (s *TestPrimitiveOptionalStatePartial) Deserialize(r *binarystreams.Reader,
 	}
 	return restream.DeserializeFielded(ri, TestPrimitiveOptionalStatePartialFieldInfo, TestPrimitiveOptionalStatePartialFieldMap, fieldPtrs)
 }
+
+const (
+	TestStateFieldIDMapPtrTest    byte = 1
+	TestStateFieldIDBaseField     byte = 2
+	TestStateFieldIDBaseStruct    byte = 3
+	TestStateFieldIDBaseStructPtr byte = 4
+)
 
 // TestStateFieldInfo is the static field info for the TestState struct
 var TestStateFieldInfo = []restream.FieldInfo{
@@ -2128,12 +2197,12 @@ func (s *TestStatePartial) ApplyTo(por any) [][]any {
 			s.MapPtrTest = nil
 		}
 		for _, f := range fs {
-			ret = append(ret, append(append([]any{}, "MapPtrTest"), f...))
+			ret = append(ret, append(append([]any{}, TestStateFieldIDMapPtrTest), f...))
 		}
 	}
 	if s.BaseField != nil {
 		po.BaseField = *s.BaseField
-		ret = append(ret, []any{"BaseField"})
+		ret = append(ret, []any{TestStateFieldIDBaseField})
 	}
 	if s.BaseStruct != nil {
 		fs := s.BaseStruct.ApplyTo(&po.BaseStruct)
@@ -2141,7 +2210,7 @@ func (s *TestStatePartial) ApplyTo(por any) [][]any {
 			s.BaseStruct = nil
 		}
 		for _, f := range fs {
-			ret = append(ret, append(append([]any{}, "BaseStruct"), f...))
+			ret = append(ret, append(append([]any{}, TestStateFieldIDBaseStruct), f...))
 		}
 	}
 	if s.BaseStructPtr != nil {
@@ -2150,7 +2219,7 @@ func (s *TestStatePartial) ApplyTo(por any) [][]any {
 			s.BaseStructPtr = nil
 		}
 		for _, f := range fs {
-			ret = append(ret, append(append([]any{}, "BaseStructPtr"), f...))
+			ret = append(ret, append(append([]any{}, TestStateFieldIDBaseStructPtr), f...))
 		}
 	}
 	return ret
@@ -2166,7 +2235,7 @@ func (s *TestStatePartial) FilterToFields(fields [][]any) (restream.Partial, boo
 		}
 	}
 	if s.MapPtrTest != nil {
-		childFields := restream.ChildFieldsForField(fields, "MapPtrTest")
+		childFields := restream.ChildFieldsForFieldID(fields, TestStateFieldIDMapPtrTest)
 		if len(childFields) > 0 {
 			filtered, ok := restream.FilterPartialToFields(s.MapPtrTest, childFields)
 			if ok {
@@ -2176,14 +2245,14 @@ func (s *TestStatePartial) FilterToFields(fields [][]any) (restream.Partial, boo
 		}
 	}
 	if s.BaseField != nil {
-		childFields := restream.ChildFieldsForField(fields, "BaseField")
+		childFields := restream.ChildFieldsForFieldID(fields, TestStateFieldIDBaseField)
 		if len(childFields) > 0 {
 			ret.BaseField = s.BaseField
 			included = true
 		}
 	}
 	if s.BaseStruct != nil {
-		childFields := restream.ChildFieldsForField(fields, "BaseStruct")
+		childFields := restream.ChildFieldsForFieldID(fields, TestStateFieldIDBaseStruct)
 		if len(childFields) > 0 {
 			filtered, ok := restream.FilterPartialToFields(s.BaseStruct, childFields)
 			if ok {
@@ -2193,7 +2262,7 @@ func (s *TestStatePartial) FilterToFields(fields [][]any) (restream.Partial, boo
 		}
 	}
 	if s.BaseStructPtr != nil {
-		childFields := restream.ChildFieldsForField(fields, "BaseStructPtr")
+		childFields := restream.ChildFieldsForFieldID(fields, TestStateFieldIDBaseStructPtr)
 		if len(childFields) > 0 {
 			filtered, ok := restream.FilterPartialToFields(s.BaseStructPtr, childFields)
 			if ok {
@@ -2209,19 +2278,19 @@ func (s *TestStatePartial) FilterToFields(fields [][]any) (restream.Partial, boo
 func (s *TestState) PartialForFields(fields [][]any) (restream.Partial, bool) {
 	ret := &TestStatePartial{}
 	included := false
-	if partial, ok := s.partialForFieldsMapPtrTest(restream.ChildFieldsForField(fields, "MapPtrTest")); ok {
+	if partial, ok := s.partialForFieldsMapPtrTest(restream.ChildFieldsForFieldID(fields, TestStateFieldIDMapPtrTest)); ok {
 		ret.MapPtrTest = partial
 		included = true
 	}
-	if partial, ok := s.partialForFieldsBaseField(restream.ChildFieldsForField(fields, "BaseField")); ok {
+	if partial, ok := s.partialForFieldsBaseField(restream.ChildFieldsForFieldID(fields, TestStateFieldIDBaseField)); ok {
 		ret.BaseField = partial
 		included = true
 	}
-	if partial, ok := s.partialForFieldsBaseStruct(restream.ChildFieldsForField(fields, "BaseStruct")); ok {
+	if partial, ok := s.partialForFieldsBaseStruct(restream.ChildFieldsForFieldID(fields, TestStateFieldIDBaseStruct)); ok {
 		ret.BaseStruct = partial
 		included = true
 	}
-	if partial, ok := s.partialForFieldsBaseStructPtr(restream.ChildFieldsForField(fields, "BaseStructPtr")); ok {
+	if partial, ok := s.partialForFieldsBaseStructPtr(restream.ChildFieldsForFieldID(fields, TestStateFieldIDBaseStructPtr)); ok {
 		ret.BaseStructPtr = partial
 		included = true
 	}
@@ -2383,6 +2452,13 @@ func (s *TestState) partialForFieldsBaseStructPtr(fields [][]any) (*restream.Par
 	}
 	return ret, included
 }
+
+const (
+	TestStatePartialFieldIDMapPtrTest    byte = 1
+	TestStatePartialFieldIDBaseField     byte = 2
+	TestStatePartialFieldIDBaseStruct    byte = 3
+	TestStatePartialFieldIDBaseStructPtr byte = 4
+)
 
 // TestStatePartialFieldInfo is the static field info for the TestStatePartial struct
 var TestStatePartialFieldInfo = []restream.FieldInfo{

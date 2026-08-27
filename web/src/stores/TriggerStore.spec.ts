@@ -35,6 +35,14 @@ class TriggerStoreSpecStore extends TriggerStore<TriggerStoreSpecState> {
         super(testStoreName, {
             fromValues: () => ({ values: new Map() }),
             deserialized: (_r: BinaryReader) => ({ values: new Map() }),
+            fieldInfo: [{
+                fieldID: 1,
+                varInfo: new VarInfoMap(
+                    false,
+                    new VarInfoPrimitive(SerializationType.String),
+                    new VarInfoPrimitive(SerializationType.Uint64),
+                ),
+            }],
         }, {
             deserialized: (_r: BinaryReader) => new TriggerStoreSpecPartial(),
         });
@@ -55,7 +63,7 @@ interface GeneratedDevicePGNState {
 
 class GeneratedDevicePGN {
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        { name: "RxCount", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPrimitive(SerializationType.Uint64, "uint") },
+        { fieldID: 1, varInfo: new VarInfoPrimitive(SerializationType.Uint64) },
     ];
 
     static deserialized(): GeneratedDevicePGNState {
@@ -76,13 +84,11 @@ class GeneratedTriggerStoreSpecPartial implements PartialFor<GeneratedTriggerSto
 class GeneratedTriggerStoreSpecStateType {
     public static readonly fieldInfo: readonly FieldInfo[] = [
         {
-            name: "DevicePGNs",
-            fieldIdx: 0,
             fieldID: 1,
             varInfo: new VarInfoMap(
                 false,
                 new VarInfoPrimitive(SerializationType.String),
-                new VarInfoPointer(false, new VarInfoStruct("GeneratedDevicePGN", "test", GeneratedDevicePGN)),
+                new VarInfoPointer(false, new VarInfoStruct(GeneratedDevicePGN)),
             ),
         },
     ];
@@ -167,16 +173,16 @@ describe('TriggerStore keyed subscriptions', () => {
 
     test('refcounts duplicate subscriptions for the same key', () => {
         const store = new TriggerStoreSpecStore(uniqueStoreName());
-        const tokenOne = store.subscribe(vi.fn(), 'values%&a');
-        const tokenTwo = store.subscribe(vi.fn(), 'values%&a');
+		const tokenOne = store.subscribe(vi.fn(), '1%&a');
+		const tokenTwo = store.subscribe(vi.fn(), '1%&a');
 
         expect(TriggerStore.getStoreSubs().filter(sub => sub.storeName === store.testStoreName)).toEqual([
-            { storeName: store.testStoreName, key: 'values%&a' },
+            { storeName: store.testStoreName, key: '~1%&1%&a' },
         ]);
 
         store.unsubscribe(tokenOne);
         expect(TriggerStore.getStoreSubs().filter(sub => sub.storeName === store.testStoreName)).toEqual([
-            { storeName: store.testStoreName, key: 'values%&a' },
+            { storeName: store.testStoreName, key: '~1%&1%&a' },
         ]);
 
         store.unsubscribe(tokenTwo);
@@ -187,16 +193,16 @@ describe('TriggerStore keyed subscriptions', () => {
         const storeName = uniqueStoreName();
         const originalStore = new TriggerStoreSpecStore(storeName);
         const replacementStore = new TriggerStoreSpecStore(storeName);
-        const originalToken = originalStore.subscribe(vi.fn(), 'values%&a');
-        const replacementToken = replacementStore.subscribe(vi.fn(), 'values%&a');
+		const originalToken = originalStore.subscribe(vi.fn(), '1%&a');
+		const replacementToken = replacementStore.subscribe(vi.fn(), '1%&a');
 
         expect(TriggerStore.getStoreSubs().filter(sub => sub.storeName === storeName)).toEqual([
-            { storeName, key: 'values%&a' },
+            { storeName, key: '~1%&1%&a' },
         ]);
 
         originalStore.unsubscribe(originalToken);
         expect(TriggerStore.getStoreSubs().filter(sub => sub.storeName === storeName)).toEqual([
-            { storeName, key: 'values%&a' },
+            { storeName, key: '~1%&1%&a' },
         ]);
 
         replacementStore.unsubscribe(replacementToken);
@@ -209,15 +215,15 @@ describe('TriggerStore keyed subscriptions', () => {
         const callbackA = vi.fn();
         const callbackB = vi.fn();
         const allToken = store.subscribe(allCallback, StoreBase.Key_All);
-        const tokenA = store.subscribe(callbackA, 'values%&a');
-        const tokenB = store.subscribe(callbackB, 'values%&b');
+		const tokenA = store.subscribe(callbackA, '1%&a');
+		const tokenB = store.subscribe(callbackB, '1%&b');
 
-        store.fireField(['values', 'a']);
+		store.fireField([1, 'a']);
 
         expect(callbackA).toHaveBeenCalledTimes(1);
         expect(callbackB).not.toHaveBeenCalled();
         expect(allCallback).toHaveBeenCalledTimes(1);
-        expect(allCallback).toHaveBeenCalledWith(['values%&a']);
+		expect(allCallback).toHaveBeenCalledWith(['1%&a']);
 
         store.unsubscribe(allToken);
         store.unsubscribe(tokenA);
@@ -228,10 +234,10 @@ describe('TriggerStore keyed subscriptions', () => {
         const store = new TriggerStoreSpecStore(uniqueStoreName());
         const callbackA = vi.fn();
         const callbackB = vi.fn();
-        const tokenA = store.subscribe(callbackA, 'values%&a');
-        const tokenB = store.subscribe(callbackB, 'values%&b');
+		const tokenA = store.subscribe(callbackA, '1%&a');
+		const tokenB = store.subscribe(callbackB, '1%&b');
 
-        store.fireField(['values']);
+		store.fireField([1]);
 
         expect(callbackA).toHaveBeenCalledTimes(1);
         expect(callbackB).toHaveBeenCalledTimes(1);
@@ -244,8 +250,8 @@ describe('TriggerStore keyed subscriptions', () => {
         const store = new TriggerStoreSpecStore(uniqueStoreName());
         const callbackA = vi.fn();
         const callbackB = vi.fn();
-        const tokenA = store.subscribe(callbackA, 'values%&a');
-        const tokenB = store.subscribe(callbackB, 'other');
+		const tokenA = store.subscribe(callbackA, '1%&a');
+		const tokenB = store.subscribe(callbackB, '1%&b');
 
         store.fireField([]);
 
@@ -258,15 +264,12 @@ describe('TriggerStore keyed subscriptions', () => {
         store.unsubscribe(tokenB);
     });
 
-    test('generated store subscriptions normalize field names for trigger matching and wire keys', () => {
+	test('generated store subscriptions use field IDs for trigger matching and wire keys', () => {
         const store = new GeneratedTriggerStoreSpecStore(uniqueStoreName());
         const callback = vi.fn();
-        const token = store.subscribe(callback, 'DevicePGNs');
+		const token = store.subscribe(callback, '1');
 
         expect(TriggerStore.getStoreSubs().filter(sub => sub.storeName === store.testStoreName)).toEqual([
-            { storeName: store.testStoreName, key: 'devicePGNs' },
-        ]);
-        expect(TriggerStore.getStoreSubs(true).filter(sub => sub.storeName === store.testStoreName)).toEqual([
             { storeName: store.testStoreName, key: '~1%&1' },
         ]);
 
@@ -281,14 +284,10 @@ describe('TriggerStore keyed subscriptions', () => {
         const store = new GeneratedTriggerStoreSpecStore(uniqueStoreName());
         const matchingCallback = vi.fn();
         const wrongMapKeyCallback = vi.fn();
-        const matchingToken = store.subscribe(matchingCallback, 'DevicePGNs%&CAN0%&RxCount');
-        const wrongMapKeyToken = store.subscribe(wrongMapKeyCallback, 'DevicePGNs%&can0%&RxCount');
+		const matchingToken = store.subscribe(matchingCallback, '1%&CAN0%&1');
+		const wrongMapKeyToken = store.subscribe(wrongMapKeyCallback, '1%&can0%&1');
 
         expect(TriggerStore.getStoreSubs().filter(sub => sub.storeName === store.testStoreName)).toEqual([
-            { storeName: store.testStoreName, key: 'devicePGNs%&CAN0%&rxCount' },
-            { storeName: store.testStoreName, key: 'devicePGNs%&can0%&rxCount' },
-        ]);
-        expect(TriggerStore.getStoreSubs(true).filter(sub => sub.storeName === store.testStoreName)).toEqual([
             { storeName: store.testStoreName, key: '~1%&1%&CAN0%&1' },
             { storeName: store.testStoreName, key: '~1%&1%&can0%&1' },
         ]);
@@ -302,18 +301,18 @@ describe('TriggerStore keyed subscriptions', () => {
         store.unsubscribe(wrongMapKeyToken);
     });
 
-    test('generated store equivalent field keys share one wire subscription until all aliases unsubscribe', () => {
+	test('generated store prefixed and unprefixed field-ID keys share one wire subscription', () => {
         const store = new GeneratedTriggerStoreSpecStore(uniqueStoreName());
-        const upperToken = store.subscribe(vi.fn(), 'DevicePGNs');
-        const lowerToken = store.subscribe(vi.fn(), 'devicePGNs');
+		const upperToken = store.subscribe(vi.fn(), '1');
+		const lowerToken = store.subscribe(vi.fn(), '~1%&1');
 
         expect(TriggerStore.getStoreSubs().filter(sub => sub.storeName === store.testStoreName)).toEqual([
-            { storeName: store.testStoreName, key: 'devicePGNs' },
+            { storeName: store.testStoreName, key: '~1%&1' },
         ]);
 
         store.unsubscribe(upperToken);
         expect(TriggerStore.getStoreSubs().filter(sub => sub.storeName === store.testStoreName)).toEqual([
-            { storeName: store.testStoreName, key: 'devicePGNs' },
+            { storeName: store.testStoreName, key: '~1%&1' },
         ]);
 
         store.unsubscribe(lowerToken);

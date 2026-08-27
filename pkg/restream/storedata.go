@@ -148,8 +148,7 @@ type StoreDataOutputWaiter interface {
 	WaitForOutputIdle(time.Duration) bool
 }
 
-// NormalizeSubscriptionKey converts a versioned field-ID key into the legacy
-// named representation used by Go partial filtering and relay forwarding.
+// NormalizeSubscriptionKey validates and canonicalizes a field-ID subscription key.
 func (d *StoreData[S, SP, PS]) NormalizeSubscriptionKey(key string) (string, error) {
 	return normalizeFieldIDSubscriptionKey(key, reflect.TypeFor[S]())
 }
@@ -447,33 +446,38 @@ func (d *StoreData[S, SP, PS]) getFieldValue(field []any) reflect.Value {
 func getFieldValueFrom(stateReflect reflect.Value, field []any) reflect.Value {
 	ds := stateReflect
 	for _, f := range field {
-		fv := reflect.ValueOf(f)
-		kind := fv.Kind()
-		switch kind {
-		case reflect.String:
-			ds = ds.FieldByName(fv.String())
-		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32:
-			switch ds.Kind() {
-			case reflect.Slice:
-				var idx int
-				switch kind { //nolint: exhaustive // Why: Other types not supported
-				case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32:
-					idx = int(fv.Uint())
-				case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32:
-					idx = int(fv.Int())
-				}
-				ds = ds.Index(idx)
-			case reflect.Map:
-				ds = ds.MapIndex(fv)
-			default:
-				panic(fmt.Sprintf("Invalid int type %+v for field %+v of set %+v", ds.Kind(), f, field))
+		for ds.Kind() == reflect.Pointer {
+			ds = ds.Elem()
+		}
+		switch ds.Kind() { //nolint:exhaustive // Subscription paths support structs and their collections.
+		case reflect.Struct:
+			fieldID, ok := restreamFieldIDFromPathPart(f)
+			if !ok {
+				panic(fmt.Sprintf("Invalid Restream field ID %+v for struct %s in path %+v", f, ds.Type(), field))
 			}
+			structField, ok := structFieldForRestreamID(ds.Type(), fieldID)
+			if !ok {
+				panic(fmt.Sprintf("Unknown Restream field ID %d for struct %s in path %+v", fieldID, ds.Type(), field))
+			}
+			ds = ds.FieldByIndex(structField.Index)
+		case reflect.Slice, reflect.Array:
+			indexValue, ok := fieldPathPartToReflectValue(f, reflect.TypeFor[int]())
+			if !ok {
+				panic(fmt.Sprintf("Invalid array index %+v for %s in path %+v", f, ds.Type(), field))
+			}
+			ds = ds.Index(int(indexValue.Int()))
+		case reflect.Map:
+			keyValue, ok := fieldPathPartToReflectValue(f, ds.Type().Key())
+			if !ok {
+				panic(fmt.Sprintf("Invalid map key %+v for %s in path %+v", f, ds.Type(), field))
+			}
+			ds = ds.MapIndex(keyValue)
 		default:
-			panic(fmt.Sprintf("Invalid field type %+v for field %+v of set %+v", kind, f, field))
+			panic(fmt.Sprintf("Cannot continue subscription path %+v through %s", field, ds.Type()))
 		}
 
 		// Walk into the pointer to keep going
-		if ds.Kind() == reflect.Pointer {
+		if ds.IsValid() && ds.Kind() == reflect.Pointer {
 			ds = ds.Elem()
 		}
 	}

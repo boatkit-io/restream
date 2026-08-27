@@ -971,7 +971,7 @@ func TestStreamerStoreTypesFilterRelayedSubscriptions(t *testing.T) {
 
 	if err := s.handleStoreSubscription(&protocol.StoreSubscriptionPacket{
 		StoreName: "NoRelayStore",
-		Key:       "values%&a",
+		Key:       "~1%&1",
 		Action:    protocol.StoreSubscribe,
 	}); err != nil {
 		t.Fatalf("handle subscribe failed: %v", err)
@@ -989,7 +989,7 @@ func TestRelayedStoreSubscriptionsAreIdempotentAndCleanup(t *testing.T) {
 
 	packet := &protocol.StoreSubscriptionPacket{
 		StoreName: "TestStore",
-		Key:       "values%&a",
+		Key:       "~1%&1",
 		Action:    protocol.StoreSubscribe,
 	}
 	if err := s.handleStoreSubscription(packet); err != nil {
@@ -998,7 +998,7 @@ func TestRelayedStoreSubscriptionsAreIdempotentAndCleanup(t *testing.T) {
 	if err := s.handleStoreSubscription(packet); err != nil {
 		t.Fatalf("handle duplicate subscribe failed: %v", err)
 	}
-	assertActiveRelayKeys(t, store.RelayStore, []string{"values%&a"})
+	assertActiveRelayKeys(t, store.RelayStore, []string{"~1%&1"})
 
 	packet.Action = protocol.StoreUnsubscribe
 	if err := s.handleStoreSubscription(packet); err != nil {
@@ -1155,7 +1155,7 @@ func TestOnDemandStoreStreamingSendsOnlyWhileStoreSubscribed(t *testing.T) {
 		t.Fatalf("unsubscribed partial queued %d packets", len(sendQueue))
 	}
 
-	if err := s.startRelayedStoreSubscription("TestStore", "values%&a"); err != nil {
+	if err := s.startRelayedStoreSubscription("TestStore", "~1%&1"); err != nil {
 		t.Fatalf("first subscription failed: %v", err)
 	}
 	assertQueuedStorePacketKind(t, sendQueue, protocol.KindFullState)
@@ -1163,20 +1163,20 @@ func TestOnDemandStoreStreamingSendsOnlyWhileStoreSubscribed(t *testing.T) {
 	s.partialCallback("TestStore", nil, &streamerTestPartial{})
 	assertQueuedStorePacketKind(t, sendQueue, protocol.KindPartialState)
 
-	if err := s.startRelayedStoreSubscription("TestStore", "values%&b"); err != nil {
+	if err := s.startRelayedStoreSubscription("TestStore", "~1%&2"); err != nil {
 		t.Fatalf("second subscription failed: %v", err)
 	}
 	if len(sendQueue) != 0 {
 		t.Fatalf("second key subscription queued %d packets, want no additional full state", len(sendQueue))
 	}
 
-	if err := s.stopRelayedStoreSubscription("TestStore", "values%&a"); err != nil {
+	if err := s.stopRelayedStoreSubscription("TestStore", "~1%&1"); err != nil {
 		t.Fatalf("first unsubscribe failed: %v", err)
 	}
 	s.partialCallback("TestStore", nil, &streamerTestPartial{})
 	assertQueuedStorePacketKind(t, sendQueue, protocol.KindPartialState)
 
-	if err := s.stopRelayedStoreSubscription("TestStore", "values%&b"); err != nil {
+	if err := s.stopRelayedStoreSubscription("TestStore", "~1%&2"); err != nil {
 		t.Fatalf("last unsubscribe failed: %v", err)
 	}
 	s.partialCallback("TestStore", nil, &streamerTestPartial{})
@@ -1496,7 +1496,8 @@ func (s *streamerTypedRelayStore) GetStoreType() restream.StoreType {
 }
 
 type streamerTestState struct {
-	Value       string
+	Value       string `restream:",fID=1"`
+	Other       string `restream:",fID=2"`
 	onSerialize func()
 }
 
@@ -1520,7 +1521,8 @@ func (s *streamerTestState) Deserialize(r *binarystreams.Reader, _ *restream.Var
 }
 
 type streamerTestPartial struct {
-	Value       *string
+	Value       *string `restream:",fID=1"`
+	Other       *string `restream:",fID=2"`
 	onSerialize func()
 }
 
@@ -1593,7 +1595,7 @@ func (p *streamerTestPartial) ApplyTo(state any) [][]any {
 	}
 	st := state.(*streamerTestState)
 	st.Value = *p.Value
-	return [][]any{{"Value"}}
+	return [][]any{{byte(1)}}
 }
 
 func newTestWebsocketPair(t *testing.T) (*gws.Conn, *gws.Conn, func()) {

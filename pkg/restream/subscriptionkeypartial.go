@@ -23,27 +23,23 @@ func partialForFieldPathReflect(stateValue reflect.Value, partialType reflect.Ty
 		return reflect.Value{}, false, fmt.Errorf("subscription partial type %s is not a pointer to struct", partialType)
 	}
 
-	fieldName, ok := fieldPath[0].(string)
+	fieldID, ok := restreamFieldIDFromPathPart(fieldPath[0])
 	if !ok {
 		return reflect.Value{}, false, nil
 	}
 
-	stateField := stateValue.FieldByName(fieldName)
-	if !stateField.IsValid() {
-		stateField = stateValue.FieldByName(serverFieldName(fieldName))
-	}
-	if !stateField.IsValid() {
+	stateFieldInfo, ok := structFieldForRestreamID(stateValue.Type(), fieldID)
+	if !ok {
 		return reflect.Value{}, false, nil
 	}
+	stateField := stateValue.FieldByIndex(stateFieldInfo.Index)
 
 	partialValue := reflect.New(partialType.Elem())
-	partialField := partialValue.Elem().FieldByName(fieldName)
-	if !partialField.IsValid() {
-		partialField = partialValue.Elem().FieldByName(serverFieldName(fieldName))
-	}
-	if !partialField.IsValid() {
+	partialFieldInfo, ok := structFieldForRestreamID(partialType.Elem(), fieldID)
+	if !ok {
 		return reflect.Value{}, false, nil
 	}
+	partialField := partialValue.Elem().FieldByIndex(partialFieldInfo.Index)
 
 	fieldPartial, ok, err := partialForFieldReflect(stateField, partialField.Type(), fieldPath[1:])
 	if err != nil || !ok {

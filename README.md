@@ -59,17 +59,9 @@ getCAN0RxCount() {
 }
 ```
 
-The TypeScript runtime tracks generated paths by field ID. When field-ID wire keys are enabled, it serializes them with a version marker, for example `~1%&3%&CAN0%&7`. Go normalizes that key through the stable `restream:",fID=N"` tags before filtering and forwarding it, so upgraded servers can bridge an ID-key client to an older relay peer. Readable Go- or TypeScript-style field names are still accepted as a migration aid, but new source should use the generated constants so refactors remain typechecked and production bundles do not retain those names. Map keys are exact: in the example above, `CAN0` will not match `can0`. Full-store subscriptions still update for any store change, while field-keyed subscriptions update only when the generated partial reports that exact field path or one of its parent/child paths.
+The TypeScript runtime serializes generated paths with a version marker, for example `~1%&3%&CAN0%&7`. Go retains and forwards that same field-ID path through the stable `restream:",fID=N"` tags. Readable Go- or TypeScript-style field names are not accepted: use the generated constants so refactors remain typechecked and production bundles do not retain a parallel name table. Map keys are exact: in the example above, `CAN0` will not match `can0`. Full-store subscriptions still update for any store change, while field-keyed subscriptions update only when the generated partial reports that exact field path or one of its parent/child paths.
 
-ID-key emission defaults off so a new client can still connect directly to an older server. Advertise support in the application's existing login capability response and opt in before authentication; a missing flag safely retains readable legacy wire keys:
-
-```typescript
-const restreamSocket = new ReStreamSocket(socket);
-restreamSocket.setFieldIDSubscriptionKeysEnabled(
-    loginResponse.restreamFieldIDSubscriptionKeys === true,
-);
-await restreamSocket.markAuthenticated();
-```
+Field-ID subscriptions are a breaking wire-protocol requirement. Every client, server, and relay in a deployment must be upgraded together.
 
 Viewer sockets use keyed delivery by default. For a direct local viewer where
 bandwidth is inexpensive and the client should retain complete store state,

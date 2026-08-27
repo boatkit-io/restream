@@ -47,33 +47,25 @@ export default abstract class TriggerStore<S extends object> extends StoreBase {
         store._processUpdateMessage(message);
     }
 
-    static getStoreSubs(fieldIDSubscriptionKeys = false) {
+    static getStoreSubs() {
         const ret: { storeName: string, key: string|undefined }[] = [];
         for (const [storeName, keys] of this._storeSubs.entries()) {
             for (const key of keys.keys()) {
                 ret.push({
                     storeName,
-                    key: key === "" ? undefined : this.subscriptionKeyForTransport(
-                        storeName,
-                        key,
-                        fieldIDSubscriptionKeys,
-                    ),
+                    key: key === "" ? undefined : this.subscriptionKeyForTransport(storeName, key),
                 });
             }
         }
         return ret;
     }
 
-    static subscriptionKeyForTransport(storeName: string, key: string,
-        fieldIDSubscriptionKeys: boolean): string {
+    static subscriptionKeyForTransport(storeName: string, key: string): string {
         const store = this._storeMap[storeName];
         if (!store) {
-            return key;
+            throw new Error(`No store found for subscription key: ${storeName}`);
         }
-        return store._canonicalFieldKey(
-            key.split(compoundKeyJoinerString),
-            fieldIDSubscriptionKeys,
-        );
+        return store._canonicalFieldKey(key.split(compoundKeyJoinerString));
     }
 
     static getAllStores(): TriggerStore<object>[] {
@@ -220,16 +212,9 @@ export default abstract class TriggerStore<S extends object> extends StoreBase {
         return this._canonicalFieldKey(key.split(compoundKeyJoinerString));
     }
 
-    private _canonicalFieldKey(field: (string | number)[], fieldIDSubscriptionKeys = true): string {
-        const canonical = canonicalFieldPath(
-            field,
-            this._stateType.fieldInfo,
-            fieldIDSubscriptionKeys,
-        );
-        if (fieldIDSubscriptionKeys && typeof canonical[0] === "number") {
-            return formCompoundKey(fieldIDSubscriptionKeyPrefix, ...canonical);
-        }
-        return formCompoundKey(...canonical);
+    private _canonicalFieldKey(field: (string | number)[]): string {
+        const canonical = canonicalFieldPath(field, this._stateType.fieldInfo);
+        return formCompoundKey(fieldIDSubscriptionKeyPrefix, ...canonical);
     }
 
     private _hasActiveSubscriptionForCanonicalKey(wireKey: string): boolean {
@@ -260,8 +245,7 @@ function subscriptionKeyAffectsField(fieldKey: string, subscriptionKey: string):
     return true;
 }
 
-function canonicalFieldPath(field: (string | number)[], rootFields: readonly FieldInfo[] | undefined,
-    fieldIDSubscriptionKeys: boolean): (string | number)[] {
+function canonicalFieldPath(field: (string | number)[], rootFields: readonly FieldInfo[] | undefined): (string | number)[] {
     const ret: (string | number)[] = [];
     let fields = rootFields;
     let valueInfo: VarInfo | undefined;
@@ -274,13 +258,13 @@ function canonicalFieldPath(field: (string | number)[], rootFields: readonly Fie
         if (fields) {
             const fieldInfo = fields.find(fi => fieldPartMatches(field[idx], fi));
             if (!fieldInfo) {
-                ret.push(...field.slice(idx));
-                break;
+                throw new Error(`Unknown Restream field ID ${String(field[idx])}`);
             }
 
-            ret.push(fieldIDSubscriptionKeys && fieldInfo.fieldID !== undefined
-                ? fieldInfo.fieldID
-                : clientFieldName(fieldInfo.name));
+            if (fieldInfo.fieldID === undefined) {
+                throw new Error(`Restream field ${String(field[idx])} has no stable field ID`);
+            }
+            ret.push(fieldInfo.fieldID);
             valueInfo = fieldInfo.varInfo;
             fields = undefined;
             idx++;
@@ -308,25 +292,14 @@ function canonicalFieldPath(field: (string | number)[], rootFields: readonly Fie
             continue;
         }
 
-        ret.push(...field.slice(idx));
-        break;
+        throw new Error(`Restream field path continues through a non-container at ${String(field[idx])}`);
     }
 
     return ret;
 }
 
 function fieldPartMatches(part: string | number, fieldInfo: FieldInfo): boolean {
-    if (fieldInfo.fieldID !== undefined && String(part) === String(fieldInfo.fieldID)) {
-        return true;
-    }
-    return typeof part === "string" && clientFieldName(part) === clientFieldName(fieldInfo.name);
-}
-
-function clientFieldName(name: string): string {
-    if (name === "" || name.includes("_")) {
-        return name;
-    }
-    return name[0].toLowerCase() + name.slice(1);
+    return fieldInfo.fieldID !== undefined && String(part) === String(fieldInfo.fieldID);
 }
 
 function fieldsForValue(vi: VarInfo | undefined): readonly FieldInfo[] | undefined {

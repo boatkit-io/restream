@@ -84,8 +84,6 @@ describe('Fielded structs', () => {
 
         const fieldMap = new Map<number, FieldInfo>([
             [1, {
-                name: "Known",
-                fieldIdx: 0,
                 fieldID: 1,
                 varInfo: new VarInfoPrimitive(SerializationType.String),
             }],

@@ -26,10 +26,8 @@ func (fi *FieldInfo) ToGolangString() string {
 // ToTSString returns a string representation of the FieldInfo in typescript.
 func (fi *FieldInfo) ToTSString() string {
 	if fi.FieldID != 0 {
-		return fmt.Sprintf("{name: \"%s\", fieldIdx: %d, fieldID: %d, varInfo: %s}",
-			fi.Name, fi.FieldIdx, fi.FieldID, fi.VarInfo.ToTSString())
+		return fmt.Sprintf("{fieldID: %d, varInfo: %s}", fi.FieldID, fi.VarInfo.ToTSString())
 	}
 
-	return fmt.Sprintf("{name: \"%s\", fieldIdx: %d, varInfo: %s}",
-		fi.Name, fi.FieldIdx, fi.VarInfo.ToTSString())
+	return fmt.Sprintf("{varInfo: %s}", fi.VarInfo.ToTSString())
 }

@@ -177,7 +177,7 @@ func newStoreDataCloudSourceTestStore() (*storeDataCloudSourceTestStore, *storeD
 }
 
 type storeDataSnapshotTestState struct {
-	Value              string
+	Value              string `restream:",fID=1"`
 	onPartialForFields func()
 	onSerialize        func()
 }
@@ -209,7 +209,7 @@ func (s *storeDataSnapshotTestState) PartialForFields([][]any) (Partial, bool) {
 }
 
 type storeDataSnapshotTestPartial struct {
-	Value       string
+	Value       string `restream:",fID=1"`
 	onSerialize func()
 }
 
@@ -368,7 +368,7 @@ func TestGetSerializedPartialForSubscriptionKeySerializesSnapshotOutsideReadLock
 	}
 
 	assertCompletes(t, func() {
-		if _, exists, err := store.data.GetSerializedPartialForSubscriptionKey("value"); err != nil {
+		if _, exists, err := store.data.GetSerializedPartialForSubscriptionKey("~1%&1"); err != nil {
 			t.Fatalf("GetSerializedPartialForSubscriptionKey failed: %v", err)
 		} else if !exists {
 			t.Fatal("expected subscription partial to exist")
@@ -390,7 +390,7 @@ func TestGetPartialSnapshotForSubscriptionKeyBuildsPartialOutsideReadLock(t *tes
 	}
 
 	assertCompletes(t, func() {
-		if _, exists, err := store.data.GetPartialSnapshotForSubscriptionKey("value"); err != nil {
+		if _, exists, err := store.data.GetPartialSnapshotForSubscriptionKey("~1%&1"); err != nil {
 			t.Fatalf("GetPartialSnapshotForSubscriptionKey failed: %v", err)
 		} else if !exists {
 			t.Fatal("expected subscription partial to exist")

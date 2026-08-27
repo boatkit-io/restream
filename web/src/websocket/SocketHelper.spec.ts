@@ -164,35 +164,21 @@ describe('ReStreamSocket store scoping', () => {
 });
 
 describe('ReStreamSocket field-ID subscription keys', () => {
-    test('defaults to legacy keys and opts into field IDs before authentication', async () => {
-        const subscriptions = vi.spyOn(TriggerStore, 'getStoreSubs').mockImplementation(
-            (fieldIDSubscriptionKeys = false) => [{
-                storeName: 'VesselInfo',
-                key: fieldIDSubscriptionKeys ? '~1%&3%&7' : 'devices%&count',
-            }],
-        );
-        const legacySocket = new FakeSocket();
+    test('always sends stable field-ID subscription keys', async () => {
+        const subscriptions = vi.spyOn(TriggerStore, 'getStoreSubs').mockReturnValue([{
+            storeName: 'VesselInfo',
+            key: '~1%&3%&7',
+        }]);
         const fieldIDSocket = new FakeSocket();
-        const legacyRestream = new ReStreamSocket(legacySocket as unknown as Socket);
         const fieldIDRestream = new ReStreamSocket(fieldIDSocket as unknown as Socket);
-        fieldIDRestream.setFieldIDSubscriptionKeysEnabled(true);
 
-        await legacyRestream.markAuthenticated();
         await fieldIDRestream.markAuthenticated();
 
-        expect(storeSubscriptionMessages(legacySocket)).toEqual([{
-            action: StoreSubscriptionAction.Subscribe,
-            storeName: 'VesselInfo',
-            key: 'devices%&count',
-        }]);
         expect(storeSubscriptionMessages(fieldIDSocket)).toEqual([{
             action: StoreSubscriptionAction.Subscribe,
             storeName: 'VesselInfo',
             key: '~1%&3%&7',
         }]);
-        expect(() => fieldIDRestream.setFieldIDSubscriptionKeysEnabled(false)).toThrow(
-            'Store subscription key capability must be set before authentication',
-        );
         subscriptions.mockRestore();
     });
 });

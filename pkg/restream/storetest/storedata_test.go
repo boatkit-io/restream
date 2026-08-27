@@ -102,7 +102,7 @@ func TestStoreDataBuffersUpdateCallbacks(t *testing.T) {
 		partials <- partial.(*TestStatePartial)
 	})
 	baseFieldValues := make(chan string, 2)
-	store.SubscribeToField([]any{"BaseField"}, func(value string) {
+	store.SubscribeToField([]any{TestStateFieldIDBaseField}, func(value string) {
 		baseFieldValues <- value
 	})
 
@@ -142,7 +142,10 @@ func TestStoreDataBuffersUpdateCallbacks(t *testing.T) {
 	if partial.BaseStruct == nil {
 		t.Fatal("buffered partial omitted BaseStruct update")
 	}
-	assert.ElementsMatch(t, [][]any{{"BaseField"}, {"BaseStruct", "Number"}}, callbackFields)
+	assert.ElementsMatch(t, [][]any{
+		{TestStateFieldIDBaseField},
+		{TestStateFieldIDBaseStruct, TestMapDataFieldIDNumber},
+	}, callbackFields)
 
 	select {
 	case value := <-baseFieldValues:
@@ -211,7 +214,7 @@ func TestStoreDataOutputWorkerPreservesOrderWithoutBlockingApply(t *testing.T) {
 			<-releaseCallback
 		}
 	})
-	store.SubscribeToField([]any{"BaseField"}, func(value string) {
+	store.SubscribeToField([]any{TestStateFieldIDBaseField}, func(value string) {
 		fieldValues <- value
 	})
 
@@ -362,7 +365,7 @@ func TestStoreDataSubscribersDoNotReceiveOutputQueuedBeforeSubscription(t *testi
 	store.Sd.AddCallback(func(_ string, _ [][]any, partial restream.Partial) {
 		callbackValues <- *partial.(*TestStatePartial).BaseField
 	})
-	store.SubscribeToField([]any{"BaseField"}, func(value string) {
+	store.SubscribeToField([]any{TestStateFieldIDBaseField}, func(value string) {
 		fieldValues <- value
 	})
 
@@ -402,7 +405,7 @@ func TestStoreDataGatheringDoesNotCrossSubscriptionBoundary(t *testing.T) {
 		partials <- partial.(*TestStatePartial)
 	})
 	baseFieldValues := make(chan string, 1)
-	store.SubscribeToField([]any{"BaseField"}, func(value string) {
+	store.SubscribeToField([]any{TestStateFieldIDBaseField}, func(value string) {
 		baseFieldValues <- value
 	})
 
@@ -455,7 +458,7 @@ func TestGeneratedPartialCanClearOptionalPrimitivePointer(t *testing.T) {
 
 	assert.Equal(t, uint32(3), state.Primitive)
 	assert.Nil(t, state.Optional, "applying an explicit clear partial should nil the optional pointer field")
-	assert.Equal(t, [][]any{{"Primitive"}, {"Optional"}}, fields)
+	assert.Equal(t, [][]any{{TestPrimitiveOptionalStateFieldIDPrimitive}, {TestPrimitiveOptionalStateFieldIDOptional}}, fields)
 }
 
 func TestGeneratedApplyPrunesUnchangedFieldsFromPartial(t *testing.T) {
@@ -469,7 +472,7 @@ func TestGeneratedApplyPrunesUnchangedFieldsFromPartial(t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.Equal(t, TestC{A: 1, B: 3}, state)
-	assert.Equal(t, [][]any{{"B"}}, fields)
+	assert.Equal(t, [][]any{{TestCFieldIDB}}, fields)
 	assert.Nil(t, partial.A)
 	assert.NotNil(t, partial.B)
 	assert.Less(t, len(after), len(before))
@@ -562,9 +565,9 @@ func TestGeneratedPartialForFieldsClonesCapturedValues(t *testing.T) {
 	}
 
 	partialRaw, exists := original.PartialForFields([][]any{
-		{"MapPtrTest", uint8(5)},
-		{"BaseStruct"},
-		{"BaseStructPtr"},
+		{TestStateFieldIDMapPtrTest, uint8(5)},
+		{TestStateFieldIDBaseStruct},
+		{TestStateFieldIDBaseStructPtr},
 	})
 	assert.True(t, exists)
 
@@ -598,20 +601,20 @@ func TestGeneratedPartialFilterToFields(t *testing.T) {
 			ApplyPartial(&TestMapDataPartial{Number: restream.Ptr(uint(9))}),
 	}
 
-	filteredMapPartial, ok := restream.FilterPartialToFields(partial, [][]any{{"MapPtrTest", uint8(5)}})
+	filteredMapPartial, ok := restream.FilterPartialToFields(partial, [][]any{{TestStateFieldIDMapPtrTest, uint8(5)}})
 	assert.True(t, ok)
 	mapState := TestState{MapPtrTest: map[uint8]*TestMapData{}}
 	fields := filteredMapPartial.ApplyTo(&mapState)
-	assert.Equal(t, [][]any{{"MapPtrTest", uint8(5)}}, fields)
+	assert.Equal(t, [][]any{{TestStateFieldIDMapPtrTest, uint8(5)}}, fields)
 	assert.Equal(t, mapValueFive, mapState.MapPtrTest[5])
 	assert.Nil(t, mapState.MapPtrTest[6])
 	assert.Empty(t, mapState.BaseField)
 
-	filteredStructPartial, ok := restream.FilterPartialToFields(partial, [][]any{{"BaseStruct", "Number"}})
+	filteredStructPartial, ok := restream.FilterPartialToFields(partial, [][]any{{TestStateFieldIDBaseStruct, TestMapDataFieldIDNumber}})
 	assert.True(t, ok)
 	structState := TestState{MapPtrTest: map[uint8]*TestMapData{}}
 	fields = filteredStructPartial.ApplyTo(&structState)
-	assert.Equal(t, [][]any{{"BaseStruct", "Number"}}, fields)
+	assert.Equal(t, [][]any{{TestStateFieldIDBaseStruct, TestMapDataFieldIDNumber}}, fields)
 	assert.Equal(t, uint(9), structState.BaseStruct.Number)
 	assert.Empty(t, structState.MapPtrTest)
 	assert.Empty(t, structState.BaseField)
@@ -658,10 +661,10 @@ func TestWholePartialFieldPathCascadesToNarrowSubscription(t *testing.T) {
 
 	wholeState := TestState{MapPtrTest: map[uint8]*TestMapData{}}
 	fields := wholePartial.ApplyTo(&wholeState)
-	assert.Equal(t, [][]any{{"MapPtrTest"}}, fields)
-	assert.True(t, restream.FieldPathAffectsSubscription(fields[0], []any{"MapPtrTest", uint8(5)}))
+	assert.Equal(t, [][]any{{TestStateFieldIDMapPtrTest}}, fields)
+	assert.True(t, restream.FieldPathAffectsSubscription(fields[0], []any{TestStateFieldIDMapPtrTest, uint8(5)}))
 
-	filteredPartial, ok := restream.FilterPartialToFields(wholePartial, [][]any{{"MapPtrTest", uint8(5)}})
+	filteredPartial, ok := restream.FilterPartialToFields(wholePartial, [][]any{{TestStateFieldIDMapPtrTest, uint8(5)}})
 	assert.True(t, ok)
 	filteredState := TestState{
 		MapPtrTest: map[uint8]*TestMapData{
@@ -670,29 +673,32 @@ func TestWholePartialFieldPathCascadesToNarrowSubscription(t *testing.T) {
 		},
 	}
 	fields = filteredPartial.ApplyTo(&filteredState)
-	assert.Equal(t, [][]any{{"MapPtrTest", uint8(5)}}, fields)
+	assert.Equal(t, [][]any{{TestStateFieldIDMapPtrTest, uint8(5)}}, fields)
 	assert.Equal(t, mapValueFive, filteredState.MapPtrTest[5])
 	assert.Equal(t, uint(2), filteredState.MapPtrTest[6].Number)
 
-	deletePartial, ok := restream.FilterPartialToFields(wholePartial, [][]any{{"MapPtrTest", uint8(7)}})
+	deletePartial, ok := restream.FilterPartialToFields(wholePartial, [][]any{{TestStateFieldIDMapPtrTest, uint8(7)}})
 	assert.True(t, ok)
 	deleteState := TestState{MapPtrTest: map[uint8]*TestMapData{7: {Number: 7}}}
 	fields = deletePartial.ApplyTo(&deleteState)
-	assert.Equal(t, [][]any{{"MapPtrTest", uint8(7)}}, fields)
+	assert.Equal(t, [][]any{{TestStateFieldIDMapPtrTest, uint8(7)}}, fields)
 	assert.Nil(t, deleteState.MapPtrTest[7])
 }
 
 func TestFieldPathAffectsSubscriptionCascadesBothDirections(t *testing.T) {
-	assert.True(t, restream.FieldPathAffectsSubscription([]any{}, []any{"MapPtrTest", uint8(5)}))
-	assert.True(t, restream.FieldPathAffectsSubscription([]any{"MapPtrTest"}, []any{"MapPtrTest", uint8(5)}))
-	assert.True(t, restream.FieldPathAffectsSubscription([]any{"MapPtrTest", uint8(5), "Number"}, []any{"MapPtrTest", uint8(5)}))
-	assert.True(t, restream.FieldPathAffectsSubscription([]any{"MapPtrTest", uint8(5)}, []any{"MapPtrTest"}))
-	assert.False(t, restream.FieldPathAffectsSubscription([]any{"MapPtrTest", uint8(6)}, []any{"MapPtrTest", uint8(5)}))
-	assert.False(t, restream.FieldPathAffectsSubscription([]any{"BaseStruct"}, []any{"MapPtrTest", uint8(5)}))
+	assert.True(t, restream.FieldPathAffectsSubscription([]any{}, []any{TestStateFieldIDMapPtrTest, uint8(5)}))
+	assert.True(t, restream.FieldPathAffectsSubscription([]any{TestStateFieldIDMapPtrTest}, []any{TestStateFieldIDMapPtrTest, uint8(5)}))
+	assert.True(t, restream.FieldPathAffectsSubscription(
+		[]any{TestStateFieldIDMapPtrTest, uint8(5), TestMapDataFieldIDNumber},
+		[]any{TestStateFieldIDMapPtrTest, uint8(5)},
+	))
+	assert.True(t, restream.FieldPathAffectsSubscription([]any{TestStateFieldIDMapPtrTest, uint8(5)}, []any{TestStateFieldIDMapPtrTest}))
+	assert.False(t, restream.FieldPathAffectsSubscription([]any{TestStateFieldIDMapPtrTest, uint8(6)}, []any{TestStateFieldIDMapPtrTest, uint8(5)}))
+	assert.False(t, restream.FieldPathAffectsSubscription([]any{TestStateFieldIDBaseStruct}, []any{TestStateFieldIDMapPtrTest, uint8(5)}))
 
-	assert.Equal(t, "mapPtrTest%&5%&number", restream.SubscriptionKeyFromFieldPath([]any{"MapPtrTest", uint8(5), "Number"}))
-	assert.Equal(t, []any{"MapPtrTest", "5", "Number"}, restream.FieldPathFromSubscriptionKey("mapPtrTest%&5%&Number"))
-	assert.Equal(t, [][]any{{}}, restream.ChildFieldsForField([][]any{{"number"}}, "Number"))
+	assert.Equal(t, "1%&5%&1", restream.SubscriptionKeyFromFieldPath([]any{TestStateFieldIDMapPtrTest, uint8(5), TestMapDataFieldIDNumber}))
+	assert.Equal(t, []any{"1", "5", "1"}, restream.FieldPathFromSubscriptionKey("~1%&1%&5%&1"))
+	assert.Equal(t, [][]any{{}}, restream.ChildFieldsForFieldID([][]any{{TestMapDataFieldIDNumber}}, TestMapDataFieldIDNumber))
 }
 
 func TestStoreRegistryCanonicalizesFieldIDSubscriptionKeys(t *testing.T) {
@@ -717,12 +723,12 @@ func TestStoreRegistryCanonicalizesFieldIDSubscriptionKeys(t *testing.T) {
 
 	keys, err := registry.GetActiveStoreSubscriptionKeys(store.GetName())
 	assert.NoError(t, err)
-	assert.Equal(t, []string{"mapPtrTest%&5%&number"}, keys)
+	assert.Equal(t, []string{"~1%&1%&5%&1"}, keys)
 	activity, active, err := registry.GetStoreSubscriptionActivity(store.GetName(), fieldIDKey)
 	assert.NoError(t, err)
 	assert.True(t, active)
 	assert.Equal(t, 1, activity.ReferenceCount)
-	assert.Equal(t, []string{"mapPtrTest%&5%&number:start"}, transitions)
+	assert.Equal(t, []string{"~1%&1%&5%&1:start"}, transitions)
 
 	serializable, exists, err := registry.GetPartialSnapshotForSubscriptionKey(
 		store.GetName(),
@@ -734,13 +740,13 @@ func TestStoreRegistryCanonicalizesFieldIDSubscriptionKeys(t *testing.T) {
 	partial, ok := serializable.(*TestStatePartial)
 	assert.True(t, ok)
 	partialState := TestState{MapPtrTest: map[uint8]*TestMapData{}}
-	assert.Equal(t, [][]any{{"MapPtrTest", uint8(5), "Number"}}, partial.ApplyTo(&partialState))
+	assert.Equal(t, [][]any{{TestStateFieldIDMapPtrTest, uint8(5), TestMapDataFieldIDNumber}}, partial.ApplyTo(&partialState))
 	assert.Equal(t, uint(42), partialState.MapPtrTest[5].Number)
 
 	assert.NoError(t, registry.StopListeningToStoreKey(store.GetName(), fieldIDKey))
 	assert.Equal(t, []string{
-		"mapPtrTest%&5%&number:start",
-		"mapPtrTest%&5%&number:stop",
+		"~1%&1%&5%&1:start",
+		"~1%&1%&5%&1:stop",
 	}, transitions)
 }
 
@@ -755,11 +761,11 @@ func TestRelayStoreProvidesKeyedInitialPartial(t *testing.T) {
 		BaseField: "unused",
 	}, restream.AccessLevelPublic)
 
-	partial := getRelayStorePartialForKey(t, relayStore, "mapPtrTest%&5")
+	partial := getRelayStorePartialForKey(t, relayStore, "~1%&1%&5")
 
 	state := TestState{MapPtrTest: map[uint8]*TestMapData{}}
 	fields := partial.ApplyTo(&state)
-	assert.Equal(t, [][]any{{"MapPtrTest", uint8(5)}}, fields)
+	assert.Equal(t, [][]any{{TestStateFieldIDMapPtrTest, uint8(5)}}, fields)
 	assert.Equal(t, mapValueFive, state.MapPtrTest[5])
 	assert.Nil(t, state.MapPtrTest[6])
 	assert.Empty(t, state.BaseField)
@@ -772,13 +778,13 @@ func TestRelayStoreKeyedInitialPartialDeletesMissingMapKey(t *testing.T) {
 		},
 	}, restream.AccessLevelPublic)
 
-	partial := getRelayStorePartialForKey(t, relayStore, "mapPtrTest%&7")
+	partial := getRelayStorePartialForKey(t, relayStore, "~1%&1%&7")
 
 	state := TestState{MapPtrTest: map[uint8]*TestMapData{
 		7: {Number: 7},
 	}}
 	fields := partial.ApplyTo(&state)
-	assert.Equal(t, [][]any{{"MapPtrTest", uint8(7)}}, fields)
+	assert.Equal(t, [][]any{{TestStateFieldIDMapPtrTest, uint8(7)}}, fields)
 	assert.Nil(t, state.MapPtrTest[7])
 	assert.Equal(t, uint(0), state.BaseStruct.Number)
 }
@@ -792,11 +798,11 @@ func TestRelayStoreKeyedInitialPartialSupportsNestedMapValue(t *testing.T) {
 		BaseField: "unused",
 	}, restream.AccessLevelPublic)
 
-	partial := getRelayStorePartialForKey(t, relayStore, "mapPtrTest%&5%&number")
+	partial := getRelayStorePartialForKey(t, relayStore, "~1%&1%&5%&1")
 
 	state := TestState{MapPtrTest: map[uint8]*TestMapData{}}
 	fields := partial.ApplyTo(&state)
-	assert.Equal(t, [][]any{{"MapPtrTest", uint8(5), "Number"}}, fields)
+	assert.Equal(t, [][]any{{TestStateFieldIDMapPtrTest, uint8(5), TestMapDataFieldIDNumber}}, fields)
 	assert.Equal(t, uint(5), state.MapPtrTest[5].Number)
 	assert.Empty(t, state.MapPtrTest[5].Data)
 	assert.Nil(t, state.MapPtrTest[6])
@@ -810,20 +816,20 @@ func TestGeneratedStatePartialForFieldsSupportsNestedStructValues(t *testing.T) 
 		BaseStructPtr: &TestMapData{Number: 11, Data: []byte{4, 5, 6}},
 	}
 
-	baseStructPartial, exists := state.PartialForFields([][]any{{"baseStruct", "number"}})
+	baseStructPartial, exists := state.PartialForFields([][]any{{TestStateFieldIDBaseStruct, TestMapDataFieldIDNumber}})
 	assert.True(t, exists)
 	baseStructTarget := TestState{}
 	fields := baseStructPartial.ApplyTo(&baseStructTarget)
-	assert.Equal(t, [][]any{{"BaseStruct", "Number"}}, fields)
+	assert.Equal(t, [][]any{{TestStateFieldIDBaseStruct, TestMapDataFieldIDNumber}}, fields)
 	assert.Equal(t, uint(9), baseStructTarget.BaseStruct.Number)
 	assert.Empty(t, baseStructTarget.BaseStruct.Data)
 	assert.Empty(t, baseStructTarget.BaseField)
 
-	ptrPartial, exists := state.PartialForFields([][]any{{"baseStructPtr", "number"}})
+	ptrPartial, exists := state.PartialForFields([][]any{{TestStateFieldIDBaseStructPtr, TestMapDataFieldIDNumber}})
 	assert.True(t, exists)
 	ptrTarget := TestState{}
 	fields = ptrPartial.ApplyTo(&ptrTarget)
-	assert.Equal(t, [][]any{{"BaseStructPtr", "Number"}}, fields)
+	assert.Equal(t, [][]any{{TestStateFieldIDBaseStructPtr, TestMapDataFieldIDNumber}}, fields)
 	if assert.NotNil(t, ptrTarget.BaseStructPtr) {
 		assert.Equal(t, uint(11), ptrTarget.BaseStructPtr.Number)
 		assert.Empty(t, ptrTarget.BaseStructPtr.Data)
@@ -832,12 +838,12 @@ func TestGeneratedStatePartialForFieldsSupportsNestedStructValues(t *testing.T) 
 
 func TestGeneratedStatePartialForFieldsClearsNilPointerForNestedPath(t *testing.T) {
 	state := &TestState{}
-	partial, exists := state.PartialForFields([][]any{{"baseStructPtr", "number"}})
+	partial, exists := state.PartialForFields([][]any{{TestStateFieldIDBaseStructPtr, TestMapDataFieldIDNumber}})
 	assert.True(t, exists)
 
 	target := TestState{BaseStructPtr: &TestMapData{Number: 22}}
 	fields := partial.ApplyTo(&target)
-	assert.Equal(t, [][]any{{"BaseStructPtr"}}, fields)
+	assert.Equal(t, [][]any{{TestStateFieldIDBaseStructPtr}}, fields)
 	assert.Nil(t, target.BaseStructPtr)
 }
 
@@ -848,27 +854,27 @@ func TestGeneratedStatePartialForFieldsSupportsArrayIndexes(t *testing.T) {
 		PtrItems: []*TestMapData{nil, {Number: 4, Data: []byte{7}}},
 	}
 
-	numberPartial, exists := state.PartialForFields([][]any{{"numbers", "2"}})
+	numberPartial, exists := state.PartialForFields([][]any{{TestArrayStateFieldIDNumbers, "2"}})
 	assert.True(t, exists)
 	numberTarget := TestArrayState{}
 	fields := numberPartial.ApplyTo(&numberTarget)
-	assert.Equal(t, [][]any{{"Numbers", 2}}, fields)
+	assert.Equal(t, [][]any{{TestArrayStateFieldIDNumbers, 2}}, fields)
 	assert.Equal(t, []uint{0, 0, 8}, numberTarget.Numbers)
 
-	itemPartial, exists := state.PartialForFields([][]any{{"items", "1", "number"}})
+	itemPartial, exists := state.PartialForFields([][]any{{TestArrayStateFieldIDItems, "1", TestMapDataFieldIDNumber}})
 	assert.True(t, exists)
 	itemTarget := TestArrayState{}
 	fields = itemPartial.ApplyTo(&itemTarget)
-	assert.Equal(t, [][]any{{"Items", 1, "Number"}}, fields)
+	assert.Equal(t, [][]any{{TestArrayStateFieldIDItems, 1, TestMapDataFieldIDNumber}}, fields)
 	assert.Len(t, itemTarget.Items, 2)
 	assert.Equal(t, uint(2), itemTarget.Items[1].Number)
 	assert.Empty(t, itemTarget.Items[1].Data)
 
-	nilPtrPartial, exists := state.PartialForFields([][]any{{"ptrItems", "0", "number"}})
+	nilPtrPartial, exists := state.PartialForFields([][]any{{TestArrayStateFieldIDPtrItems, "0", TestMapDataFieldIDNumber}})
 	assert.True(t, exists)
 	nilPtrTarget := TestArrayState{PtrItems: []*TestMapData{{Number: 99}}}
 	fields = nilPtrPartial.ApplyTo(&nilPtrTarget)
-	assert.Equal(t, [][]any{{"PtrItems", 0}}, fields)
+	assert.Equal(t, [][]any{{TestArrayStateFieldIDPtrItems, 0}}, fields)
 	assert.Nil(t, nilPtrTarget.PtrItems[0])
 }
 
@@ -888,28 +894,28 @@ func TestRelayStoreForwardsKeyedSubscriptionLifecycle(t *testing.T) {
 		calls = append(calls, action+":"+storeName+":"+key)
 	})
 
-	relayStore.SubscriptionStartedForKey("values%&a")
-	relayStore.SubscriptionStartedForKey("values%&a")
-	relayStore.SubscriptionStartedForKey("values%&b")
-	assert.Equal(t, []string{"values%&a", "values%&b"}, relayStore.ActiveSubscriptionKeys())
+	relayStore.SubscriptionStartedForKey("~1%&1%&a")
+	relayStore.SubscriptionStartedForKey("~1%&1%&a")
+	relayStore.SubscriptionStartedForKey("~1%&1%&b")
+	assert.Equal(t, []string{"~1%&1%&a", "~1%&1%&b"}, relayStore.ActiveSubscriptionKeys())
 	assert.Equal(t, []string{
-		"subscribe:relay-test:values%&a",
-		"subscribe:relay-test:values%&b",
+		"subscribe:relay-test:~1%&1%&a",
+		"subscribe:relay-test:~1%&1%&b",
 	}, calls)
 
-	relayStore.SubscriptionEndedForKey("values%&a")
-	assert.Equal(t, []string{"values%&a", "values%&b"}, relayStore.ActiveSubscriptionKeys())
+	relayStore.SubscriptionEndedForKey("~1%&1%&a")
+	assert.Equal(t, []string{"~1%&1%&a", "~1%&1%&b"}, relayStore.ActiveSubscriptionKeys())
 	assert.Equal(t, 2, len(calls))
 
-	relayStore.SubscriptionEndedForKey("values%&a")
-	relayStore.SubscriptionEndedForKey("values%&missing")
-	relayStore.SubscriptionEndedForKey("values%&b")
+	relayStore.SubscriptionEndedForKey("~1%&1%&a")
+	relayStore.SubscriptionEndedForKey("~1%&1%&missing")
+	relayStore.SubscriptionEndedForKey("~1%&1%&b")
 	assert.Empty(t, relayStore.ActiveSubscriptionKeys())
 	assert.Equal(t, []string{
-		"subscribe:relay-test:values%&a",
-		"subscribe:relay-test:values%&b",
-		"unsubscribe:relay-test:values%&a",
-		"unsubscribe:relay-test:values%&b",
+		"subscribe:relay-test:~1%&1%&a",
+		"subscribe:relay-test:~1%&1%&b",
+		"unsubscribe:relay-test:~1%&1%&a",
+		"unsubscribe:relay-test:~1%&1%&b",
 	}, calls)
 }
 
@@ -963,14 +969,14 @@ func TestRelayStoreMergedPartialFieldPathsCoverMergedChanges(t *testing.T) {
 	assert.True(t, relayStore.GetStoreData().(restream.StoreDataOutputWaiter).WaitForOutputIdle(time.Second))
 
 	assert.ElementsMatch(t, [][]any{
-		{"MapPtrTest", uint8(5), "Number"},
-		{"MapPtrTest", uint8(6)},
-		{"MapPtrTest", uint8(7)},
-		{"MapPtrTest", uint8(8)},
-		{"MapPtrTest", uint8(9)},
-		{"BaseField"},
-		{"BaseStruct", "Number"},
-		{"BaseStructPtr"},
+		{TestStateFieldIDMapPtrTest, uint8(5), TestMapDataFieldIDNumber},
+		{TestStateFieldIDMapPtrTest, uint8(6)},
+		{TestStateFieldIDMapPtrTest, uint8(7)},
+		{TestStateFieldIDMapPtrTest, uint8(8)},
+		{TestStateFieldIDMapPtrTest, uint8(9)},
+		{TestStateFieldIDBaseField},
+		{TestStateFieldIDBaseStruct, TestMapDataFieldIDNumber},
+		{TestStateFieldIDBaseStructPtr},
 	}, callbackFields)
 }
 
@@ -1100,33 +1106,33 @@ func TestSubs(t *testing.T) {
 	store.Sd = restream.NewStoreData[TestA, *TestA, *TestAPartial](&store, &state)
 
 	assert.Panics(t, func() {
-		store.Sd.SubscribeToField([]any{"A"}, func([]any, any) {})
+		store.Sd.SubscribeToField([]any{TestAFieldIDA}, func([]any, any) {})
 	})
 
 	aCalls := 0
 	var lastACall *TestB
-	store.Sd.SubscribeToField([]any{"A"}, func(_ []any, d TestB) {
+	store.Sd.SubscribeToField([]any{TestAFieldIDA}, func(_ []any, d TestB) {
 		aCalls++
 		lastACall = &d
 	})
 	bCalls := 0
 	var lastBCall *TestC
-	store.Sd.SubscribeToField([]any{"A", "A"}, func(_ []any, d TestC) {
+	store.Sd.SubscribeToField([]any{TestAFieldIDA, TestBFieldIDA}, func(_ []any, d TestC) {
 		bCalls++
 		lastBCall = &d
 	})
 	cCalls := 0
 	var lastCCall *int
-	store.Sd.SubscribeToField([]any{"A", "A", "A"}, func(_ []any, d int) {
+	store.Sd.SubscribeToField([]any{TestAFieldIDA, TestBFieldIDA, TestCFieldIDA}, func(_ []any, d int) {
 		cCalls++
 		lastCCall = &d
 	})
 	aabCalled := false
-	store.Sd.SubscribeToField([]any{"A", "A", "B"}, func(_ []any) {
+	store.Sd.SubscribeToField([]any{TestAFieldIDA, TestBFieldIDA, TestCFieldIDB}, func(_ []any) {
 		aabCalled = true
 	})
 	aab2Called := false
-	store.Sd.SubscribeToField([]any{"A", "A", "B"}, func() {
+	store.Sd.SubscribeToField([]any{TestAFieldIDA, TestBFieldIDA, TestCFieldIDB}, func() {
 		aab2Called = true
 	})
 

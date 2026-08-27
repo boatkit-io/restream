@@ -157,9 +157,14 @@ type viewerSocketTestState struct {
 }
 
 type viewerSocketTestPartial struct {
-	Values *PartialMap[string, int]
-	Other  *int
+	Values *PartialMap[string, int] `restream:",fID=1"`
+	Other  *int                     `restream:",fID=2"`
 }
+
+const (
+	viewerSocketTestStateFieldIDValues byte = 1
+	viewerSocketTestStateFieldIDOther  byte = 2
+)
 
 var viewerSocketTestStateFieldInfo = []FieldInfo{
 	{
@@ -221,7 +226,7 @@ func (s *viewerSocketTestState) PartialForFields(fields [][]any) (Partial, bool)
 		}
 	}
 
-	for _, field := range ChildFieldsForField(fields, "Values") {
+	for _, field := range ChildFieldsForFieldID(fields, viewerSocketTestStateFieldIDValues) {
 		if ret.Values == nil {
 			ret.Values = NewPartialMap[string, int]()
 		}
@@ -246,7 +251,7 @@ func (s *viewerSocketTestState) PartialForFields(fields [][]any) (Partial, bool)
 		included = true
 	}
 
-	if len(ChildFieldsForField(fields, "Other")) > 0 {
+	if len(ChildFieldsForFieldID(fields, viewerSocketTestStateFieldIDOther)) > 0 {
 		ret.Other = Ptr(s.Other)
 		included = true
 	}
@@ -372,12 +377,12 @@ func (p *viewerSocketTestPartial) ApplyTo(por any) [][]any {
 	if p.Values != nil {
 		fs := p.Values.ApplyTo(&po.Values)
 		for _, f := range fs {
-			ret = append(ret, append([]any{"Values"}, f...))
+			ret = append(ret, append([]any{viewerSocketTestStateFieldIDValues}, f...))
 		}
 	}
 	if p.Other != nil {
 		po.Other = *p.Other
-		ret = append(ret, []any{"Other"})
+		ret = append(ret, []any{viewerSocketTestStateFieldIDOther})
 	}
 	return ret
 }
@@ -391,7 +396,7 @@ func (p *viewerSocketTestPartial) FilterToFields(fields [][]any) (Partial, bool)
 		}
 	}
 	if p.Values != nil {
-		childFields := ChildFieldsForField(fields, "Values")
+		childFields := ChildFieldsForFieldID(fields, viewerSocketTestStateFieldIDValues)
 		if len(childFields) > 0 {
 			filtered, ok := FilterPartialToFields(p.Values, childFields)
 			if ok {
@@ -401,7 +406,7 @@ func (p *viewerSocketTestPartial) FilterToFields(fields [][]any) (Partial, bool)
 		}
 	}
 	if p.Other != nil {
-		childFields := ChildFieldsForField(fields, "Other")
+		childFields := ChildFieldsForFieldID(fields, viewerSocketTestStateFieldIDOther)
 		if len(childFields) > 0 {
 			ret.Other = p.Other
 			included = true
@@ -419,27 +424,27 @@ func TestViewerSocketFiltersDifferentKeySubscriptionsIndependently(t *testing.T)
 	}
 	fields := update.ApplyTo(&viewerSocketTestState{Values: map[string]int{}})
 
-	partialA, ok := testSocketWithSubs("values%&a").
+	partialA, ok := testSocketWithSubs("~1%&1%&a").
 		partialForSubscriptions(viewerSocketTestStoreName, fields, update)
 	if !ok {
 		t.Fatal("expected subscription for values/a to receive a partial")
 	}
 	stateA := viewerSocketTestState{Values: map[string]int{}}
 	fieldsA := partialA.ApplyTo(&stateA)
-	assertFieldsContainOnly(t, fieldsA, []any{"Values", "a"})
+	assertFieldsContainOnly(t, fieldsA, []any{viewerSocketTestStateFieldIDValues, "a"})
 	assertMapEqual(t, map[string]int{"a": 1}, stateA.Values)
 
-	partialB, ok := testSocketWithSubs("values%&b").
+	partialB, ok := testSocketWithSubs("~1%&1%&b").
 		partialForSubscriptions(viewerSocketTestStoreName, fields, update)
 	if !ok {
 		t.Fatal("expected subscription for values/b to receive a partial")
 	}
 	stateB := viewerSocketTestState{Values: map[string]int{}}
 	fieldsB := partialB.ApplyTo(&stateB)
-	assertFieldsContainOnly(t, fieldsB, []any{"Values", "b"})
+	assertFieldsContainOnly(t, fieldsB, []any{viewerSocketTestStateFieldIDValues, "b"})
 	assertMapEqual(t, map[string]int{"b": 2}, stateB.Values)
 
-	if _, ok := testSocketWithSubs("values%&d").
+	if _, ok := testSocketWithSubs("~1%&1%&d").
 		partialForSubscriptions(viewerSocketTestStoreName, fields, update); ok {
 		t.Fatal("unexpected partial for an unrelated key subscription")
 	}
@@ -454,26 +459,26 @@ func TestViewerSocketBroadMapUpdateCascadesToNarrowKeySubscriptions(t *testing.T
 			}),
 	}
 	fields := update.ApplyTo(&viewerSocketTestState{Values: map[string]int{}})
-	assertFieldsContainOnly(t, fields, []any{"Values"})
+	assertFieldsContainOnly(t, fields, []any{viewerSocketTestStateFieldIDValues})
 
-	partialA, ok := testSocketWithSubs("values%&a").
+	partialA, ok := testSocketWithSubs("~1%&1%&a").
 		partialForSubscriptions(viewerSocketTestStoreName, fields, update)
 	if !ok {
 		t.Fatal("expected broad map update to match values/a")
 	}
 	stateA := viewerSocketTestState{Values: map[string]int{"a": 10, "b": 20, "c": 30}}
 	fieldsA := partialA.ApplyTo(&stateA)
-	assertFieldsContainOnly(t, fieldsA, []any{"Values", "a"})
+	assertFieldsContainOnly(t, fieldsA, []any{viewerSocketTestStateFieldIDValues, "a"})
 	assertMapEqual(t, map[string]int{"a": 1, "b": 20, "c": 30}, stateA.Values)
 
-	partialC, ok := testSocketWithSubs("values%&c").
+	partialC, ok := testSocketWithSubs("~1%&1%&c").
 		partialForSubscriptions(viewerSocketTestStoreName, fields, update)
 	if !ok {
 		t.Fatal("expected broad map update to match deleted values/c")
 	}
 	stateC := viewerSocketTestState{Values: map[string]int{"a": 10, "b": 20, "c": 30}}
 	fieldsC := partialC.ApplyTo(&stateC)
-	assertFieldsContainOnly(t, fieldsC, []any{"Values", "c"})
+	assertFieldsContainOnly(t, fieldsC, []any{viewerSocketTestStateFieldIDValues, "c"})
 	assertMapEqual(t, map[string]int{"a": 10, "b": 20}, stateC.Values)
 }
 
@@ -485,14 +490,14 @@ func TestViewerSocketRootUpdateCascadesToNarrowKeySubscriptions(t *testing.T) {
 		Other: Ptr(3),
 	}
 
-	partialA, ok := testSocketWithSubs("values%&a").
+	partialA, ok := testSocketWithSubs("~1%&1%&a").
 		partialForSubscriptions(viewerSocketTestStoreName, [][]any{{}}, update)
 	if !ok {
 		t.Fatal("expected root update to match values/a")
 	}
 	stateA := viewerSocketTestState{Values: map[string]int{}}
 	fieldsA := partialA.ApplyTo(&stateA)
-	assertFieldsContainOnly(t, fieldsA, []any{"Values", "a"})
+	assertFieldsContainOnly(t, fieldsA, []any{viewerSocketTestStateFieldIDValues, "a"})
 	assertMapEqual(t, map[string]int{"a": 1}, stateA.Values)
 	if stateA.Other != 0 {
 		t.Fatalf("expected unrelated field to remain untouched, got %d", stateA.Other)
@@ -577,13 +582,13 @@ func TestViewerSocketKeyedCatchupUsesRelayStorePartial(t *testing.T) {
 	}
 	state := &viewerSocketTestState{Values: map[string]int{}}
 	fields := partial.ApplyTo(state)
-	assertFieldsContainOnly(t, fields, []any{"Values", sourceKey})
+	assertFieldsContainOnly(t, fields, []any{viewerSocketTestStateFieldIDValues, sourceKey})
 	assertMapEqual(t, map[string]int{sourceKey: 10}, state.Values)
 
-	if _, subscribed := socket.storeSubscriptions[viewerSocketTestStoreName]["values%&"+sourceKey]; !subscribed {
+	if _, subscribed := socket.storeSubscriptions[viewerSocketTestStoreName]["~1%&1%&"+sourceKey]; !subscribed {
 		t.Fatalf("expected socket to track keyed subscription for %s", sourceKey)
 	}
-	if keys := store.ActiveSubscriptionKeys(); len(keys) != 1 || keys[0] != "values%&"+sourceKey {
+	if keys := store.ActiveSubscriptionKeys(); len(keys) != 1 || keys[0] != "~1%&1%&"+sourceKey {
 		t.Fatalf("relay forwarded subscription keys = %#v", keys)
 	}
 
@@ -631,7 +636,7 @@ func TestViewerSocketRapidKeyedCatchupsRemainDeliverable(t *testing.T) {
 		socket.onStoreSubscription(StoreSubscriptionMessage{
 			StoreName: viewerSocketTestStoreName,
 			Action:    Subscribe,
-			Key:       "values%&" + key,
+			Key:       "~1%&1%&" + key,
 		})
 	}
 
@@ -676,7 +681,7 @@ func TestViewerSocketFullStoreModeKeepsCompleteClientState(t *testing.T) {
 	socket.onStoreSubscription(StoreSubscriptionMessage{
 		StoreName: viewerSocketTestStoreName,
 		Action:    Subscribe,
-		Key:       "values%&a",
+		Key:       "~1%&1%&a",
 	})
 
 	socket.sessionBufferMutex.Lock()
@@ -741,7 +746,7 @@ func TestViewerSocketQueuesKeyedCatchupBeforeConcurrentLiveUpdate(t *testing.T) 
 	socket.onStoreSubscription(StoreSubscriptionMessage{
 		StoreName: viewerSocketTestStoreName,
 		Action:    Subscribe,
-		Key:       "values%&" + sourceKey,
+		Key:       "~1%&1%&" + sourceKey,
 	})
 
 	clientState := &viewerSocketTestState{Values: map[string]int{}}
@@ -791,7 +796,7 @@ func TestViewerSocketRejectsSubscriptionBelowStoreMinimumAccess(t *testing.T) {
 	socket.onStoreSubscription(StoreSubscriptionMessage{
 		StoreName: viewerSocketTestStoreName,
 		Action:    Subscribe,
-		Key:       "values%&a",
+		Key:       "~1%&1%&a",
 	})
 
 	emitted := resolveEmitMessage(t, <-socket.emitQueue)
@@ -801,7 +806,7 @@ func TestViewerSocketRejectsSubscriptionBelowStoreMinimumAccess(t *testing.T) {
 	}
 	if rejection.SubscriptionType != "store" ||
 		rejection.StoreName != viewerSocketTestStoreName ||
-		rejection.Key != "values%&a" ||
+		rejection.Key != "~1%&1%&a" ||
 		!strings.Contains(rejection.Error, "requires access level 2, caller has 1") {
 		t.Fatalf("denied subscription rejection = %#v", rejection)
 	}
@@ -1121,7 +1126,7 @@ func TestViewerSocketRelaysAppliedFullStateAsFreshKeyedSnapshots(t *testing.T) {
 		sr:        registry,
 		emitQueue: make(chan emitMessage, 1),
 		storeSubscriptions: map[string]map[string]int{
-			viewerSocketTestStoreName: {"values%&a": 1},
+			viewerSocketTestStoreName: {"~1%&1%&a": 1},
 		},
 	}
 	subscriptionID := registry.SubscribeToFullStateApplies(socket.FullStateCallback)
@@ -1149,7 +1154,7 @@ func TestViewerSocketRelaysAppliedFullStateAsFreshKeyedSnapshots(t *testing.T) {
 	}
 	clientState := &viewerSocketTestState{Values: map[string]int{}}
 	fields := partial.ApplyTo(clientState)
-	assertFieldsContainOnly(t, fields, []any{"Values", "a"})
+	assertFieldsContainOnly(t, fields, []any{viewerSocketTestStateFieldIDValues, "a"})
 	assertMapEqual(t, map[string]int{"a": 42}, clientState.Values)
 	if clientState.Other != 0 {
 		t.Fatalf("unsubscribed Other field = %d, want 0", clientState.Other)

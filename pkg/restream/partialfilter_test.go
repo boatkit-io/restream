@@ -92,19 +92,15 @@ func TestNormalizeFieldIDSubscriptionKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalize field-ID key: %v", err)
 	}
-	if got != "devices%&CAN0%&count" {
+	if got != key {
 		t.Fatalf("normalized key = %q", got)
 	}
 }
 
-func TestNormalizeFieldIDSubscriptionKeyKeepsLegacyKeys(t *testing.T) {
+func TestNormalizeFieldIDSubscriptionKeyRejectsLegacyKeys(t *testing.T) {
 	const key = "devices%&CAN0%&count"
-	got, err := normalizeFieldIDSubscriptionKey(key, reflect.TypeFor[fieldIDSubscriptionTestState]())
-	if err != nil {
-		t.Fatalf("normalize legacy key: %v", err)
-	}
-	if got != key {
-		t.Fatalf("normalized legacy key = %q", got)
+	if _, err := normalizeFieldIDSubscriptionKey(key, reflect.TypeFor[fieldIDSubscriptionTestState]()); err == nil {
+		t.Fatal("expected legacy key to fail")
 	}
 }
 

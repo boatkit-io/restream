@@ -425,7 +425,7 @@ func TestConnectionSendStoreSubscriptionWritesPacket(t *testing.T) {
 	defer cleanup()
 
 	conn := NewConnection(serverConn)
-	if err := conn.SendStoreSubscription("TestStore", "values%&a", true); err != nil {
+	if err := conn.SendStoreSubscription("TestStore", "~1%&1", true); err != nil {
 		t.Fatalf("SendStoreSubscription failed: %v", err)
 	}
 
@@ -444,7 +444,7 @@ func TestConnectionSendStoreSubscriptionWritesPacket(t *testing.T) {
 	if !ok {
 		t.Fatalf("store subscription packet type = %T, want *StoreSubscriptionPacket", packetRaw)
 	}
-	if packet.StoreName != "TestStore" || packet.Key != "values%&a" || packet.Action != protocol.StoreSubscribe {
+	if packet.StoreName != "TestStore" || packet.Key != "~1%&1" || packet.Action != protocol.StoreSubscribe {
 		t.Fatalf("store subscription packet = %+v, want TestStore values%%&a subscribe", packet)
 	}
 }
@@ -637,7 +637,7 @@ func TestServerAcceptConnReplaysActiveStoreSubscriptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetDevice failed: %v", err)
 	}
-	if err := device.StoreRegistry.ListeningToStoreKey("TestStore", "values%&a", restream.AccessLevelPublic); err != nil {
+	if err := device.StoreRegistry.ListeningToStoreKey("TestStore", "~1%&1", restream.AccessLevelPublic); err != nil {
 		t.Fatalf("ListeningToStoreKey failed: %v", err)
 	}
 	if err := device.EventDispatcher.ListeningToKeyedEvent("TestStore", "audio", "radio-a"); err != nil {
@@ -687,7 +687,7 @@ func TestServerAcceptConnReplaysActiveStoreSubscriptions(t *testing.T) {
 		t.Fatalf("replayed packet type = %T, want *StoreSubscriptionPacket", mustDecodePacket(t, subscriptionBytes))
 	}
 	if subscriptionPacket.StoreName != "TestStore" ||
-		subscriptionPacket.Key != "values%&a" ||
+		subscriptionPacket.Key != "~1%&1" ||
 		subscriptionPacket.Action != protocol.StoreSubscribe {
 		t.Fatalf("replayed subscription = %+v, want TestStore values%%&a subscribe", subscriptionPacket)
 	}
@@ -785,7 +785,7 @@ func TestCloudStoreSubscriptionForwardsToConnectedDevice(t *testing.T) {
 	defer cleanup()
 
 	device.DeviceConnected(NewConnection(serverConn))
-	if err := device.StoreRegistry.ListeningToStoreKey("TestStore", "values%&a", restream.AccessLevelPublic); err != nil {
+	if err := device.StoreRegistry.ListeningToStoreKey("TestStore", "~1%&1", restream.AccessLevelPublic); err != nil {
 		t.Fatalf("ListeningToStoreKey failed: %v", err)
 	}
 
@@ -798,12 +798,12 @@ func TestCloudStoreSubscriptionForwardsToConnectedDevice(t *testing.T) {
 		t.Fatalf("forwarded packet type = %T, want *StoreSubscriptionPacket", mustDecodePacket(t, subscriptionBytes))
 	}
 	if subscriptionPacket.StoreName != "TestStore" ||
-		subscriptionPacket.Key != "values%&a" ||
+		subscriptionPacket.Key != "~1%&1" ||
 		subscriptionPacket.Action != protocol.StoreSubscribe {
 		t.Fatalf("forwarded subscription = %+v, want TestStore values%%&a subscribe", subscriptionPacket)
 	}
 
-	if err := device.StoreRegistry.StopListeningToStoreKey("TestStore", "values%&a"); err != nil {
+	if err := device.StoreRegistry.StopListeningToStoreKey("TestStore", "~1%&1"); err != nil {
 		t.Fatalf("StopListeningToStoreKey failed: %v", err)
 	}
 	_, subscriptionBytes, err = clientConn.ReadMessage()
@@ -815,7 +815,7 @@ func TestCloudStoreSubscriptionForwardsToConnectedDevice(t *testing.T) {
 		t.Fatalf("forwarded packet type = %T, want *StoreSubscriptionPacket", mustDecodePacket(t, subscriptionBytes))
 	}
 	if subscriptionPacket.StoreName != "TestStore" ||
-		subscriptionPacket.Key != "values%&a" ||
+		subscriptionPacket.Key != "~1%&1" ||
 		subscriptionPacket.Action != protocol.StoreUnsubscribe {
 		t.Fatalf("forwarded subscription = %+v, want TestStore values%%&a unsubscribe", subscriptionPacket)
 	}
@@ -898,7 +898,7 @@ func TestCustomCloudImplementationSubscriptionForwardsToConnectedDevice(t *testi
 
 	if err := device.StoreRegistry.ListeningToStoreKey(
 		"CustomStore",
-		"pendingNotifications",
+		"~1%&1",
 		restream.AccessLevelPublic,
 	); err != nil {
 		t.Fatalf("ListeningToStoreKey failed: %v", err)
@@ -911,7 +911,7 @@ func TestCustomCloudImplementationSubscriptionForwardsToConnectedDevice(t *testi
 	if !ok {
 		t.Fatalf("forwarded packet type = %T, want *StoreSubscriptionPacket", mustDecodePacket(t, subscriptionBytes))
 	}
-	if packet.StoreName != "CustomStore" || packet.Key != "pendingNotifications" ||
+	if packet.StoreName != "CustomStore" || packet.Key != "~1%&1" ||
 		packet.Action != protocol.StoreSubscribe {
 		t.Fatalf("forwarded subscription = %+v", packet)
 	}

@@ -118,39 +118,39 @@ func TestStoreRegistryRefCountsDuplicateKeySubscriptions(t *testing.T) {
 		t.Fatalf("NewStoreRegistry failed: %v", err)
 	}
 
-	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "values%&a", AccessLevelPublic))
-	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "values%&a", AccessLevelPublic))
-	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "values%&b", AccessLevelPublic))
+	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "~1%&1%&a", AccessLevelPublic))
+	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "~1%&1%&a", AccessLevelPublic))
+	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "~1%&1%&b", AccessLevelPublic))
 
 	info := registry.storeMap[store.GetName()]
 	assertEqual(t, 3, info.ActiveSubCount)
-	assertEqual(t, 2, info.ActiveKeySubCount["values%&a"])
-	assertEqual(t, 1, info.ActiveKeySubCount["values%&b"])
+	assertEqual(t, 2, info.ActiveKeySubCount["~1%&1%&a"])
+	assertEqual(t, 1, info.ActiveKeySubCount["~1%&1%&b"])
 	assertEqual(t, 1, store.storeStarted)
 	assertEqual(t, 0, store.storeEnded)
-	assertEqualSlices(t, []string{"values%&a", "values%&b"}, store.keyStarted)
+	assertEqualSlices(t, []string{"~1%&1%&a", "~1%&1%&b"}, store.keyStarted)
 	assertEqualSlices(t, nil, store.keyEnded)
 
-	mustNoError(t, registry.StopListeningToStoreKey(store.GetName(), "values%&a"))
+	mustNoError(t, registry.StopListeningToStoreKey(store.GetName(), "~1%&1%&a"))
 	assertEqual(t, 2, info.ActiveSubCount)
-	assertEqual(t, 1, info.ActiveKeySubCount["values%&a"])
+	assertEqual(t, 1, info.ActiveKeySubCount["~1%&1%&a"])
 	assertEqualSlices(t, nil, store.keyEnded)
 
-	mustNoError(t, registry.StopListeningToStoreKey(store.GetName(), "values%&b"))
+	mustNoError(t, registry.StopListeningToStoreKey(store.GetName(), "~1%&1%&b"))
 	assertEqual(t, 1, info.ActiveSubCount)
-	_, hasB := info.ActiveKeySubCount["values%&b"]
+	_, hasB := info.ActiveKeySubCount["~1%&1%&b"]
 	assertEqual(t, false, hasB)
-	assertEqualSlices(t, []string{"values%&b"}, store.keyEnded)
+	assertEqualSlices(t, []string{"~1%&1%&b"}, store.keyEnded)
 	assertEqual(t, 0, store.storeEnded)
 
-	mustNoError(t, registry.StopListeningToStoreKey(store.GetName(), "values%&a"))
+	mustNoError(t, registry.StopListeningToStoreKey(store.GetName(), "~1%&1%&a"))
 	assertEqual(t, 0, info.ActiveSubCount)
-	_, hasA := info.ActiveKeySubCount["values%&a"]
+	_, hasA := info.ActiveKeySubCount["~1%&1%&a"]
 	assertEqual(t, false, hasA)
-	assertEqualSlices(t, []string{"values%&b", "values%&a"}, store.keyEnded)
+	assertEqualSlices(t, []string{"~1%&1%&b", "~1%&1%&a"}, store.keyEnded)
 	assertEqual(t, 1, store.storeEnded)
 
-	if err := registry.StopListeningToStoreKey(store.GetName(), "values%&a"); err == nil {
+	if err := registry.StopListeningToStoreKey(store.GetName(), "~1%&1%&a"); err == nil {
 		t.Fatal("expected double unsubscribe to fail")
 	}
 }
@@ -174,18 +174,18 @@ func TestStoreRegistryPublishesAggregateSubscriptionTransitions(t *testing.T) {
 		transitions = append(transitions, transition{key: key, subscribed: subscribed})
 	})
 
-	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "values%&a", AccessLevelPublic))
-	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "values%&a", AccessLevelPublic))
-	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "values%&b", AccessLevelPublic))
-	mustNoError(t, registry.StopListeningToStoreKey(store.GetName(), "values%&a"))
-	mustNoError(t, registry.StopListeningToStoreKey(store.GetName(), "values%&a"))
-	mustNoError(t, registry.StopListeningToStoreKey(store.GetName(), "values%&b"))
+	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "~1%&1%&a", AccessLevelPublic))
+	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "~1%&1%&a", AccessLevelPublic))
+	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "~1%&1%&b", AccessLevelPublic))
+	mustNoError(t, registry.StopListeningToStoreKey(store.GetName(), "~1%&1%&a"))
+	mustNoError(t, registry.StopListeningToStoreKey(store.GetName(), "~1%&1%&a"))
+	mustNoError(t, registry.StopListeningToStoreKey(store.GetName(), "~1%&1%&b"))
 
 	want := []transition{
-		{key: "values%&a", subscribed: true},
-		{key: "values%&b", subscribed: true},
-		{key: "values%&a", subscribed: false},
-		{key: "values%&b", subscribed: false},
+		{key: "~1%&1%&a", subscribed: true},
+		{key: "~1%&1%&b", subscribed: true},
+		{key: "~1%&1%&a", subscribed: false},
+		{key: "~1%&1%&b", subscribed: false},
 	}
 	if len(transitions) != len(want) {
 		t.Fatalf("transitions = %#v, want %#v", transitions, want)
@@ -214,8 +214,8 @@ func TestStoreRegistryTracksActiveKeySubscriptionActivity(t *testing.T) {
 
 	now := time.Date(2026, time.August, 9, 12, 0, 0, 0, time.UTC)
 	registry.now = func() time.Time { return now }
-	keyA := "values%&a"
-	keyB := "values%&b"
+	keyA := "~1%&1%&a"
+	keyB := "~1%&1%&b"
 
 	if _, active, err := registry.GetStoreSubscriptionActivity(store.GetName(), keyA); err != nil || active {
 		t.Fatalf("initial activity = active %t, error %v; want inactive", active, err)
@@ -236,7 +236,7 @@ func TestStoreRegistryTracksActiveKeySubscriptionActivity(t *testing.T) {
 
 	partialAt := now.Add(time.Second)
 	now = partialAt
-	registry.PartialCallback(store.GetName(), [][]any{{"Values", "a"}}, nil)
+	registry.PartialCallback(store.GetName(), [][]any{{byte(1), "a"}}, nil)
 	activityA, _, err = registry.GetStoreSubscriptionActivity(store.GetName(), keyA)
 	mustNoError(t, err)
 	assertEqual(t, partialAt, activityA.LastUpdateAt)
@@ -404,8 +404,8 @@ func TestStoreRegistrySubscriptionCallbacksRunOutsideSubscriptionMutex(t *testin
 		assertSubscriptionMutexUnlocked("SubscriptionEnded")
 	}
 
-	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "values%&a", AccessLevelPublic))
-	mustNoError(t, registry.StopListeningToStoreKey(store.GetName(), "values%&a"))
+	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "~1%&1%&a", AccessLevelPublic))
+	mustNoError(t, registry.StopListeningToStoreKey(store.GetName(), "~1%&1%&a"))
 }
 
 func TestStoreRegistryConcurrentKeySubscriptionUpdates(t *testing.T) {
@@ -482,7 +482,7 @@ func TestStoreRegistryRejectsInsufficientAccessForSubscription(t *testing.T) {
 		t.Fatalf("NewStoreRegistry failed: %v", err)
 	}
 
-	err = registry.ListeningToStoreKey(store.GetName(), "values%&a", AccessLevel(1))
+	err = registry.ListeningToStoreKey(store.GetName(), "~1%&1%&a", AccessLevel(1))
 	if !errors.Is(err, ErrInsufficientStoreAccess) {
 		t.Fatalf("ListeningToStoreKey error = %v, want ErrInsufficientStoreAccess", err)
 	}
@@ -493,11 +493,11 @@ func TestStoreRegistryRejectsInsufficientAccessForSubscription(t *testing.T) {
 	assertEqual(t, 0, store.storeStarted)
 	assertEqualSlices(t, nil, store.keyStarted)
 
-	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "values%&a", AccessLevel(2)))
+	mustNoError(t, registry.ListeningToStoreKey(store.GetName(), "~1%&1%&a", AccessLevel(2)))
 	assertEqual(t, 1, info.ActiveSubCount)
-	assertEqual(t, 1, info.ActiveKeySubCount["values%&a"])
+	assertEqual(t, 1, info.ActiveKeySubCount["~1%&1%&a"])
 	assertEqual(t, 1, store.storeStarted)
-	assertEqualSlices(t, []string{"values%&a"}, store.keyStarted)
+	assertEqualSlices(t, []string{"~1%&1%&a"}, store.keyStarted)
 }
 
 func TestStoreRegistryRejectsInsufficientAccessForKeyedPartialFetch(t *testing.T) {
@@ -508,12 +508,12 @@ func TestStoreRegistryRejectsInsufficientAccessForKeyedPartialFetch(t *testing.T
 		t.Fatalf("NewStoreRegistry failed: %v", err)
 	}
 
-	_, _, err = registry.GetSerializedPartialForSubscriptionKey(store.GetName(), "values%&a", AccessLevel(1))
+	_, _, err = registry.GetSerializedPartialForSubscriptionKey(store.GetName(), "~1%&1%&a", AccessLevel(1))
 	if !errors.Is(err, ErrInsufficientStoreAccess) {
 		t.Fatalf("GetSerializedPartialForSubscriptionKey error = %v, want ErrInsufficientStoreAccess", err)
 	}
 
-	partialBytes, exists, err := registry.GetSerializedPartialForSubscriptionKey(store.GetName(), "values%&a", AccessLevel(2))
+	partialBytes, exists, err := registry.GetSerializedPartialForSubscriptionKey(store.GetName(), "~1%&1%&a", AccessLevel(2))
 	if err != nil {
 		t.Fatalf("GetSerializedPartialForSubscriptionKey with enough access failed: %v", err)
 	}

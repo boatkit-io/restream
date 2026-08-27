@@ -49,8 +49,8 @@ export class TestC {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "A", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPrimitive(SerializationType.Int64, "int")},
-        {name: "B", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPrimitive(SerializationType.Int64, "int")},
+        {fieldID: 1, varInfo: new VarInfoPrimitive(SerializationType.Int64)},
+        {fieldID: 2, varInfo: new VarInfoPrimitive(SerializationType.Int64)},
     ];
 
     static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
@@ -101,8 +101,8 @@ export class TestCPartial {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "A", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Int64, "int"))},
-        {name: "B", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Int64, "int"))},
+        {fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Int64))},
+        {fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Int64))},
     ];
 
     static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
@@ -161,8 +161,8 @@ export class TestMapData {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "Number", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPrimitive(SerializationType.Uint64, "uint")},
-        {name: "Data", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoArray(false, new VarInfoPrimitive(SerializationType.Uint8, "byte"))},
+        {fieldID: 1, varInfo: new VarInfoPrimitive(SerializationType.Uint64)},
+        {fieldID: 2, varInfo: new VarInfoArray(false, new VarInfoPrimitive(SerializationType.Uint8))},
     ];
 
     static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
@@ -213,8 +213,8 @@ export class TestMapDataPartial {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "Number", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Uint64, "uint"))},
-        {name: "Data", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialArray", "restream", PartialArray, undefined, [new VarInfoPrimitive(SerializationType.Uint8, "byte")]))},
+        {fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Uint64))},
+        {fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoStruct(PartialArray, [new VarInfoPrimitive(SerializationType.Uint8)]))},
     ];
 
     static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
@@ -273,8 +273,8 @@ export class TestPrimitiveOptionalState {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "Primitive", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPrimitive(SerializationType.Uint32)},
-        {name: "Optional", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Uint32))},
+        {fieldID: 1, varInfo: new VarInfoPrimitive(SerializationType.Uint32)},
+        {fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Uint32))},
     ];
 
     static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
@@ -325,8 +325,8 @@ export class TestPrimitiveOptionalStatePartial {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "Primitive", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Uint32))},
-        {name: "Optional", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Uint32)))},
+        {fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Uint32))},
+        {fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Uint32)))},
     ];
 
     static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
@@ -395,10 +395,10 @@ export class TestState {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "MapPtrTest", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoMap(false, new VarInfoPrimitive(SerializationType.Uint8), new VarInfoPointer(false, new VarInfoStruct("TestMapData", "storetest", TestMapData)))},
-        {name: "BaseField", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPrimitive(SerializationType.String)},
-        {name: "BaseStruct", fieldIdx: 2, fieldID: 3, varInfo: new VarInfoStruct("TestMapData", "storetest", TestMapData)},
-        {name: "BaseStructPtr", fieldIdx: 3, fieldID: 4, varInfo: new VarInfoPointer(false, new VarInfoStruct("TestMapData", "storetest", TestMapData))},
+        {fieldID: 1, varInfo: new VarInfoMap(false, new VarInfoPrimitive(SerializationType.Uint8), new VarInfoPointer(false, new VarInfoStruct(TestMapData)))},
+        {fieldID: 2, varInfo: new VarInfoPrimitive(SerializationType.String)},
+        {fieldID: 3, varInfo: new VarInfoStruct(TestMapData)},
+        {fieldID: 4, varInfo: new VarInfoPointer(false, new VarInfoStruct(TestMapData))},
     ];
 
     static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
@@ -465,10 +465,10 @@ export class TestStatePartial {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "MapPtrTest", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialModMap", "restream", PartialModMap, undefined, [new VarInfoPrimitive(SerializationType.Uint8), new VarInfoPointer(false, new VarInfoStruct("TestMapData", "storetest", TestMapData)), new VarInfoPointer(false, new VarInfoStruct("TestMapDataPartial", "storetest", TestMapDataPartial))]))},
-        {name: "BaseField", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.String))},
-        {name: "BaseStruct", fieldIdx: 2, fieldID: 3, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialValue", "restream", PartialValue, undefined, [new VarInfoStruct("TestMapData", "storetest", TestMapData), new VarInfoPointer(false, new VarInfoStruct("TestMapDataPartial", "storetest", TestMapDataPartial))]))},
-        {name: "BaseStructPtr", fieldIdx: 3, fieldID: 4, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialValue", "restream", PartialValue, undefined, [new VarInfoPointer(false, new VarInfoStruct("TestMapData", "storetest", TestMapData)), new VarInfoPointer(false, new VarInfoStruct("TestMapDataPartial", "storetest", TestMapDataPartial))]))},
+        {fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoStruct(PartialModMap, [new VarInfoPrimitive(SerializationType.Uint8), new VarInfoPointer(false, new VarInfoStruct(TestMapData)), new VarInfoPointer(false, new VarInfoStruct(TestMapDataPartial))]))},
+        {fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.String))},
+        {fieldID: 3, varInfo: new VarInfoPointer(false, new VarInfoStruct(PartialValue, [new VarInfoStruct(TestMapData), new VarInfoPointer(false, new VarInfoStruct(TestMapDataPartial))]))},
+        {fieldID: 4, varInfo: new VarInfoPointer(false, new VarInfoStruct(PartialValue, [new VarInfoPointer(false, new VarInfoStruct(TestMapData)), new VarInfoPointer(false, new VarInfoStruct(TestMapDataPartial))]))},
     ];
 
     static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
@@ -576,9 +576,9 @@ export class TestArrayState {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "Numbers", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoArray(false, new VarInfoPrimitive(SerializationType.Uint64, "uint"))},
-        {name: "Items", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoArray(false, new VarInfoStruct("TestMapData", "storetest", TestMapData))},
-        {name: "PtrItems", fieldIdx: 2, fieldID: 3, varInfo: new VarInfoArray(false, new VarInfoPointer(false, new VarInfoStruct("TestMapData", "storetest", TestMapData)))},
+        {fieldID: 1, varInfo: new VarInfoArray(false, new VarInfoPrimitive(SerializationType.Uint64))},
+        {fieldID: 2, varInfo: new VarInfoArray(false, new VarInfoStruct(TestMapData))},
+        {fieldID: 3, varInfo: new VarInfoArray(false, new VarInfoPointer(false, new VarInfoStruct(TestMapData)))},
     ];
 
     static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
@@ -637,9 +637,9 @@ export class TestArrayStatePartial {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "Numbers", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialArray", "restream", PartialArray, undefined, [new VarInfoPrimitive(SerializationType.Uint64, "uint")]))},
-        {name: "Items", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialModArray", "restream", PartialModArray, undefined, [new VarInfoStruct("TestMapData", "storetest", TestMapData), new VarInfoPointer(false, new VarInfoStruct("TestMapDataPartial", "storetest", TestMapDataPartial))]))},
-        {name: "PtrItems", fieldIdx: 2, fieldID: 3, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialModArray", "restream", PartialModArray, undefined, [new VarInfoPointer(false, new VarInfoStruct("TestMapData", "storetest", TestMapData)), new VarInfoPointer(false, new VarInfoStruct("TestMapDataPartial", "storetest", TestMapDataPartial))]))},
+        {fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoStruct(PartialArray, [new VarInfoPrimitive(SerializationType.Uint64)]))},
+        {fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoStruct(PartialModArray, [new VarInfoStruct(TestMapData), new VarInfoPointer(false, new VarInfoStruct(TestMapDataPartial))]))},
+        {fieldID: 3, varInfo: new VarInfoPointer(false, new VarInfoStruct(PartialModArray, [new VarInfoPointer(false, new VarInfoStruct(TestMapData)), new VarInfoPointer(false, new VarInfoStruct(TestMapDataPartial))]))},
     ];
 
     static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
@@ -700,8 +700,8 @@ export class TestB {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "A", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoStruct("TestC", "storetest", TestC)},
-        {name: "B", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoStruct("TestC", "storetest", TestC)},
+        {fieldID: 1, varInfo: new VarInfoStruct(TestC)},
+        {fieldID: 2, varInfo: new VarInfoStruct(TestC)},
     ];
 
     static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
@@ -752,8 +752,8 @@ export class TestBPartial {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "A", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialValue", "restream", PartialValue, undefined, [new VarInfoStruct("TestC", "storetest", TestC), new VarInfoPointer(false, new VarInfoStruct("TestCPartial", "storetest", TestCPartial))]))},
-        {name: "B", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialValue", "restream", PartialValue, undefined, [new VarInfoStruct("TestC", "storetest", TestC), new VarInfoPointer(false, new VarInfoStruct("TestCPartial", "storetest", TestCPartial))]))},
+        {fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoStruct(PartialValue, [new VarInfoStruct(TestC), new VarInfoPointer(false, new VarInfoStruct(TestCPartial))]))},
+        {fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoStruct(PartialValue, [new VarInfoStruct(TestC), new VarInfoPointer(false, new VarInfoStruct(TestCPartial))]))},
     ];
 
     static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
@@ -812,8 +812,8 @@ export class TestA {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "A", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoStruct("TestB", "storetest", TestB)},
-        {name: "B", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoStruct("TestB", "storetest", TestB)},
+        {fieldID: 1, varInfo: new VarInfoStruct(TestB)},
+        {fieldID: 2, varInfo: new VarInfoStruct(TestB)},
     ];
 
     static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
@@ -864,8 +864,8 @@ export class TestAPartial {
     }
 
     public static readonly fieldInfo: readonly FieldInfo[] = [
-        {name: "A", fieldIdx: 0, fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialValue", "restream", PartialValue, undefined, [new VarInfoStruct("TestB", "storetest", TestB), new VarInfoPointer(false, new VarInfoStruct("TestBPartial", "storetest", TestBPartial))]))},
-        {name: "B", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialValue", "restream", PartialValue, undefined, [new VarInfoStruct("TestB", "storetest", TestB), new VarInfoPointer(false, new VarInfoStruct("TestBPartial", "storetest", TestBPartial))]))},
+        {fieldID: 1, varInfo: new VarInfoPointer(false, new VarInfoStruct(PartialValue, [new VarInfoStruct(TestB), new VarInfoPointer(false, new VarInfoStruct(TestBPartial))]))},
+        {fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoStruct(PartialValue, [new VarInfoStruct(TestB), new VarInfoPointer(false, new VarInfoStruct(TestBPartial))]))},
     ];
 
     static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
