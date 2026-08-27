@@ -31,7 +31,7 @@ export class TestC {
         let fieldMap: Map<number, unknown>|undefined;
         if (r) {
             const sl = ReStreamDecoders.decodeUint32(r);
-            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestC._fieldMap);
+            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestC.#fieldMap);
         }
         const o = new TestC();
         o.a = fieldMap?.has(1) ? fieldMap.get(1) as number : 0;
@@ -53,7 +53,7 @@ export class TestC {
         {name: "B", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPrimitive(SerializationType.Int64, "int")},
     ];
 
-    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+    static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
         [1, this.fieldInfo[0]],
         [2, this.fieldInfo[1]],
     ]);
@@ -79,7 +79,7 @@ export class TestCPartial {
         let fieldMap: Map<number, unknown>|undefined;
         if (r) {
             const sl = ReStreamDecoders.decodeUint32(r);
-            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestCPartial._fieldMap);
+            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestCPartial.#fieldMap);
         }
         const o = new TestCPartial();
         o.a = fieldMap?.has(1) ? fieldMap.get(1) as number|undefined : undefined;
@@ -101,7 +101,7 @@ export class TestCPartial {
         {name: "B", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Int64, "int"))},
     ];
 
-    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+    static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
         [1, this.fieldInfo[0]],
         [2, this.fieldInfo[1]],
     ]);
@@ -139,7 +139,7 @@ export class TestMapData {
         let fieldMap: Map<number, unknown>|undefined;
         if (r) {
             const sl = ReStreamDecoders.decodeUint32(r);
-            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestMapData._fieldMap);
+            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestMapData.#fieldMap);
         }
         const o = new TestMapData();
         o.number = fieldMap?.has(1) ? fieldMap.get(1) as number : 0;
@@ -161,7 +161,7 @@ export class TestMapData {
         {name: "Data", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoArray(false, new VarInfoPrimitive(SerializationType.Uint8, "byte"))},
     ];
 
-    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+    static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
         [1, this.fieldInfo[0]],
         [2, this.fieldInfo[1]],
     ]);
@@ -187,7 +187,7 @@ export class TestMapDataPartial {
         let fieldMap: Map<number, unknown>|undefined;
         if (r) {
             const sl = ReStreamDecoders.decodeUint32(r);
-            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestMapDataPartial._fieldMap);
+            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestMapDataPartial.#fieldMap);
         }
         const o = new TestMapDataPartial();
         o.number = fieldMap?.has(1) ? fieldMap.get(1) as number|undefined : undefined;
@@ -209,7 +209,7 @@ export class TestMapDataPartial {
         {name: "Data", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialArray", "restream", PartialArray, undefined, [new VarInfoPrimitive(SerializationType.Uint8, "byte")]))},
     ];
 
-    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+    static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
         [1, this.fieldInfo[0]],
         [2, this.fieldInfo[1]],
     ]);
@@ -247,7 +247,7 @@ export class TestPrimitiveOptionalState {
         let fieldMap: Map<number, unknown>|undefined;
         if (r) {
             const sl = ReStreamDecoders.decodeUint32(r);
-            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestPrimitiveOptionalState._fieldMap);
+            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestPrimitiveOptionalState.#fieldMap);
         }
         const o = new TestPrimitiveOptionalState();
         o.primitive = fieldMap?.has(1) ? fieldMap.get(1) as number : 0;
@@ -269,7 +269,7 @@ export class TestPrimitiveOptionalState {
         {name: "Optional", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Uint32))},
     ];
 
-    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+    static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
         [1, this.fieldInfo[0]],
         [2, this.fieldInfo[1]],
     ]);
@@ -295,7 +295,7 @@ export class TestPrimitiveOptionalStatePartial {
         let fieldMap: Map<number, unknown>|undefined;
         if (r) {
             const sl = ReStreamDecoders.decodeUint32(r);
-            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestPrimitiveOptionalStatePartial._fieldMap);
+            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestPrimitiveOptionalStatePartial.#fieldMap);
         }
         const o = new TestPrimitiveOptionalStatePartial();
         o.primitive = fieldMap?.has(1) ? fieldMap.get(1) as number|undefined : undefined;
@@ -317,7 +317,7 @@ export class TestPrimitiveOptionalStatePartial {
         {name: "Optional", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Uint32)))},
     ];
 
-    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+    static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
         [1, this.fieldInfo[0]],
         [2, this.fieldInfo[1]],
     ]);
@@ -361,7 +361,7 @@ export class TestState {
         let fieldMap: Map<number, unknown>|undefined;
         if (r) {
             const sl = ReStreamDecoders.decodeUint32(r);
-            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestState._fieldMap);
+            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestState.#fieldMap);
         }
         const o = new TestState();
         o.mapPtrTest = fieldMap?.has(1) ? fieldMap.get(1) as Map<number,TestMapData|undefined>|undefined : undefined;
@@ -389,7 +389,7 @@ export class TestState {
         {name: "BaseStructPtr", fieldIdx: 3, fieldID: 4, varInfo: new VarInfoPointer(false, new VarInfoStruct("TestMapData", "storetest", TestMapData))},
     ];
 
-    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+    static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
         [1, this.fieldInfo[0]],
         [2, this.fieldInfo[1]],
         [3, this.fieldInfo[2]],
@@ -423,7 +423,7 @@ export class TestStatePartial {
         let fieldMap: Map<number, unknown>|undefined;
         if (r) {
             const sl = ReStreamDecoders.decodeUint32(r);
-            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestStatePartial._fieldMap);
+            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestStatePartial.#fieldMap);
         }
         const o = new TestStatePartial();
         o.mapPtrTest = fieldMap?.has(1) ? fieldMap.get(1) as PartialModMap<number, TestMapData|undefined, TestMapDataPartial>|undefined : undefined;
@@ -451,7 +451,7 @@ export class TestStatePartial {
         {name: "BaseStructPtr", fieldIdx: 3, fieldID: 4, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialValue", "restream", PartialValue, undefined, [new VarInfoPointer(false, new VarInfoStruct("TestMapData", "storetest", TestMapData)), new VarInfoPointer(false, new VarInfoStruct("TestMapDataPartial", "storetest", TestMapDataPartial))]))},
     ];
 
-    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+    static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
         [1, this.fieldInfo[0]],
         [2, this.fieldInfo[1]],
         [3, this.fieldInfo[2]],
@@ -536,7 +536,7 @@ export class TestArrayState {
         let fieldMap: Map<number, unknown>|undefined;
         if (r) {
             const sl = ReStreamDecoders.decodeUint32(r);
-            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestArrayState._fieldMap);
+            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestArrayState.#fieldMap);
         }
         const o = new TestArrayState();
         o.numbers = fieldMap?.has(1) ? fieldMap.get(1) as number[]|undefined : [];
@@ -561,7 +561,7 @@ export class TestArrayState {
         {name: "PtrItems", fieldIdx: 2, fieldID: 3, varInfo: new VarInfoArray(false, new VarInfoPointer(false, new VarInfoStruct("TestMapData", "storetest", TestMapData)))},
     ];
 
-    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+    static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
         [1, this.fieldInfo[0]],
         [2, this.fieldInfo[1]],
         [3, this.fieldInfo[2]],
@@ -591,7 +591,7 @@ export class TestArrayStatePartial {
         let fieldMap: Map<number, unknown>|undefined;
         if (r) {
             const sl = ReStreamDecoders.decodeUint32(r);
-            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestArrayStatePartial._fieldMap);
+            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestArrayStatePartial.#fieldMap);
         }
         const o = new TestArrayStatePartial();
         o.numbers = fieldMap?.has(1) ? fieldMap.get(1) as PartialArray<number>|undefined : undefined;
@@ -616,7 +616,7 @@ export class TestArrayStatePartial {
         {name: "PtrItems", fieldIdx: 2, fieldID: 3, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialModArray", "restream", PartialModArray, undefined, [new VarInfoPointer(false, new VarInfoStruct("TestMapData", "storetest", TestMapData)), new VarInfoPointer(false, new VarInfoStruct("TestMapDataPartial", "storetest", TestMapDataPartial))]))},
     ];
 
-    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+    static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
         [1, this.fieldInfo[0]],
         [2, this.fieldInfo[1]],
         [3, this.fieldInfo[2]],
@@ -656,7 +656,7 @@ export class TestB {
         let fieldMap: Map<number, unknown>|undefined;
         if (r) {
             const sl = ReStreamDecoders.decodeUint32(r);
-            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestB._fieldMap);
+            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestB.#fieldMap);
         }
         const o = new TestB();
         o.a = fieldMap?.has(1) ? fieldMap.get(1) as TestC : TestC.fromValues();
@@ -678,7 +678,7 @@ export class TestB {
         {name: "B", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoStruct("TestC", "storetest", TestC)},
     ];
 
-    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+    static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
         [1, this.fieldInfo[0]],
         [2, this.fieldInfo[1]],
     ]);
@@ -704,7 +704,7 @@ export class TestBPartial {
         let fieldMap: Map<number, unknown>|undefined;
         if (r) {
             const sl = ReStreamDecoders.decodeUint32(r);
-            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestBPartial._fieldMap);
+            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestBPartial.#fieldMap);
         }
         const o = new TestBPartial();
         o.a = fieldMap?.has(1) ? fieldMap.get(1) as PartialValue<TestC, TestCPartial>|undefined : undefined;
@@ -726,7 +726,7 @@ export class TestBPartial {
         {name: "B", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialValue", "restream", PartialValue, undefined, [new VarInfoStruct("TestC", "storetest", TestC), new VarInfoPointer(false, new VarInfoStruct("TestCPartial", "storetest", TestCPartial))]))},
     ];
 
-    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+    static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
         [1, this.fieldInfo[0]],
         [2, this.fieldInfo[1]],
     ]);
@@ -764,7 +764,7 @@ export class TestA {
         let fieldMap: Map<number, unknown>|undefined;
         if (r) {
             const sl = ReStreamDecoders.decodeUint32(r);
-            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestA._fieldMap);
+            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestA.#fieldMap);
         }
         const o = new TestA();
         o.a = fieldMap?.has(1) ? fieldMap.get(1) as TestB : TestB.fromValues();
@@ -786,7 +786,7 @@ export class TestA {
         {name: "B", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoStruct("TestB", "storetest", TestB)},
     ];
 
-    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+    static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
         [1, this.fieldInfo[0]],
         [2, this.fieldInfo[1]],
     ]);
@@ -812,7 +812,7 @@ export class TestAPartial {
         let fieldMap: Map<number, unknown>|undefined;
         if (r) {
             const sl = ReStreamDecoders.decodeUint32(r);
-            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestAPartial._fieldMap);
+            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), TestAPartial.#fieldMap);
         }
         const o = new TestAPartial();
         o.a = fieldMap?.has(1) ? fieldMap.get(1) as PartialValue<TestB, TestBPartial>|undefined : undefined;
@@ -834,7 +834,7 @@ export class TestAPartial {
         {name: "B", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoStruct("PartialValue", "restream", PartialValue, undefined, [new VarInfoStruct("TestB", "storetest", TestB), new VarInfoPointer(false, new VarInfoStruct("TestBPartial", "storetest", TestBPartial))]))},
     ];
 
-    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+    static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
         [1, this.fieldInfo[0]],
         [2, this.fieldInfo[1]],
     ]);

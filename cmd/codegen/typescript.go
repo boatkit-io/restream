@@ -119,7 +119,7 @@ func genTSFieldInfo(fields []*restream.FieldInfo) string {
 		if out != "" {
 			out += "\n"
 		}
-		out += "    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([\n"
+		out += "    static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([\n"
 		for idx, fi := range fields {
 			out += fmt.Sprintf("        [%d, this.fieldInfo[%d]],\n", fi.FieldID, idx)
 		}
@@ -152,7 +152,7 @@ func (ft *FileTracking) genTSClass(si StructInfo, fields []*restream.FieldInfo, 
 		out += "        let fieldMap: Map<number, unknown>|undefined;\n"
 		out += "        if (r) {\n"
 		out += "            const sl = ReStreamDecoders.decodeUint32(r);\n"
-		out += fmt.Sprintf("            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), %s._fieldMap);\n", si.Name)
+		out += fmt.Sprintf("            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), %s.#fieldMap);\n", si.Name)
 		out += "        }\n"
 		out += fmt.Sprintf("        const o = new %s();\n", si.TSNameWithParams())
 

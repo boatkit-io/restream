@@ -1803,7 +1803,7 @@ func TestGenTSFieldInfoUsesPublicReadonlyMetadata(t *testing.T) {
 	for _, expected := range []string{
 		"public static readonly fieldInfo: readonly FieldInfo[] = [",
 		"{name: \"Name\", fieldIdx: 0, fieldID: 7",
-		"private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([",
+		"static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([",
 		"[7, this.fieldInfo[0]],",
 	} {
 		if !strings.Contains(got, expected) {
@@ -1812,6 +1812,7 @@ func TestGenTSFieldInfoUsesPublicReadonlyMetadata(t *testing.T) {
 	}
 
 	for _, unexpected := range []string{
+		"_fieldMap",
 		"_fieldInfo",
 		"private static fieldInfo",
 	} {

@@ -31,7 +31,7 @@ export class BoardStoreState {
         let fieldMap: Map<number, unknown>|undefined;
         if (r) {
             const sl = ReStreamDecoders.decodeUint32(r);
-            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), BoardStoreState._fieldMap);
+            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), BoardStoreState.#fieldMap);
         }
         const o = new BoardStoreState();
         o.board = fieldMap?.has(1) ? fieldMap.get(1) as (string[]|undefined)[]|undefined : [];
@@ -53,7 +53,7 @@ export class BoardStoreState {
         {name: "XTurn", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPrimitive(SerializationType.Bool)},
     ];
 
-    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+    static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
         [1, this.fieldInfo[0]],
         [2, this.fieldInfo[1]],
     ]);
@@ -79,7 +79,7 @@ export class BoardStoreStatePartial {
         let fieldMap: Map<number, unknown>|undefined;
         if (r) {
             const sl = ReStreamDecoders.decodeUint32(r);
-            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), BoardStoreStatePartial._fieldMap);
+            fieldMap = ReStreamDecoders.decodeFieldMap(r.slice(sl), BoardStoreStatePartial.#fieldMap);
         }
         const o = new BoardStoreStatePartial();
         o.board = fieldMap?.has(1) ? fieldMap.get(1) as PartialArray<string[]|undefined>|undefined : undefined;
@@ -101,7 +101,7 @@ export class BoardStoreStatePartial {
         {name: "XTurn", fieldIdx: 1, fieldID: 2, varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.Bool))},
     ];
 
-    private static readonly _fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
+    static readonly #fieldMap: ReadonlyMap<number, FieldInfo> = new Map<number, FieldInfo>([
         [1, this.fieldInfo[0]],
         [2, this.fieldInfo[1]],
     ]);
