@@ -328,7 +328,7 @@ func TestDeviceCapabilitiesUseHelloMetadataWithoutChangingBaseVersion(t *testing
 	if got := CapabilitiesFromDeviceMetadata(metadata); !got.RPCAnnotations {
 		t.Fatal("RPC-annotations capability did not round trip")
 	}
-	if CurrentVersion != 8 {
+	if CurrentVersion != 9 {
 		t.Fatalf("optional capabilities changed base protocol version to %d", CurrentVersion)
 	}
 }

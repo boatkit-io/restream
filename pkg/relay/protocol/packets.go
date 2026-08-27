@@ -9,7 +9,7 @@ package protocol
 // becomes incompatible. Optional packet kinds and capabilities do not bump it;
 // unknown packet kinds are decoded as RawPacket so mixed-version peers can keep
 // the base relay online.
-const CurrentVersion uint32 = 8
+const CurrentVersion uint32 = 9
 
 const (
 	// DeviceDataStreamsCapabilityMetadataKey advertises support for asynchronous
