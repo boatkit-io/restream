@@ -13,6 +13,8 @@ export const AccessLevelAdmin = 2;
 
 export const AccessLevelViewer = 1;
 
+export const viewerSocketTestStateFieldIDValues = 1;
+
 export const viewerSocketTestStoreName = "test-store";
 
 export class LatLong {
