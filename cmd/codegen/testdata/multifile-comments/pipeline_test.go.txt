@@ -1,0 +1,114 @@
+package fixturepkg
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+func TestPipelineReturnsDeferredActionWithoutApplyingIt(t *testing.T) {
+	configuration := &Configuration{}
+	require.NoError(t, initialize(configuration, map[string]SerializedValue{}, nil))
+	logger := NewLogger()
+	queue, err := NewQueue(logger, nil, NewDispatcher(logger), configuration, nil, nil)
+	require.NoError(t, err)
+	queue.root = func() (string, error) { return "fixture-root", nil }
+	queue.calculate = func(
+		_ context.Context,
+		_ string,
+		request CalculationRequest,
+	) (*CalculationResult, error) {
+		return directCalculationResult(request), nil
+	}
+	pipeline := &Pipeline{
+		queue: queue, actions: map[string]deferredActionState{},
+	}
+
+	output, actions := pipeline.executeWithActions(
+		context.Background(),
+		ToolCall{
+			CallID: "call-example", Name: "find_candidates",
+			Arguments: json.RawMessage(`{
+				"start":{"x":48.5,"y":-123.5},
+				"end":{"x":48.6,"y":-123.4},
+				"label":"Example Result"
+			}`),
+		},
+		"principal:42",
+		"conversation",
+	)
+	require.Len(t, actions, 1)
+	require.Equal(t, "Example Result", actions[0].Label)
+	require.True(t, actionPattern.MatchString(actions[0].ID))
+	require.Empty(t, queue.storeData.ReadState().Applied)
+
+	var result struct {
+		Status  string           `json:"status"`
+		Changed bool             `json:"changed"`
+		Actions []DeferredAction `json:"actions"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(output.Output), &result))
+	require.Equal(t, "completed", result.Status)
+	require.False(t, result.Changed)
+	require.Equal(t, actions, result.Actions)
+	require.Equal(t, "principal:42", pipeline.actions[actions[0].ID].principalID)
+
+	dispatcher := NewDispatcher(logger)
+	dispatcher.Register(
+		"Pipeline.Apply",
+		AccessAdmin,
+		pipeline.apply,
+		reflect.TypeFor[ApplyRequest](),
+		reflect.TypeFor[ApplyResponse](),
+	)
+	requestBytes, err := serialize(&ApplyRequest{ActionID: actions[0].ID}, nil)
+	require.NoError(t, err)
+	responseBytes, handled, err := dispatcher.Fire(
+		map[string]string{"actor-id": "principal:99"},
+		"Pipeline.Apply",
+		AccessAdmin,
+		requestBytes,
+	)
+	require.True(t, handled)
+	require.NoError(t, err)
+	wrongPrincipalResponse := &ApplyResponse{}
+	require.NoError(t, wrongPrincipalResponse.Deserialize(NewReader(responseBytes), nil))
+	require.NotNil(t, wrongPrincipalResponse.Error)
+	require.Empty(t, queue.storeData.ReadState().Applied)
+
+	responseBytes, handled, err = dispatcher.Fire(
+		map[string]string{"actor-id": "principal:42"},
+		"Pipeline.Apply",
+		AccessAdmin,
+		requestBytes,
+	)
+	require.True(t, handled)
+	require.NoError(t, err)
+	applyResponse := &ApplyResponse{}
+	require.NoError(t, applyResponse.Deserialize(NewReader(responseBytes), nil))
+	require.Nil(t, applyResponse.Error)
+	require.NotEmpty(t, queue.storeData.ReadState().Applied)
+	_, stillAvailable := pipeline.actions[actions[0].ID]
+	require.False(t, stillAvailable)
+}

@@ -1,0 +1,111 @@
+package fixturepkg
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+const (
+	// defaultWorkerID is deliberately outside the ordinary fixture range.
+	defaultWorkerID       uint16 = 1000
+	syntheticRecordPrefix        = "synthetic-record:"
+
+	updateDebounce = 250 * time.Millisecond
+	staleInterval  = time.Second
+	staleDuration  = 10 * time.Second
+)
+
+type thresholdRange struct {
+	id      string
+	label   string
+	target  float32
+	minimum float32
+	maximum float32
+}
+
+var thresholdRanges = []thresholdRange{
+	{id: "small", label: "Small", target: 12, minimum: 10, maximum: 16},
+	{id: "medium", label: "Medium", target: 24, minimum: 20, maximum: 32},
+	{id: "large", label: "Large", target: 48, minimum: 40, maximum: 60},
+}
+
+type recordMetadata struct {
+	category uint16
+	kind     uint16
+	variant  uint16
+}
+
+// AnnotatedRegistry exercises comment preservation in a multi-file package.
+// @restream.store(ExampleRegistry, DeviceWithNoRelay)
+type AnnotatedRegistry struct {
+	logger     *Logger
+	repository *Repository
+	index      *Index
+	cache      *Cache
+	reader     *Reader
+	writer     *Writer
+	input      chan Item
+	output     chan Item
+	started    bool
+	closed     bool
+	revision   uint64
+	generation uint64
+
+	metadataMu sync.RWMutex
+	metadata   map[uint16]recordMetadata
+	aliases    map[string]recordMetadata
+
+	deliveryMu       sync.Mutex
+	deliveryGroup    string
+	deliverySequence uint8
+	deliverySource   *Source
+
+	updateMu sync.Mutex
+
+	providerMu sync.Mutex
+	providers  map[string]providerState
+	claims     map[string]claimScope
+
+	settingsMu sync.RWMutex
+	settings   map[uint]recordSetting
+	keyed      map[string]recordSetting
+	ranges     map[string]rangeSetting
+
+	records  map[string]*record
+	lastSeen map[string]time.Time
+	groups   map[string]*group
+	summary  summary
+
+	requests       chan struct{}
+	pendingUpdates map[string]struct{}
+	pendingDeletes map[string]struct{}
+	pendingGroups  bool
+	pendingSummary bool
+	pendingDerived bool
+	flushing       bool
+
+	storeData *StoreData[
+		RegistryState,
+		*RegistryState,
+		*RegistryStatePartial,
+	]
+}
+
+var _ Store = (*AnnotatedRegistry)(nil)

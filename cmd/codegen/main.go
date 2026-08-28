@@ -148,6 +148,8 @@ func NewProjTracking(ppRoot string, config *restreamConfig) *ProjTracking {
 		files:          []*FileTracking{},
 		packagesByPath: map[string]map[*packages.Package]struct{}{},
 		packagesByName: map[string]map[*packages.Package]struct{}{},
+		packageByPath:  map[string]*packages.Package{},
+		packageByName:  map[string]*packages.Package{},
 		storeStateRefs: map[*dst.TypeSpec]storeStateRef{},
 		relayStores:    map[string]*relayStorePackage{},
 
@@ -171,6 +173,8 @@ type ProjTracking struct {
 	files          []*FileTracking
 	packagesByPath map[string]map[*packages.Package]struct{}
 	packagesByName map[string]map[*packages.Package]struct{}
+	packageByPath  map[string]*packages.Package
+	packageByName  map[string]*packages.Package
 	storeStateRefs map[*dst.TypeSpec]storeStateRef
 	relayStores    map[string]*relayStorePackage
 
@@ -208,7 +212,7 @@ func (pt *ProjTracking) parseProject() error {
 		fmt.Printf("Loading project dir: %s\n", dir)
 		dp := path.Join(pt.projPath, dir)
 
-		pm, err := decorator.ParseDir(pt.fset, dp, restreamSourceFileFilter(dp), parser.AllErrors|parser.ParseComments)
+		pm, err := parseDecoratedDir(pt.fset, dp, restreamSourceFileFilter(dp), parser.AllErrors|parser.ParseComments)
 		if err != nil {
 			return err
 		}
@@ -218,15 +222,15 @@ func (pt *ProjTracking) parseProject() error {
 		}
 
 		for _, pkg := range pm {
-			for filename, f := range pkg.Files {
+			for filename, f := range pkg.files {
 				isTest := strings.HasSuffix(filename, "_test.go")
-				ppkg, err := pt.getPackageForName(pkg.Name, isTest)
+				ppkg, err := pt.getPackageForName(pkg.name, isTest)
 				if err != nil {
 					packageNames := lo.Keys(pt.packagesByName)
 					slices.Sort(packageNames)
 					return fmt.Errorf(
 						"package %s not found in project packages list; available packages: %s",
-						pkg.Name,
+						pkg.name,
 						strings.Join(packageNames, ", "),
 					)
 				}
@@ -243,6 +247,57 @@ func (pt *ProjTracking) parseProject() error {
 	fmt.Printf("Done parsing project, took %s\n", time.Since(startTime))
 
 	return nil
+}
+
+type decoratedPackage struct {
+	name  string
+	files map[string]*dst.File
+}
+
+// parseDecoratedDir decorates parsed files independently. Decorating the ast.Package as one node can lose
+// declaration comments when a package contains sufficiently complex files, including @restream annotations.
+func parseDecoratedDir(
+	fset *token.FileSet,
+	dir string,
+	filter func(os.FileInfo) bool,
+	mode parser.Mode,
+) (map[string]*decoratedPackage, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	ret := map[string]*decoratedPackage{}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil, err
+		}
+		if filter != nil && !filter(info) {
+			continue
+		}
+
+		filename := filepath.Join(dir, entry.Name())
+		parsedFile, err := parser.ParseFile(fset, filename, nil, mode|parser.ParseComments)
+		if err != nil {
+			return nil, err
+		}
+		file, err := decorator.NewDecorator(fset).DecorateFile(parsedFile)
+		if err != nil {
+			return nil, err
+		}
+		packageName := parsedFile.Name.Name
+		decorated := ret[packageName]
+		if decorated == nil {
+			decorated = &decoratedPackage{name: packageName, files: map[string]*dst.File{}}
+			ret[packageName] = decorated
+		}
+		decorated.files[filename] = file
+	}
+	return ret, nil
 }
 
 // parseFile parses a single file for work to do
@@ -348,6 +403,10 @@ func (pt *ProjTracking) addPackage(pkg *packages.Package) {
 
 // getPackageForPath gets a package for a given package path and test flag
 func (pt *ProjTracking) getPackageForPath(p string, isTest bool) (*packages.Package, error) {
+	selectionKey := fmt.Sprintf("%s:%t", p, isTest)
+	if pkg := pt.packageByPath[selectionKey]; pkg != nil {
+		return pkg, nil
+	}
 	pkgs, ok := pt.packagesByPath[p]
 	if !ok {
 		return nil, fmt.Errorf("unknown package %s", p)
@@ -358,15 +417,24 @@ func (pt *ProjTracking) getPackageForPath(p string, isTest bool) (*packages.Pack
 	if !fnd {
 		if isTest {
 			// fall back to no test version
-			return pt.getPackageForPath(p, false)
+			pkg, err := pt.getPackageForPath(p, false)
+			if err == nil {
+				pt.packageByPath[selectionKey] = pkg
+			}
+			return pkg, err
 		}
 		return nil, fmt.Errorf("unknown package %s with isTest %t", p, isTest)
 	}
+	pt.packageByPath[selectionKey] = pkg
 	return pkg, nil
 }
 
 // getPackageForName gets a package for a given short package name and test flag
 func (pt *ProjTracking) getPackageForName(n string, isTest bool) (*packages.Package, error) {
+	selectionKey := fmt.Sprintf("%s:%t", n, isTest)
+	if pkg := pt.packageByName[selectionKey]; pkg != nil {
+		return pkg, nil
+	}
 	pkgs, ok := pt.packagesByName[n]
 	if !ok {
 		return nil, fmt.Errorf("unknown package %s", n)
@@ -377,10 +445,15 @@ func (pt *ProjTracking) getPackageForName(n string, isTest bool) (*packages.Pack
 	if !fnd {
 		if isTest {
 			// fall back to no test version
-			return pt.getPackageForName(n, false)
+			pkg, err := pt.getPackageForName(n, false)
+			if err == nil {
+				pt.packageByName[selectionKey] = pkg
+			}
+			return pkg, err
 		}
 		return nil, fmt.Errorf("unknown package %s with isTest %t", n, isTest)
 	}
+	pt.packageByName[selectionKey] = pkg
 	return pkg, nil
 }
 

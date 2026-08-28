@@ -1,6 +1,8 @@
 package main
 
 import (
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +14,92 @@ import (
 	"github.com/dave/dst"
 	"golang.org/x/tools/go/packages"
 )
+
+func TestParseDecoratedDirPreservesAnnotationsAcrossComplexFiles(t *testing.T) {
+	sourceDir := t.TempDir()
+	for _, fixtureName := range []string{
+		"pipeline_test.go.txt",
+		"registry.go.txt",
+	} {
+		source, err := os.ReadFile(filepath.Join("testdata", "multifile-comments", fixtureName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		filename := strings.TrimSuffix(fixtureName, ".txt")
+		if err := os.WriteFile(filepath.Join(sourceDir, filename), source, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	packages, err := parseDecoratedDir(token.NewFileSet(), sourceDir, nil, parser.AllErrors|parser.ParseComments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := packages["fixturepkg"]
+	if pkg == nil {
+		t.Fatalf("parsed packages = %v, want fixturepkg", packages)
+	}
+	file := pkg.files[filepath.Join(sourceDir, "registry.go")]
+	if file == nil {
+		t.Fatalf("parsed files = %v, want registry.go", pkg.files)
+	}
+
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*dst.GenDecl)
+		if !ok || len(gen.Specs) == 0 {
+			continue
+		}
+		typeSpec, ok := gen.Specs[0].(*dst.TypeSpec)
+		if !ok || typeSpec.Name.Name != "AnnotatedRegistry" {
+			continue
+		}
+		for _, decoration := range gen.Decorations().Start {
+			annotation, err := parseRestreamStoreAnnotation(decoration)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if annotation.StoreName == "ExampleRegistry" {
+				return
+			}
+		}
+	}
+	t.Fatal("AnnotatedRegistry lost its @restream.store annotation during directory parsing")
+}
+
+func TestPackageLookupsReuseOneTestPackageSelection(t *testing.T) {
+	tracking := NewProjTracking(t.TempDir(), &restreamConfig{})
+	for _, id := range []string{
+		"example.com/model [example.com/model.test]",
+		"example.com/model [example.com/other.test]",
+	} {
+		tracking.addPackage(&packages.Package{ID: id, Name: "model", PkgPath: "example.com/model"})
+	}
+
+	byName, err := tracking.getPackageForName("model", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPath, err := tracking.getPackageForPath("example.com/model", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 100 {
+		nextByName, err := tracking.getPackageForName("model", true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if nextByName != byName {
+			t.Fatal("package-name lookup changed its selected test package")
+		}
+		nextByPath, err := tracking.getPackageForPath("example.com/model", true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if nextByPath != byPath {
+			t.Fatal("package-path lookup changed its selected test package")
+		}
+	}
+}
 
 func TestGeneratedRestreamTypesDoNotRequireSourceImport(t *testing.T) {
 	repoRoot, err := filepath.Abs("../..")
