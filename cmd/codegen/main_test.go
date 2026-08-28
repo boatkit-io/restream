@@ -495,6 +495,81 @@ func Register(rpcd *testDispatcher) {
 	}
 }
 
+func TestRPCRequestGenerationResolvesStringConstants(t *testing.T) {
+	projectDir := t.TempDir()
+	protocolDir := filepath.Join(projectDir, "protocol")
+	serverDir := filepath.Join(projectDir, "cmd", "server")
+	if err := os.MkdirAll(protocolDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(serverDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte(`module example.com/rpcconstants
+
+go 1.26.2
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(protocolDir, "names.go"), []byte(`package protocol
+
+const NotifyRPC = "Notify"
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(serverDir, "boardstore.go"), []byte(`package main
+
+import "example.com/rpcconstants/protocol"
+
+const placeTokenRPC = "PlaceToken"
+
+type testDispatcher struct{}
+
+func (*testDispatcher) RegisterRPCHandler(string, int, any, any, any) {}
+func (*testDispatcher) RegisterFFRPCHandler(string, int, any, any) {}
+
+func Register(rpcd *testDispatcher) {
+	rpcd.RegisterRPCHandler(placeTokenRPC, 1, func(x, y int) error {
+		return nil
+	}, nil, nil)
+	rpcd.RegisterFFRPCHandler(protocol.NotifyRPC, 1, func(payload []byte) error {
+		return nil
+	}, nil)
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	pt := NewProjTracking(projectDir, &restreamConfig{
+		InputDirs: []string{"cmd/server"},
+	})
+	if err := pt.parseProject(); err != nil {
+		t.Fatal(err)
+	}
+	for _, ft := range pt.files {
+		if err := ft.Run(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out, err := os.ReadFile(filepath.Join(serverDir, "boardstore_rs.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	for _, expected := range []string{
+		"type PlaceTokenRequest struct",
+		"type NotifyRequest struct",
+	} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("generated RPC request missing expected %q:\n%s", expected, got)
+		}
+	}
+}
+
 func TestProjectGenerationIgnoresCrossFileProductionRPCRegistrationInTest(t *testing.T) {
 	projectDir := t.TempDir()
 	modelDir := filepath.Join(projectDir, "model")

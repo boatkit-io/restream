@@ -1138,7 +1138,7 @@ func (ft *FileTracking) parseFuncDecls() error { //nolint:gocyclo,funlen
 				continue
 			}
 
-			rpcn, err := stringLiteralValue(xt.Args[0])
+			rpcn, err := ft.rpcNameValue(xt.Args[0])
 			if err != nil {
 				return err
 			}
@@ -1603,6 +1603,42 @@ func stringLiteralValue(expr dst.Expr) (string, error) {
 		return "", fmt.Errorf("expected string literal, got %T", expr)
 	}
 	return strconv.Unquote(bl.Value)
+}
+
+func (ft *FileTracking) rpcNameValue(expr dst.Expr) (string, error) {
+	switch expr := expr.(type) {
+	case *dst.BasicLit:
+		return strconv.Unquote(expr.Value)
+	case *dst.ParenExpr:
+		return ft.rpcNameValue(expr.X)
+	case *dst.Ident:
+		if ft.fPackage != nil && ft.fPackage.Types != nil {
+			if value, ok := stringConstantObjectValue(ft.fPackage.Types.Scope().Lookup(expr.Name)); ok {
+				return value, nil
+			}
+		}
+	case *dst.SelectorExpr:
+		qualifier, ok := expr.X.(*dst.Ident)
+		if !ok {
+			break
+		}
+		pkg := ft.importLookup[qualifier.Name]
+		if pkg != nil && pkg.Types != nil {
+			if value, ok := stringConstantObjectValue(pkg.Types.Scope().Lookup(expr.Sel.Name)); ok {
+				return value, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("expected string literal or compile-time string constant, got %T", expr)
+}
+
+func stringConstantObjectValue(obj types.Object) (string, bool) {
+	constantObject, ok := obj.(*types.Const)
+	if !ok || constantObject.Val().Kind() != constant.String {
+		return "", false
+	}
+	return constant.StringVal(constantObject.Val()), true
 }
 
 func astStringLiteralValue(expr ast.Expr) (string, error) {
