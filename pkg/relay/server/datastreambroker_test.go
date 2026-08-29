@@ -213,6 +213,78 @@ func TestDeviceDataStreamBrokerAuthorizesAndRefCountsViewerLeases(t *testing.T) 
 	}
 }
 
+func TestDataStreamBrokerCloseSessionCompletesAfterDeviceDisconnect(t *testing.T) {
+	store := restream.NewRelayStore[testState, *testState, *testPartial](
+		"CameraMedia",
+		&testState{},
+		restream.AccessLevel(3),
+	)
+	registry, err := restream.NewStoreRegistry([]restream.Store{store})
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	device := NewDevice("device-a", registry, DeviceManagerConfig{})
+	allocator := &testDataStreamAllocator{}
+	broker := NewDeviceDataStreamBroker(device, allocator)
+	subscription := restream.DataStreamSubscription{
+		StoreName:  "CameraMedia",
+		StreamName: "CameraMedia.Video",
+		Key:        "camera-a",
+	}
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+	relayConn := NewConnection(serverConn)
+	relayConn.Capabilities.DataStreams = true
+	device.DeviceConnected(relayConn)
+	transition := make(chan *protocol.DataStreamSubscriptionRequestPacket, 1)
+	go func() {
+		_, message, readErr := clientConn.ReadMessage()
+		if readErr != nil {
+			return
+		}
+		packetRaw, decodeErr := protocol.DecodePacket(message)
+		if decodeErr != nil {
+			return
+		}
+		packet, ok := packetRaw.(*protocol.DataStreamSubscriptionRequestPacket)
+		if !ok {
+			return
+		}
+		transition <- packet
+		device.HandleDataStreamSubscriptionResult(
+			relayConn,
+			&protocol.DataStreamSubscriptionResultPacket{OperationID: packet.OperationID},
+		)
+	}()
+
+	endpoint, err := broker.OpenForSession(
+		context.Background(),
+		"session-a",
+		subscription,
+		restream.AccessLevel(3),
+	)
+	if err != nil {
+		t.Fatalf("OpenForSession failed: %v", err)
+	}
+	if packet := readDataStreamTransition(t, transition); packet.Action != protocol.StoreSubscribe {
+		t.Fatalf("start packet = %#v, want subscribe", packet)
+	}
+
+	device.DeviceDisconnected(relayConn)
+	if err := broker.CloseSession(context.Background(), "session-a"); err != nil {
+		t.Fatalf("CloseSession after disconnect failed: %v", err)
+	}
+	if got := device.ActiveDataStreamSubscriptions(); len(got) != 0 {
+		t.Fatalf("release after disconnect left active subscriptions: %#v", got)
+	}
+	allocator.mu.Lock()
+	released := append([]restream.DataStreamEndpoint(nil), allocator.released...)
+	allocator.mu.Unlock()
+	if len(released) != 1 || released[0].LeaseID != endpoint.LeaseID {
+		t.Fatalf("released endpoints = %#v, want lease %q", released, endpoint.LeaseID)
+	}
+}
+
 func readDataStreamTransition(
 	t *testing.T,
 	transitions <-chan *protocol.DataStreamSubscriptionRequestPacket,

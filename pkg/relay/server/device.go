@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -25,6 +26,8 @@ const (
 	maxPendingDeviceRPCs                         = 4096
 	defaultDeviceRPCTimeout                      = 30 * time.Second
 )
+
+var errDeviceDisconnected = errors.New("device is disconnected")
 
 // Device stores aggregated relay data for one device.
 type Device struct {
@@ -315,6 +318,13 @@ func (d *Device) StopListeningToDataStream(
 		return nil
 	}
 	if err := d.performDataStreamTransition(ctx, subscription, serial.accessLevel, false); err != nil {
+		// A disconnected device has no remote subscription left to stop. Finish
+		// the local release so a later relay connection does not restore a stream
+		// whose final viewer has already gone away.
+		if errors.Is(err, errDeviceDisconnected) {
+			serial.count = 0
+			return nil
+		}
 		return err
 	}
 	serial.count = 0
@@ -460,7 +470,7 @@ func (d *Device) performDataStreamTransition(
 	conn := d.conn
 	d.connMutex.RUnlock()
 	if conn == nil {
-		return fmt.Errorf("device is disconnected")
+		return errDeviceDisconnected
 	}
 	if !conn.Capabilities.DataStreams {
 		return fmt.Errorf("connected device does not advertise data-stream support")
