@@ -18,6 +18,8 @@ import (
 const (
 	defaultRPCWriteTimeout       = 5 * time.Second
 	defaultCloseWriteTimeout     = time.Second
+	defaultAuthenticationTimeout = 10 * time.Second
+	defaultMaxHelloMessageBytes  = int64(64 * 1024)
 	defaultMaxReadMessageBytes   = int64(64 * 1024 * 1024)
 	maxInFlightRelayRPCs         = 256
 	maxRelayRPCErrorBytes        = 4096
@@ -35,6 +37,12 @@ type Config struct {
 	Capabilities       protocol.RelayCapabilities
 	Metadata           map[string]string
 	RPCWriteTimeout    time.Duration
+	// AuthenticationTimeout bounds the entire pre-authentication phase,
+	// including receipt and validation of the device hello.
+	AuthenticationTimeout time.Duration
+	// MaxHelloMessageBytes bounds the unauthenticated device hello. The larger
+	// MaxReadMessageBytes limit applies only after authentication succeeds.
+	MaxHelloMessageBytes int64
 	// MaxReadMessageBytes bounds one device control-plane websocket message.
 	// High-bandwidth payloads must use the separate data plane.
 	MaxReadMessageBytes int64
@@ -50,6 +58,12 @@ type Server struct {
 func New(config Config) *Server {
 	if config.RPCWriteTimeout <= 0 {
 		config.RPCWriteTimeout = defaultRPCWriteTimeout
+	}
+	if config.AuthenticationTimeout <= 0 {
+		config.AuthenticationTimeout = defaultAuthenticationTimeout
+	}
+	if config.MaxHelloMessageBytes <= 0 {
+		config.MaxHelloMessageBytes = defaultMaxHelloMessageBytes
 	}
 	if config.MaxReadMessageBytes <= 0 {
 		config.MaxReadMessageBytes = defaultMaxReadMessageBytes
@@ -70,7 +84,7 @@ func (s *Server) AcceptConn(ctx context.Context, conn *gws.Conn) (retErr error) 
 	}
 
 	conn.EnableWriteCompression(true)
-	conn.SetReadLimit(s.config.MaxReadMessageBytes)
+	conn.SetReadLimit(s.config.MaxHelloMessageBytes)
 	c := &Connection{
 		conn:            conn,
 		rpcWriteTimeout: s.config.RPCWriteTimeout,
@@ -94,10 +108,20 @@ func (s *Server) AcceptConn(ctx context.Context, conn *gws.Conn) (retErr error) 
 		}
 	}()
 
-	device, err := s.acceptHello(ctx, c)
+	authContext, cancelAuthentication := context.WithTimeout(ctx, s.config.AuthenticationTimeout)
+	if err := conn.SetReadDeadline(time.Now().Add(s.config.AuthenticationTimeout)); err != nil {
+		cancelAuthentication()
+		return fmt.Errorf("set relay authentication deadline: %w", err)
+	}
+	device, err := s.acceptHello(authContext, c)
+	cancelAuthentication()
 	if err != nil {
 		return err
 	}
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		return fmt.Errorf("clear relay authentication deadline: %w", err)
+	}
+	conn.SetReadLimit(s.config.MaxReadMessageBytes)
 
 	if err := s.sendConnected(c); err != nil {
 		return err

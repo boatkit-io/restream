@@ -154,6 +154,60 @@ func TestServerAcceptConnAuthenticatesAndDispatchesPackets(t *testing.T) {
 	}
 }
 
+func TestServerAcceptConnTimesOutBeforeHello(t *testing.T) {
+	serverConn, _, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	relayServer := New(Config{
+		DeviceManager:         NewDeviceManager(DeviceManagerConfig{}),
+		AuthenticateDevice:    func(context.Context, *protocol.DeviceHello, *Connection) (restream.AccessLevel, error) { return 1, nil },
+		AuthenticationTimeout: 25 * time.Millisecond,
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- relayServer.AcceptConn(context.Background(), serverConn)
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("AcceptConn returned nil after authentication timeout")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AcceptConn did not enforce the authentication timeout")
+	}
+}
+
+func TestServerAcceptConnBoundsHelloBeforeAuthentication(t *testing.T) {
+	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
+	defer cleanup()
+
+	relayServer := New(Config{
+		DeviceManager:         NewDeviceManager(DeviceManagerConfig{}),
+		AuthenticateDevice:    func(context.Context, *protocol.DeviceHello, *Connection) (restream.AccessLevel, error) { return 1, nil },
+		MaxHelloMessageBytes:  32,
+		AuthenticationTimeout: time.Second,
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- relayServer.AcceptConn(context.Background(), serverConn)
+	}()
+	if err := clientConn.WriteMessage(gws.BinaryMessage, make([]byte, 64)); err != nil {
+		t.Fatalf("Write oversized hello failed: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "read limit") {
+			t.Fatalf("AcceptConn error = %v, want websocket read limit error", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AcceptConn did not reject oversized hello")
+	}
+}
+
 func TestConnectionSendRPCWritesCallPacket(t *testing.T) {
 	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
 	defer cleanup()
