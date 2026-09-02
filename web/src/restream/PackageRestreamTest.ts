@@ -259,6 +259,66 @@ export class call5Response {
     ];
 }
 
+export class callCanceledRequest extends RPCStruct<callCanceledResponse,number> {
+    public test!: number;
+    private constructor() { super("callCanceled", callCanceledResponse); }
+
+    public static fromValues(
+        test: number = 0,
+    ) {
+        const o = new callCanceledRequest();
+        o.test = test;
+        return o;
+    }
+
+    public static readonly fieldInfo: readonly FieldInfo[] = [
+        {varInfo: new VarInfoPrimitive(SerializationType.Int64)},
+    ];
+    public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
+        const o = new callCanceledRequest();
+        o.test = ReStreamDecoders.deserializeValue(r, this.fieldInfo[0].varInfo);
+        return o;
+    }
+
+    public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
+        ReStreamEncoders.serializeValue(this.test, w, callCanceledRequest.fieldInfo[0].varInfo);
+    }
+}
+
+export class callCanceledResponse {
+    public result!: number;
+    public error!: string|undefined;
+
+    private constructor() {}
+
+    public static fromValues(
+        result: number = 0,
+        error: string|undefined = undefined,
+    ) {
+        const o = new callCanceledResponse();
+        o.result = result;
+        o.error = error;
+        return o;
+    }
+
+    public static deserialized(r: BinaryReader, _: VarInfoStruct | undefined) {
+        const o = new callCanceledResponse();
+        o.result = ReStreamDecoders.deserializeValue(r, this.fieldInfo[0].varInfo);
+        o.error = ReStreamDecoders.deserializeValue(r, this.fieldInfo[1].varInfo);
+        return o;
+    }
+
+    public serialize(w: BinaryWriter, _: VarInfoStruct | undefined) {
+        ReStreamEncoders.serializeValue(this.result, w, callCanceledResponse.fieldInfo[0].varInfo);
+        ReStreamEncoders.serializeValue(this.error, w, callCanceledResponse.fieldInfo[1].varInfo);
+    }
+
+    public static readonly fieldInfo: readonly FieldInfo[] = [
+        {varInfo: new VarInfoPrimitive(SerializationType.Int64)},
+        {varInfo: new VarInfoPointer(false, new VarInfoPrimitive(SerializationType.String))},
+    ];
+}
+
 export class callEvent extends EventStruct {
     public test!: number;
 

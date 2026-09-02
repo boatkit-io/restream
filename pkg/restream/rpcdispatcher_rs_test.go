@@ -286,6 +286,66 @@ func (s *call5Response) Deserialize(r *binarystreams.Reader, _ *VarInfoStruct) e
 	return nil
 }
 
+// callCanceledRequest is a request object for the callCanceled RPC call
+type callCanceledRequest struct { //nolint:revive
+	Test int
+}
+
+// callCanceledRequestFieldInfo is the static field info for the callCanceledRequest struct
+var callCanceledRequestFieldInfo = []FieldInfo{
+	{Name: "Test", FieldIdx: 0, VarInfo: &VarInfoPrimitive{DataType: SerializationTypeInt64, MappedType: Ptr("int")}},
+}
+
+// Serialize serializes this structure to a binary writer
+func (s *callCanceledRequest) Serialize(w *binarystreams.Writer, _ *VarInfoStruct) error {
+	if err := SerializeValue(s.Test, w, callCanceledRequestFieldInfo[0].VarInfo); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Deserialize deserializes data from a binary reader into this struct
+func (s *callCanceledRequest) Deserialize(r *binarystreams.Reader, _ *VarInfoStruct) error {
+	if err := DeserializeValue(&s.Test, r, callCanceledRequestFieldInfo[0].VarInfo); err != nil {
+		return err
+	}
+	return nil
+}
+
+// callCanceledResponse is a response object for the callCanceled RPC call
+type callCanceledResponse struct { //nolint:revive
+	Result int
+	Error  *string
+}
+
+// callCanceledResponseFieldInfo is the static field info for the callCanceledResponse struct
+var callCanceledResponseFieldInfo = []FieldInfo{
+	{Name: "Result", FieldIdx: 0, VarInfo: &VarInfoPrimitive{DataType: SerializationTypeInt64, MappedType: Ptr("int")}},
+	{Name: "Error", FieldIdx: 1, VarInfo: &VarInfoPointer{NotNil: false, SubType: &VarInfoPrimitive{DataType: SerializationTypeString}}},
+}
+
+// Serialize serializes this structure to a binary writer
+func (s *callCanceledResponse) Serialize(w *binarystreams.Writer, _ *VarInfoStruct) error {
+	if err := SerializeValue(s.Result, w, callCanceledResponseFieldInfo[0].VarInfo); err != nil {
+		return err
+	}
+	if err := SerializeValue(s.Error, w, callCanceledResponseFieldInfo[1].VarInfo); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Deserialize deserializes data from a binary reader into this struct
+func (s *callCanceledResponse) Deserialize(r *binarystreams.Reader, _ *VarInfoStruct) error {
+	if err := DeserializeValue(&s.Result, r, callCanceledResponseFieldInfo[0].VarInfo); err != nil {
+		return err
+	}
+	if err := DeserializeValue(&s.Error, r, callCanceledResponseFieldInfo[1].VarInfo); err != nil {
+		return err
+	}
+	return nil
+}
+
 // notifyRequest is a request object for the notify FFRPC call
 type notifyRequest struct { //nolint:revive
 	Payload []byte

@@ -123,7 +123,7 @@ func TestCallContextPreservesCancellation(t *testing.T) {
 		close(started)
 		<-ctx.Done()
 		return test, ctx.Err()
-	}, reflect.TypeFor[call5Request](), reflect.TypeFor[call5Response]())
+	}, reflect.TypeFor[callCanceledRequest](), reflect.TypeFor[callCanceledResponse]())
 	requestBytes, err := SerializeToBytes(&call5Request{Test: 4}, nil)
 	assert.NoError(t, err)
 
