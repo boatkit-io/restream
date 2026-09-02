@@ -32,9 +32,28 @@ type rpcInfo struct {
 // RPCHandlerFunc is a helper type for a function that handles an RPC call
 type RPCHandlerFunc func(name string, minAccessLevel AccessLevel, binaryData []byte) ([]byte, bool, error)
 
+// RPCHandlerContextFunc handles an RPC with a context that is canceled when
+// the caller abandons the request or its transport closes.
+type RPCHandlerContextFunc func(
+	ctx context.Context,
+	name string,
+	minAccessLevel AccessLevel,
+	binaryData []byte,
+) ([]byte, bool, error)
+
 // RPCHandlerWithAnnotationsFunc handles an RPC together with transport-supplied
 // key/value annotations that remain separate from its serialized request.
 type RPCHandlerWithAnnotationsFunc func(
+	annotations map[string]string,
+	name string,
+	minAccessLevel AccessLevel,
+	binaryData []byte,
+) ([]byte, bool, error)
+
+// RPCHandlerContextWithAnnotationsFunc handles a cancelable RPC together with
+// transport-supplied key/value annotations.
+type RPCHandlerContextWithAnnotationsFunc func(
+	ctx context.Context,
 	annotations map[string]string,
 	name string,
 	minAccessLevel AccessLevel,
@@ -202,11 +221,33 @@ func (d *RPCDispatcher) RegisterFFRPCHandler(
 
 // FireRPC is called by a client to fire an RPC to a store
 func (d *RPCDispatcher) FireRPC(name string, accessLevel AccessLevel, binaryData []byte) ([]byte, bool, error) {
-	return d.FireRPCWithAnnotations(nil, name, accessLevel, binaryData)
+	return d.FireRPCContextWithAnnotations(context.Background(), nil, name, accessLevel, binaryData)
 }
 
 // FireRPCWithAnnotations dispatches an RPC with transport-supplied annotations.
 func (d *RPCDispatcher) FireRPCWithAnnotations(
+	annotations map[string]string,
+	name string,
+	accessLevel AccessLevel,
+	binaryData []byte,
+) ([]byte, bool, error) {
+	return d.FireRPCContextWithAnnotations(context.Background(), annotations, name, accessLevel, binaryData)
+}
+
+// FireRPCContext dispatches an RPC whose callback observes caller cancellation.
+func (d *RPCDispatcher) FireRPCContext(
+	ctx context.Context,
+	name string,
+	accessLevel AccessLevel,
+	binaryData []byte,
+) ([]byte, bool, error) {
+	return d.FireRPCContextWithAnnotations(ctx, nil, name, accessLevel, binaryData)
+}
+
+// FireRPCContextWithAnnotations dispatches an RPC with caller cancellation and
+// transport-supplied annotations.
+func (d *RPCDispatcher) FireRPCContextWithAnnotations(
+	ctx context.Context,
 	annotations map[string]string,
 	name string,
 	accessLevel AccessLevel,
@@ -246,7 +287,7 @@ func (d *RPCDispatcher) FireRPCWithAnnotations(
 	}
 	argVs := make([]reflect.Value, numArgs+argOffset)
 	if rpc.HasContext {
-		argVs[0] = reflect.ValueOf(newRPCCallContext(accessLevel, annotations))
+		argVs[0] = reflect.ValueOf(newRPCCallContext(ctx, accessLevel, annotations))
 	}
 	for i := range numArgs {
 		argVs[i+argOffset] = rve.Field(i)
@@ -270,7 +311,9 @@ func (d *RPCDispatcher) FireRPCWithAnnotations(
 		errRet = respRaw[errIdx].Interface().(error)
 		errorStr := errRet.Error()
 		rsve.FieldByName("Error").Set(reflect.ValueOf(&errorStr))
-		d.log.Errorf("Error response to RPC %s: %s", name, errRet)
+		if !errors.Is(errRet, context.Canceled) {
+			d.log.Errorf("Error response to RPC %s: %s", name, errRet)
+		}
 	}
 
 	var respBytes []byte
@@ -347,7 +390,7 @@ func (d *RPCDispatcher) FireFFRPCWithAnnotations(
 	}
 	argValues := make([]reflect.Value, len(ffrpc.ArgKinds)+argOffset)
 	if ffrpc.HasContext {
-		argValues[0] = reflect.ValueOf(newRPCCallContext(accessLevel, annotations))
+		argValues[0] = reflect.ValueOf(newRPCCallContext(context.Background(), accessLevel, annotations))
 	}
 	for index := range ffrpc.ArgKinds {
 		argValues[index+argOffset] = rve.Field(index)
@@ -370,8 +413,11 @@ func rpcContextArgumentOffset(callbackType reflect.Type) int {
 	return 0
 }
 
-func newRPCCallContext(accessLevel AccessLevel, annotations map[string]string) context.Context {
-	return context.WithValue(context.Background(), rpcCallInfoContextKey{}, RPCCallInfo{
+func newRPCCallContext(parent context.Context, accessLevel AccessLevel, annotations map[string]string) context.Context {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithValue(parent, rpcCallInfoContextKey{}, RPCCallInfo{
 		AccessLevel: accessLevel,
 		Annotations: annotations,
 	})

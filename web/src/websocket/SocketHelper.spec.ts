@@ -15,12 +15,31 @@ import {
     KeyedEventMessage,
     KeyedEventSubscriptionMessage,
     ReStreamSocket,
+    RPCCancelMessage,
+    RPCResponseStruct,
+    RPCStruct,
     StoreSubscriptionAction,
     StoreUpdateMessageKind,
     SubscriptionRejectionMessage,
     ViewerSessionAttachRequest,
     ViewerSessionAttachResponse,
 } from './SocketHelper.js';
+
+class TestRPCResponse extends RPCResponseStruct<number> {
+    public static deserialized(_reader: BinaryReader): TestRPCResponse {
+        return new TestRPCResponse();
+    }
+}
+
+class TestRPC extends RPCStruct<TestRPCResponse, number> {
+    public constructor(public readonly value: number) {
+        super('Map.Search', TestRPCResponse);
+    }
+
+    public serialize(writer: BinaryWriter, _varInfo: VarInfoStruct | undefined): void {
+        writer.writeUint8(this.value);
+    }
+}
 
 class TestFFRPC extends FFRPCStruct {
     public constructor(public readonly value: number) {
@@ -160,6 +179,38 @@ describe('ReStreamSocket store scoping', () => {
         expect(handleUpdate).toHaveBeenNthCalledWith(1, vesselUpdate);
         expect(handleUpdate).toHaveBeenNthCalledWith(2, followedUpdate);
         handleUpdate.mockRestore();
+    });
+});
+
+describe('ReStreamSocket RPC cancellation', () => {
+    test('does not send an RPC when its signal is already aborted', async () => {
+        const socket = new FakeSocket();
+        const restream = new ReStreamSocket(socket as unknown as Socket);
+        await restream.markAuthenticated();
+        socket.emitted.length = 0;
+        const controller = new AbortController();
+        controller.abort();
+
+        await expect(restream.sendRPC(new TestRPC(7), controller.signal)).rejects.toMatchObject({
+            name: 'AbortError',
+        });
+        expect(socket.emitted).toEqual([]);
+    });
+
+    test('notifies the server and rejects when an in-flight RPC is aborted', async () => {
+        const socket = new FakeSocket();
+        const restream = new ReStreamSocket(socket as unknown as Socket);
+        await restream.markAuthenticated();
+        socket.emitted.length = 0;
+        const controller = new AbortController();
+        const result = restream.sendRPC(new TestRPC(7), controller.signal);
+
+        controller.abort();
+
+        await expect(result).rejects.toMatchObject({ name: 'AbortError' });
+        expect(socket.emitted.map(({ name }) => name)).toEqual(['rpccall', 'rpccancel']);
+        const callID = (socket.emitted[0]?.message as { callID: number }).callID;
+        expect(socket.emitted[1]?.message as RPCCancelMessage).toEqual({ callID });
     });
 });
 

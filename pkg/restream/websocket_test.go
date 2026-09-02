@@ -3,6 +3,7 @@ package restream
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -69,13 +70,26 @@ func TestAddSocketHandlersRejectsConflictingFFRPCHandlers(t *testing.T) {
 	}
 }
 
+func TestAddSocketHandlersRejectsConflictingRPCHandlers(t *testing.T) {
+	legacy := func(string, AccessLevel, []byte) ([]byte, bool, error) { return nil, true, nil }
+	contextHandler := func(context.Context, string, AccessLevel, []byte) ([]byte, bool, error) {
+		return nil, true, nil
+	}
+	err := AddSocketHandlersWithOptions(nil, nil, nil, legacy, nil, nil, SocketHandlerOptions{
+		RPCHandlerContext: contextHandler,
+	})
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("conflicting RPC handler error = %v", err)
+	}
+}
+
 func TestUpdateSessionConfigRefreshesRPCHandler(t *testing.T) {
 	oldCalled := false
 	newCalled := false
 	oldFFRPCCalled := false
 	newFFRPCCalled := false
 	tracker := newSocketTracker(socketTrackerConfig{
-		rpch: func(string, AccessLevel, []byte) ([]byte, bool, error) {
+		rpch: func(context.Context, string, AccessLevel, []byte) ([]byte, bool, error) {
 			oldCalled = true
 			return nil, true, nil
 		},
@@ -86,7 +100,7 @@ func TestUpdateSessionConfigRefreshesRPCHandler(t *testing.T) {
 		annotations: map[string]string{"principal_id": "old"},
 	})
 	tracker.updateSessionConfig(socketTrackerConfig{
-		rpch: func(string, AccessLevel, []byte) ([]byte, bool, error) {
+		rpch: func(context.Context, string, AccessLevel, []byte) ([]byte, bool, error) {
 			newCalled = true
 			return nil, true, nil
 		},
@@ -97,7 +111,7 @@ func TestUpdateSessionConfigRefreshesRPCHandler(t *testing.T) {
 		annotations: map[string]string{"principal_id": "new"},
 	}, ViewerSessionIdentity{})
 
-	_, _, err := tracker.lookupRPCHandler()("Test.Call", AccessLevelPublic, nil)
+	_, _, err := tracker.lookupRPCHandler()(context.Background(), "Test.Call", AccessLevelPublic, nil)
 	if err != nil {
 		t.Fatalf("refreshed RPC handler failed: %v", err)
 	}
@@ -147,6 +161,44 @@ func TestViewerSocketFFRPCReceivesAnnotations(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("FFRPC handler was not called")
+	}
+}
+
+func TestViewerSocketRPCCancelCancelsHandlerContext(t *testing.T) {
+	started := make(chan struct{})
+	canceled := make(chan error, 1)
+	tracker := newSocketTracker(socketTrackerConfig{
+		log: logrus.New(),
+		rpch: func(ctx context.Context, _ string, _ AccessLevel, _ []byte) ([]byte, bool, error) {
+			close(started)
+			<-ctx.Done()
+			canceled <- ctx.Err()
+			return nil, true, ctx.Err()
+		},
+		accessLookup: func() (AccessLevel, error) { return AccessLevelPublic, nil },
+	})
+	initializeTestSocketRuntime(tracker)
+	defer tracker.cancel()
+
+	tracker.onRPCCall(7, RPCCallMessage{
+		CallID:     42,
+		MethodName: "Store.Search",
+		Request:    socketTypes.NewBytesBuffer([]byte{1}),
+	})
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("RPC handler was not called")
+	}
+
+	tracker.onRPCCancel(7, RPCCancelMessage{CallID: 42})
+	select {
+	case err := <-canceled:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("handler context error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RPC handler context was not canceled")
 	}
 }
 
@@ -1394,6 +1446,9 @@ func initializeTestSocketRuntime(socket *socketTracker) {
 	socket.lifetimeCtx, socket.cancel = context.WithCancel(context.Background())
 	socket.rpcSlots = make(chan struct{}, socket.limits.MaxInFlightRPCs)
 	socket.ffrpcSlots = make(chan struct{}, socket.limits.MaxInFlightFFRPCs)
+	if socket.activeRPCs == nil {
+		socket.activeRPCs = map[int]*trackedRPCCall{}
+	}
 }
 
 func assertFieldsContainOnly(t *testing.T, actual [][]any, expected []any) {

@@ -116,6 +116,30 @@ func TestCallWithOptionalContext(t *testing.T) {
 	assert.Equal(t, 5, response.Result)
 }
 
+func TestCallContextPreservesCancellation(t *testing.T) {
+	rpcd := NewRPCDispatcher(logrus.StandardLogger())
+	started := make(chan struct{})
+	rpcd.RegisterRPCHandler("callCanceled", AccessLevelViewer, func(ctx context.Context, test int) (int, error) {
+		close(started)
+		<-ctx.Done()
+		return test, ctx.Err()
+	}, reflect.TypeFor[call5Request](), reflect.TypeFor[call5Response]())
+	requestBytes, err := SerializeToBytes(&call5Request{Test: 4}, nil)
+	assert.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		_, handled, callErr := rpcd.FireRPCContext(ctx, "callCanceled", AccessLevelViewer, requestBytes)
+		assert.True(t, handled)
+		assert.NoError(t, callErr)
+	}()
+	<-started
+	cancel()
+	<-finished
+}
+
 func TestFFRPCCalls(t *testing.T) {
 	rpcd := NewRPCDispatcher(logrus.StandardLogger())
 

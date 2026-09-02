@@ -238,6 +238,15 @@ rpcd.RegisterRPCHandler(
 
 The context parameter is dispatcher-only. Codegen omits it from the generated Go request structure and TypeScript RPC, so adding it does not change the serialized request or require callers to supply another argument. The dispatcher constructs and passes a context only when the registered callback has the exact leading `context.Context` parameter; callbacks without it retain the existing call path. The same optional leading parameter is supported for FFRPC callbacks.
 
+Viewer RPCs can propagate active cancellation through that context. Pass an
+`AbortSignal` to `ReStreamSocket.sendRPC(request, signal)`, configure the Go
+socket with `SocketHandlerOptions.RPCHandlerContext`, and dispatch through
+`FireRPCContext` or `FireRPCContextWithAnnotations`. Aborting sends an additive
+`rpccancel` event; older peers safely ignore it. A supporting server cancels the
+handler context and suppresses the abandoned response. Destroying the Viewer
+session also cancels its calls; resumable sessions preserve in-flight calls
+across a temporary transport loss.
+
 `RPCCallInfo` contains the authenticated caller's `AccessLevel` and an optional `Annotations` map. Annotation keys and values are opaque to ReStream: applications define their meaning and should populate trusted identity or connection metadata only after authenticating the caller. An annotation is transport metadata, not part of the typed RPC request.
 
 Call `FireRPCWithAnnotations` when a transport has metadata to attach. Existing transports can continue to use `FireRPC`:

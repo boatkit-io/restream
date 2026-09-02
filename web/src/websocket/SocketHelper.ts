@@ -15,6 +15,7 @@ const maxSocketSessionAttachOperations = 8192;
 interface RPCWaiting {
     def: Deferred<unknown>;
     responseType: Deserializable<RPCResponseStruct<unknown>>;
+    abortCleanup?: () => void;
 }
 
 interface EventSubscription {
@@ -87,6 +88,7 @@ enum SocketEventNames {
 
     RPCCall = 'rpccall',
     RPCCallResponse = 'rpccallresp',
+    RPCCancel = 'rpccancel',
     FFRPCCall = 'ffrpc',
 }
 
@@ -236,6 +238,10 @@ export interface RPCCallMessage {
     request: ArrayBufferLike;
 }
 
+export interface RPCCancelMessage {
+    callID: number;
+}
+
 export interface FFRPCCallMessage {
     methodName: string;
     request: ArrayBufferLike;
@@ -272,6 +278,7 @@ export class ReStreamSocket {
     private _rpcCallID = 1;
     private _dataStreamSubscriptionID = 1;
     private _rpcCallsPending = new Map<number, RPCWaiting>();
+    private _rpcCallsCanceled = new Set<number>();
     private _eventSubscriptions = new Map<string, Set<EventSubscription>>();
     private _keyedEventSubscriptions = new Map<string, KeyedEventSubscriptionGroup>();
     private _dataStreamSubscriptions = new Map<string, DataStreamSubscriptionGroup>();
@@ -291,9 +298,11 @@ export class ReStreamSocket {
         socket.on('disconnect', () => {
             if (!this._viewerSessions) {
                 for (const v of this._rpcCallsPending.values()) {
+                    v.abortCleanup?.();
                     v.def.reject({ message: "Server is disconnected", data: {} });
                 }
                 this._rpcCallsPending.clear();
+                this._rpcCallsCanceled.clear();
                 for (const group of this._dataStreamSubscriptions.values()) {
                     group.endpoint = undefined;
                     group.error = new Error("Server is disconnected");
@@ -406,9 +415,14 @@ export class ReStreamSocket {
             this._rpcCallsPending.delete(message.callID);
 
             if (!waiting) {
+                if (this._rpcCallsCanceled.delete(message.callID)) {
+                    return;
+                }
                 alert("got binary RPC response for untracked RPC call " + message.callID);
                 return;
             }
+
+            waiting.abortCleanup?.();
 
             if (!message.response || message.error) {
                 waiting.def.reject(message.error?.message ?? "Server is disconnected");
@@ -575,9 +589,15 @@ export class ReStreamSocket {
         this._socket.emit(SocketEventNames.ViewerSessionClose, message);
     }
 
-    sendRPC<RS extends RPCResponseStruct<RT>, RT>(rpcStruct: RPCStruct<RS, RT>): Promise<RT> {
+    sendRPC<RS extends RPCResponseStruct<RT>, RT>(
+        rpcStruct: RPCStruct<RS, RT>,
+        signal?: AbortSignal,
+    ): Promise<RT> {
         if (!this._authenticated) {
             return Promise.reject(new Error("Server is disconnected"));
+        }
+        if (signal?.aborted) {
+            return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
         }
         if (this._rpcCallsPending.size >= maxSocketPendingRPCs) {
             this._socket.disconnect();
@@ -601,6 +621,22 @@ export class ReStreamSocket {
             responseType: rpcStruct.responseType,
         };
         this._rpcCallsPending.set(msg.callID, waiting);
+
+        if (signal) {
+            const abort = () => {
+                if (this._rpcCallsPending.get(msg.callID) !== waiting) {
+                    return;
+                }
+                this._rpcCallsPending.delete(msg.callID);
+                this._rememberCanceledRPC(msg.callID);
+                waiting.abortCleanup?.();
+                const cancelMessage: RPCCancelMessage = { callID: msg.callID };
+                this._socket.emit(SocketEventNames.RPCCancel, cancelMessage);
+                def.reject(new DOMException('The operation was aborted.', 'AbortError'));
+            };
+            signal.addEventListener('abort', abort, { once: true });
+            waiting.abortCleanup = () => signal.removeEventListener('abort', abort);
+        }
      
         this._socket.emit(SocketEventNames.RPCCall, msg);
 
@@ -830,9 +866,21 @@ export class ReStreamSocket {
 
     private _rejectPendingRPCs(message: string): void {
         for (const waiting of this._rpcCallsPending.values()) {
+            waiting.abortCleanup?.();
             waiting.def.reject({ message, data: {} });
         }
         this._rpcCallsPending.clear();
+        this._rpcCallsCanceled.clear();
+    }
+
+    private _rememberCanceledRPC(callID: number): void {
+        if (this._rpcCallsCanceled.size >= maxSocketPendingRPCs) {
+            const oldest = this._rpcCallsCanceled.values().next().value;
+            if (oldest !== undefined) {
+                this._rpcCallsCanceled.delete(oldest);
+            }
+        }
+        this._rpcCallsCanceled.add(callID);
     }
 
     private _emitKeyedEventSubscription(

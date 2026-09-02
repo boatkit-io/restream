@@ -178,6 +178,11 @@ type RPCCallMessage struct {
 	Request    socketTypes.BufferInterface `json:"request"`
 }
 
+// RPCCancelMessage abandons an in-flight RPC owned by this Viewer session.
+type RPCCancelMessage struct {
+	CallID int `json:"callID"`
+}
+
 // FFRPCCallMessage is a fire-and-forget RPC sent by the client. It deliberately
 // has no call ID because the server never sends a response.
 type FFRPCCallMessage struct {
@@ -227,6 +232,8 @@ const (
 	SocketEventNameRPCCall = "rpccall"
 	// SocketEventNameRPCCallResponse - RPC Call Response
 	SocketEventNameRPCCallResponse = "rpccallresp"
+	// SocketEventNameRPCCancel - RPC cancellation
+	SocketEventNameRPCCancel = "rpccancel"
 	// SocketEventNameFFRPCCall - Fire-and-forget RPC Call
 	SocketEventNameFFRPCCall = "ffrpc"
 )
@@ -266,6 +273,9 @@ const (
 
 // SocketHandlerOptions configures optional Restream websocket surfaces.
 type SocketHandlerOptions struct {
+	// RPCHandlerContext and the positional RPC handler passed to
+	// AddSocketHandlersWithOptions are mutually exclusive.
+	RPCHandlerContext RPCHandlerContextFunc
 	// FFRPCHandler and FFRPCHandlerWithAnnotations are mutually exclusive.
 	FFRPCHandler                FFRPCHandlerFunc
 	FFRPCHandlerWithAnnotations FFRPCHandlerWithAnnotationsFunc
@@ -353,7 +363,7 @@ type bufferedViewerStoreUpdate struct {
 type socketTrackerConfig struct {
 	log          *logrus.Logger
 	sr           *StoreRegistry
-	rpch         RPCHandlerFunc
+	rpch         RPCHandlerContextFunc
 	ffrpch       FFRPCHandlerWithAnnotationsFunc
 	annotations  map[string]string
 	ed           *EventDispatcher
@@ -363,11 +373,15 @@ type socketTrackerConfig struct {
 	limits       SocketHandlerLimits
 }
 
+type trackedRPCCall struct {
+	cancel context.CancelFunc
+}
+
 // socketTracker is a handler struct holding the information for a single websocket connection
 type socketTracker struct {
 	log         *logrus.Logger
 	sr          *StoreRegistry
-	rpch        RPCHandlerFunc
+	rpch        RPCHandlerContextFunc
 	ffrpch      FFRPCHandlerWithAnnotationsFunc
 	annotations map[string]string
 	ed          *EventDispatcher
@@ -378,6 +392,8 @@ type socketTracker struct {
 	cancel      context.CancelFunc
 	rpcSlots    chan struct{}
 	ffrpcSlots  chan struct{}
+	rpcMutex    sync.Mutex
+	activeRPCs  map[int]*trackedRPCCall
 
 	accessMutex  sync.RWMutex
 	accessLookup AccessLookupFunc
@@ -438,6 +454,7 @@ func newSocketTracker(config socketTrackerConfig) *socketTracker {
 		cancel:       cancel,
 		rpcSlots:     make(chan struct{}, limits.MaxInFlightRPCs),
 		ffrpcSlots:   make(chan struct{}, limits.MaxInFlightFFRPCs),
+		activeRPCs:   map[int]*trackedRPCCall{},
 
 		emitQueue:               make(chan emitMessage, max(100, limits.MaxBufferedSessionStores)),
 		subscriptionMutex:       smartmutex.SmartMutex{Name: "restream.socketTracker.subscriptionMutex"},
@@ -501,6 +518,15 @@ func AddSocketHandlersWithOptions(
 	if options.FFRPCHandler != nil && options.FFRPCHandlerWithAnnotations != nil {
 		return errors.New("FFRPCHandler and FFRPCHandlerWithAnnotations are mutually exclusive")
 	}
+	if rpch != nil && options.RPCHandlerContext != nil {
+		return errors.New("RPC handler and RPCHandlerContext are mutually exclusive")
+	}
+	contextRPCH := options.RPCHandlerContext
+	if contextRPCH == nil && rpch != nil {
+		contextRPCH = func(_ context.Context, name string, accessLevel AccessLevel, binaryData []byte) ([]byte, bool, error) {
+			return rpch(name, accessLevel, binaryData)
+		}
+	}
 	ffrpch := options.FFRPCHandlerWithAnnotations
 	if ffrpch == nil && options.FFRPCHandler != nil {
 		ffrpch = func(_ map[string]string, name string, accessLevel AccessLevel, binaryData []byte) (bool, error) {
@@ -510,7 +536,7 @@ func AddSocketHandlersWithOptions(
 	config := socketTrackerConfig{
 		log:          log,
 		sr:           sr,
-		rpch:         rpch,
+		rpch:         contextRPCH,
 		ffrpch:       ffrpch,
 		annotations:  options.RPCAnnotations,
 		ed:           ed,
@@ -735,7 +761,18 @@ func (st *socketTracker) registerOperationalHandlers(
 	if err := register(SocketEventNameDataStreamSubscription, st.onDataStreamSubscription); err != nil {
 		return err
 	}
-	if err := register(SocketEventNameRPCCall, st.onRPCCall); err != nil {
+	if err := conn.On(SocketEventNameRPCCall, func(params ...any) {
+		if st.isCurrentAttachment(conn, generation) {
+			st.onRPCCall(generation, params...)
+		}
+	}); err != nil {
+		return err
+	}
+	if err := conn.On(SocketEventNameRPCCancel, func(params ...any) {
+		if st.isCurrentAttachment(conn, generation) {
+			st.onRPCCancel(generation, params...)
+		}
+	}); err != nil {
 		return err
 	}
 	return register(SocketEventNameFFRPCCall, st.onFFRPCCall)
@@ -754,12 +791,13 @@ func (st *socketTracker) attachSocket(conn *socket.Socket) (uint64, *socket.Sock
 
 func (st *socketTracker) detachSocket(generation uint64) bool {
 	st.attachmentMutex.Lock()
-	defer st.attachmentMutex.Unlock()
 	if generation != st.attachmentGeneration || st.conn == nil {
+		st.attachmentMutex.Unlock()
 		return false
 	}
 	st.conn = nil
 	st.attachmentReady = false
+	st.attachmentMutex.Unlock()
 	return true
 }
 
@@ -1337,7 +1375,7 @@ func (st *socketTracker) lookupAccessLevel() (AccessLevel, error) {
 	return lookup()
 }
 
-func (st *socketTracker) lookupRPCHandler() RPCHandlerFunc {
+func (st *socketTracker) lookupRPCHandler() RPCHandlerContextFunc {
 	st.accessMutex.RLock()
 	handler := st.rpch
 	st.accessMutex.RUnlock()
@@ -2400,7 +2438,7 @@ func (st *socketTracker) KeyedEventCallback(
 }
 
 // onRPCCall is a helper that is called when an RPC call message is received
-func (st *socketTracker) onRPCCall(params ...any) {
+func (st *socketTracker) onRPCCall(_ uint64, params ...any) {
 	rpch := st.lookupRPCHandler()
 	if rpch == nil {
 		st.log.Errorf("RPCCall received but no RPCHandlerFunc was provided")
@@ -2437,10 +2475,26 @@ func (st *socketTracker) onRPCCall(params ...any) {
 		st.disconnectForLimit("in-flight RPCs", st.limits.MaxInFlightRPCs)
 		return
 	}
+	callCtx, cancel := context.WithCancel(st.lifetimeCtx)
+	tracked := &trackedRPCCall{
+		cancel: cancel,
+	}
+	st.rpcMutex.Lock()
+	if _, exists := st.activeRPCs[rpcMsg.CallID]; exists {
+		st.rpcMutex.Unlock()
+		cancel()
+		<-st.rpcSlots
+		st.log.Errorf("Duplicate in-flight RPC call ID: %d", rpcMsg.CallID)
+		st.disconnect()
+		return
+	}
+	st.activeRPCs[rpcMsg.CallID] = tracked
+	st.rpcMutex.Unlock()
 
 	// Spawn to a goroutine since it might take a while to get a response and we don't want to block the main thread
 	go func() {
 		defer func() { <-st.rpcSlots }()
+		defer st.finishRPC(rpcMsg.CallID, tracked)
 		userAccessLevel, err := st.lookupAccessLevel()
 		if err != nil {
 			st.log.Errorf("Error looking up user access level: %+v", err)
@@ -2448,7 +2502,10 @@ func (st *socketTracker) onRPCCall(params ...any) {
 			return
 		}
 
-		respBytes, handled, err := rpch(rpcMsg.MethodName, userAccessLevel, requestBytes)
+		respBytes, handled, err := rpch(callCtx, rpcMsg.MethodName, userAccessLevel, requestBytes)
+		if callCtx.Err() != nil {
+			return
+		}
 		var errObj *RPCCallError
 		if err != nil {
 			st.log.WithField("rpcName", rpcMsg.MethodName).Errorf("Error handling RPC call: %+v", err)
@@ -2471,6 +2528,34 @@ func (st *socketTracker) onRPCCall(params ...any) {
 
 		st.emitMessage(SocketEventNameRPCCallResponse, resp)
 	}()
+}
+
+func (st *socketTracker) onRPCCancel(_ uint64, params ...any) {
+	if len(params) == 0 {
+		return
+	}
+	var message RPCCancelMessage
+	if err := mapstructure.Decode(params[0], &message); err != nil {
+		return
+	}
+	st.rpcMutex.Lock()
+	tracked := st.activeRPCs[message.CallID]
+	if tracked != nil {
+		delete(st.activeRPCs, message.CallID)
+	}
+	st.rpcMutex.Unlock()
+	if tracked != nil {
+		tracked.cancel()
+	}
+}
+
+func (st *socketTracker) finishRPC(callID int, tracked *trackedRPCCall) {
+	st.rpcMutex.Lock()
+	if st.activeRPCs[callID] == tracked {
+		delete(st.activeRPCs, callID)
+	}
+	st.rpcMutex.Unlock()
+	tracked.cancel()
 }
 
 // onFFRPCCall dispatches an FFRPC asynchronously without allocating a call ID,
