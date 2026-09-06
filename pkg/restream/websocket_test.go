@@ -11,6 +11,7 @@ import (
 
 	"github.com/boatkit-io/restream/pkg/binarystreams"
 	"github.com/sirupsen/logrus"
+	logrustest "github.com/sirupsen/logrus/hooks/test"
 	socketTypes "github.com/zishang520/socket.io/v3/pkg/types"
 )
 
@@ -80,6 +81,63 @@ func TestAddSocketHandlersRejectsConflictingRPCHandlers(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Fatalf("conflicting RPC handler error = %v", err)
+	}
+}
+
+func TestViewerSocketClientProtocolViolationsLogWarnings(t *testing.T) {
+	registry, err := NewStoreRegistry(nil)
+	if err != nil {
+		t.Fatalf("NewStoreRegistry failed: %v", err)
+	}
+	tests := []struct {
+		name    string
+		message string
+		invoke  func(*socketTracker)
+	}{
+		{
+			name:    "invalid store",
+			message: "Client referenced a subscription to an invalid store MissingStore",
+			invoke: func(tracker *socketTracker) {
+				tracker.onStoreSubscription(StoreSubscriptionMessage{
+					StoreName: "MissingStore",
+					Action:    Subscribe,
+				})
+			},
+		},
+		{
+			name:    "rpc without handler",
+			message: "RPCCall received but no RPCHandlerFunc was provided",
+			invoke: func(tracker *socketTracker) {
+				tracker.onRPCCall(0, RPCCallMessage{})
+			},
+		},
+		{
+			name:    "ffrpc without handler",
+			message: "FFRPC received but no FFRPCHandlerFunc was provided",
+			invoke: func(tracker *socketTracker) {
+				tracker.onFFRPCCall(FFRPCCallMessage{})
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			log, hook := logrustest.NewNullLogger()
+			tracker := newSocketTracker(socketTrackerConfig{log: log, sr: registry})
+
+			test.invoke(tracker)
+
+			entries := hook.AllEntries()
+			if len(entries) != 1 {
+				t.Fatalf("log entries = %d, want 1", len(entries))
+			}
+			if entries[0].Level != logrus.WarnLevel {
+				t.Fatalf("log level = %s, want warning", entries[0].Level)
+			}
+			if entries[0].Message != test.message {
+				t.Fatalf("log message = %q, want %q", entries[0].Message, test.message)
+			}
+		})
 	}
 }
 

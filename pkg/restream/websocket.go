@@ -1430,24 +1430,24 @@ func (st *socketTracker) removeTrackedKeyedEventSubscription(subscription KeyedE
 // onStoreSubscription is a helper that is called when a store subscription message is received
 func (st *socketTracker) onStoreSubscription(params ...any) {
 	if len(params) == 0 {
-		st.log.Error("Missing store subscription message")
+		st.log.Warn("Missing store subscription message")
 		st.disconnect()
 		return
 	}
 	var subMsg StoreSubscriptionMessage
 	if err := mapstructure.Decode(params[0], &subMsg); err != nil {
-		st.log.Errorf("Error parsing store subscription message: %+v", err)
+		st.log.Warnf("Error parsing store subscription message: %+v", err)
 		st.disconnect()
 		return
 	}
 
 	if !st.sr.IsStoreValid(subMsg.StoreName) {
-		st.log.Errorf("Client referenced a subscription to an invalid store %s", subMsg.StoreName)
+		st.log.Warnf("Client referenced a subscription to an invalid store %s", subMsg.StoreName)
 		st.disconnect()
 		return
 	}
 	if len(subMsg.Key) > 4096 {
-		st.log.Errorf("Client referenced an oversized store subscription key")
+		st.log.Warn("Client referenced an oversized store subscription key")
 		st.disconnect()
 		return
 	}
@@ -1479,7 +1479,7 @@ func (st *socketTracker) onStoreSubscription(params ...any) {
 			st.log.Errorf("Store unsubscription failed for %s/%s: %+v", subMsg.StoreName, subMsg.Key, err)
 		}
 	default:
-		st.log.Errorf("Invalid store subscription action %d", subMsg.Action)
+		st.log.Warnf("Invalid store subscription action %d", subMsg.Action)
 		st.disconnect()
 	}
 }
@@ -1591,28 +1591,28 @@ func (st *socketTracker) unsubscribeStoreKey(storeName string, key string) error
 func (st *socketTracker) onKeyedEventSubscription(params ...any) {
 	var subMsg KeyedEventSubscriptionMessage
 	if len(params) == 0 {
-		st.log.Error("Missing keyed event subscription message")
+		st.log.Warn("Missing keyed event subscription message")
 		st.disconnect()
 		return
 	}
 	if err := mapstructure.Decode(params[0], &subMsg); err != nil {
-		st.log.Errorf("Error parsing keyed event subscription message: %+v", err)
+		st.log.Warnf("Error parsing keyed event subscription message: %+v", err)
 		st.disconnect()
 		return
 	}
 	if st.ed == nil || st.sr == nil {
-		st.log.Error("Keyed event subscription received without an event dispatcher or store registry")
+		st.log.Warn("Keyed event subscription received without an event dispatcher or store registry")
 		st.disconnect()
 		return
 	}
 	if !st.sr.IsStoreValid(subMsg.StoreName) {
-		st.log.Errorf("Client referenced a keyed event subscription for invalid store %s", subMsg.StoreName)
+		st.log.Warnf("Client referenced a keyed event subscription for invalid store %s", subMsg.StoreName)
 		st.disconnect()
 		return
 	}
 	if subMsg.EventName == "" || subMsg.Key == "" ||
 		len(subMsg.EventName) > 256 || len(subMsg.Key) > 4096 {
-		st.log.Errorf(
+		st.log.Warnf(
 			"Client referenced an invalid keyed event subscription for %s/%s/%s",
 			subMsg.StoreName,
 			subMsg.EventName,
@@ -1657,7 +1657,7 @@ func (st *socketTracker) onKeyedEventSubscription(params ...any) {
 				subMsg.StoreName, subMsg.EventName, subMsg.Key, err)
 		}
 	default:
-		st.log.Errorf("Invalid keyed event subscription action %d", subMsg.Action)
+		st.log.Warnf("Invalid keyed event subscription action %d", subMsg.Action)
 		st.disconnect()
 	}
 }
@@ -2441,26 +2441,26 @@ func (st *socketTracker) KeyedEventCallback(
 func (st *socketTracker) onRPCCall(_ uint64, params ...any) {
 	rpch := st.lookupRPCHandler()
 	if rpch == nil {
-		st.log.Errorf("RPCCall received but no RPCHandlerFunc was provided")
+		st.log.Warn("RPCCall received but no RPCHandlerFunc was provided")
 		st.disconnect()
 		return
 	}
 
 	if len(params) == 0 {
-		st.log.Error("Missing rpccall message")
+		st.log.Warn("Missing rpccall message")
 		st.disconnect()
 		return
 	}
 	var rpcMsg RPCCallMessage
 	if err := mapstructure.Decode(params[0], &rpcMsg); err != nil {
-		st.log.Errorf("Error parsing rpccall message: %+v", err)
+		st.log.Warnf("Error parsing rpccall message: %+v", err)
 		st.disconnect()
 		return
 	}
 	if strings.TrimSpace(rpcMsg.MethodName) == "" ||
 		len(rpcMsg.MethodName) > maxSocketMethodNameBytes ||
 		rpcMsg.Request == nil {
-		st.log.Error("Invalid rpccall message")
+		st.log.Warn("Invalid rpccall message")
 		st.disconnect()
 		return
 	}
@@ -2484,7 +2484,7 @@ func (st *socketTracker) onRPCCall(_ uint64, params ...any) {
 		st.rpcMutex.Unlock()
 		cancel()
 		<-st.rpcSlots
-		st.log.Errorf("Duplicate in-flight RPC call ID: %d", rpcMsg.CallID)
+		st.log.Warnf("Duplicate in-flight RPC call ID: %d", rpcMsg.CallID)
 		st.disconnect()
 		return
 	}
@@ -2515,7 +2515,7 @@ func (st *socketTracker) onRPCCall(_ uint64, params ...any) {
 				Data:    map[string]any{},
 			}
 		} else if !handled {
-			st.log.Errorf("Unhandled RPC call: %s", rpcMsg.MethodName)
+			st.log.Warnf("Unhandled RPC call: %s", rpcMsg.MethodName)
 			st.disconnect()
 			return
 		}
@@ -2563,26 +2563,26 @@ func (st *socketTracker) finishRPC(callID int, tracked *trackedRPCCall) {
 func (st *socketTracker) onFFRPCCall(params ...any) {
 	ffrpch, annotations := st.lookupFFRPCHandler()
 	if ffrpch == nil {
-		st.log.Errorf("FFRPC received but no FFRPCHandlerFunc was provided")
+		st.log.Warn("FFRPC received but no FFRPCHandlerFunc was provided")
 		st.disconnect()
 		return
 	}
 
 	if len(params) == 0 {
-		st.log.Error("Missing ffrpc message")
+		st.log.Warn("Missing ffrpc message")
 		st.disconnect()
 		return
 	}
 	var rpcMsg FFRPCCallMessage
 	if err := mapstructure.Decode(params[0], &rpcMsg); err != nil {
-		st.log.Errorf("Error parsing ffrpc message: %+v", err)
+		st.log.Warnf("Error parsing ffrpc message: %+v", err)
 		st.disconnect()
 		return
 	}
 	if strings.TrimSpace(rpcMsg.MethodName) == "" ||
 		len(rpcMsg.MethodName) > maxSocketMethodNameBytes ||
 		rpcMsg.Request == nil {
-		st.log.Error("Invalid ffrpc message")
+		st.log.Warn("Invalid ffrpc message")
 		st.disconnect()
 		return
 	}
@@ -2611,7 +2611,7 @@ func (st *socketTracker) onFFRPCCall(params ...any) {
 		if err != nil {
 			st.log.WithField("ffrpcName", rpcMsg.MethodName).Errorf("Error handling FFRPC call: %+v", err)
 		} else if !handled {
-			st.log.Errorf("Unhandled FFRPC call: %s", rpcMsg.MethodName)
+			st.log.Warnf("Unhandled FFRPC call: %s", rpcMsg.MethodName)
 			st.disconnect()
 		}
 	}()
