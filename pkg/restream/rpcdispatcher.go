@@ -311,7 +311,11 @@ func (d *RPCDispatcher) FireRPCContextWithAnnotations(
 		errRet = respRaw[errIdx].Interface().(error)
 		errorStr := errRet.Error()
 		rsve.FieldByName("Error").Set(reflect.ValueOf(&errorStr))
-		if !errors.Is(errRet, context.Canceled) {
+		switch {
+		case errors.Is(errRet, context.Canceled):
+		case errors.Is(errRet, context.DeadlineExceeded):
+			d.log.Warnf("Error response to RPC %s: %s", name, errRet)
+		default:
 			d.log.Errorf("Error response to RPC %s: %s", name, errRet)
 		}
 	}

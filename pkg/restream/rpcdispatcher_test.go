@@ -3,11 +3,13 @@ package restream
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
 	"github.com/boatkit-io/restream/pkg/binarystreams"
 	"github.com/sirupsen/logrus"
+	logrustest "github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -117,7 +119,8 @@ func TestCallWithOptionalContext(t *testing.T) {
 }
 
 func TestCallContextPreservesCancellation(t *testing.T) {
-	rpcd := NewRPCDispatcher(logrus.StandardLogger())
+	log, hook := logrustest.NewNullLogger()
+	rpcd := NewRPCDispatcher(log)
 	started := make(chan struct{})
 	rpcd.RegisterRPCHandler("callCanceled", AccessLevelViewer, func(ctx context.Context, test int) (int, error) {
 		close(started)
@@ -138,6 +141,43 @@ func TestCallContextPreservesCancellation(t *testing.T) {
 	<-started
 	cancel()
 	<-finished
+	assert.Empty(t, hook.AllEntries())
+}
+
+func TestCallErrorLogLevels(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		wantLevel logrus.Level
+	}{
+		{name: "deadline exceeded", err: fmt.Errorf("weather request: %w", context.DeadlineExceeded), wantLevel: logrus.WarnLevel},
+		{name: "other error", err: errors.New("handler failed"), wantLevel: logrus.ErrorLevel},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			log, hook := logrustest.NewNullLogger()
+			rpcd := NewRPCDispatcher(log)
+			rpcd.RegisterRPCHandler("callError", AccessLevelViewer, func(testValue int) (int, error) {
+				return testValue, test.err
+			}, reflect.TypeFor[call5Request](), reflect.TypeFor[call5Response]())
+			requestBytes, err := SerializeToBytes(&call5Request{Test: 4}, nil)
+			assert.NoError(t, err)
+
+			responseBytes, handled, err := rpcd.FireRPC("callError", AccessLevelViewer, requestBytes)
+			assert.True(t, handled)
+			assert.NoError(t, err)
+			response := call5Response{}
+			assert.NoError(t, response.Deserialize(binarystreams.NewReaderFromBytes(responseBytes), nil))
+			assert.Equal(t, test.err.Error(), *response.Error)
+
+			entries := hook.AllEntries()
+			if assert.Len(t, entries, 1) {
+				assert.Equal(t, test.wantLevel, entries[0].Level)
+				assert.Equal(t, "Error response to RPC callError: "+test.err.Error(), entries[0].Message)
+			}
+		})
+	}
 }
 
 func TestFFRPCCalls(t *testing.T) {
