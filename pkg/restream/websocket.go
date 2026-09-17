@@ -1470,7 +1470,11 @@ func (st *socketTracker) onStoreSubscription(params ...any) {
 				})
 				return
 			}
-			st.log.Errorf("Store subscription failed for %s/%s: %+v", subMsg.StoreName, subMsg.Key, err)
+			if errors.Is(err, errInvalidSubscriptionKey) {
+				st.log.Warnf("Store subscription failed for %s/%s: %+v", subMsg.StoreName, subMsg.Key, err)
+			} else {
+				st.log.Errorf("Store subscription failed for %s/%s: %+v", subMsg.StoreName, subMsg.Key, err)
+			}
 			st.disconnect()
 			return
 		}

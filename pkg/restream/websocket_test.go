@@ -85,7 +85,12 @@ func TestAddSocketHandlersRejectsConflictingRPCHandlers(t *testing.T) {
 }
 
 func TestViewerSocketClientProtocolViolationsLogWarnings(t *testing.T) {
-	registry, err := NewStoreRegistry(nil)
+	store := NewRelayStore[
+		viewerSocketTestState,
+		*viewerSocketTestState,
+		*viewerSocketTestPartial,
+	](viewerSocketTestStoreName, &viewerSocketTestState{}, AccessLevelPublic)
+	registry, err := NewStoreRegistry([]Store{store})
 	if err != nil {
 		t.Fatalf("NewStoreRegistry failed: %v", err)
 	}
@@ -101,6 +106,18 @@ func TestViewerSocketClientProtocolViolationsLogWarnings(t *testing.T) {
 				tracker.onStoreSubscription(StoreSubscriptionMessage{
 					StoreName: "MissingStore",
 					Action:    Subscribe,
+				})
+			},
+		},
+		{
+			name: "unknown store field",
+			message: "Store subscription failed for " + viewerSocketTestStoreName +
+				"/~1%&3: subscription field ID 3 does not exist on restream.viewerSocketTestState",
+			invoke: func(tracker *socketTracker) {
+				tracker.onStoreSubscription(StoreSubscriptionMessage{
+					StoreName: viewerSocketTestStoreName,
+					Action:    Subscribe,
+					Key:       "~1%&3",
 				})
 			},
 		},

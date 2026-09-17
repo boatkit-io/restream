@@ -1,6 +1,7 @@
 package restream
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -111,5 +112,8 @@ func TestNormalizeFieldIDSubscriptionKeyRejectsUnknownFields(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("expected unknown field ID to fail")
+	}
+	if !errors.Is(err, errInvalidSubscriptionKey) {
+		t.Fatalf("unknown field error = %v, want invalid subscription key", err)
 	}
 }

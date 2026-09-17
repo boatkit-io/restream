@@ -1,6 +1,7 @@
 package restream
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -11,6 +12,20 @@ const (
 	compoundKeyJoinerString      = "%&"
 	fieldIDSubscriptionKeyPrefix = "~1"
 )
+
+var errInvalidSubscriptionKey = errors.New("invalid subscription key")
+
+type invalidSubscriptionKeyError struct {
+	cause error
+}
+
+func (e *invalidSubscriptionKeyError) Error() string {
+	return e.cause.Error()
+}
+
+func (e *invalidSubscriptionKeyError) Unwrap() error {
+	return errInvalidSubscriptionKey
+}
 
 // FieldFilteredPartial can be implemented by partial structures that can narrow themselves to a subset of changed fields.
 type FieldFilteredPartial interface {
@@ -172,7 +187,13 @@ func SubscriptionKeyFromFieldIDPath(field []any) string {
 	return strings.Join(parts, compoundKeyJoinerString)
 }
 
-func normalizeFieldIDSubscriptionKey(key string, stateType reflect.Type) (string, error) {
+func normalizeFieldIDSubscriptionKey(key string, stateType reflect.Type) (normalizedKey string, err error) {
+	defer func() {
+		if err != nil {
+			err = &invalidSubscriptionKeyError{cause: err}
+		}
+	}()
+
 	parts := SplitSubscriptionKey(key)
 	if len(parts) == 0 {
 		return "", nil
