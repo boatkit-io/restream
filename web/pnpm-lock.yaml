@@ -11,6 +11,9 @@ importers:
       '@boatkit-io/resub':
         specifier: ^2.4.2
         version: 2.4.2(react@19.2.6)(typescript@6.0.3)
+      long:
+        specifier: ^5.3.2
+        version: 5.3.2
       socket.io-client:
         specifier: ^4.8.3
         version: 4.8.3
@@ -654,6 +657,9 @@ packages:
   locate-path@6.0.0:
     resolution: {integrity: sha512-iPZK6eYjbxRu3uB4/WZ3EsEIMJFMqAoopl3R+zuq0UjcAm/MO6KCweDgPfP3elTztoKP3KtnVHxTn2NHBSDVUw==}
     engines: {node: '>=10'}
+
+  long@5.3.2:
+    resolution: {integrity: sha512-mNAgZ1GmyNhD7AuqnTG3/VQ26o760+ZYBPKjPvugO8+nLbYfX6TVpJPseBvopbdY+qpZ/lKUnmEc1LeZYS3QAA==}
 
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
@@ -1508,6 +1514,8 @@ snapshots:
   locate-path@6.0.0:
     dependencies:
       p-locate: 5.0.0
+
+  long@5.3.2: {}
 
   magic-string@0.30.21:
     dependencies:

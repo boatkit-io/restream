@@ -88,16 +88,12 @@ export function deserializePackedInt(r: BinaryReader): number {
             ret |= ((w & 0x7fff) << 13);
 
             if ((w & 0x8000) > 0) {
-                let reta = BigInt(ret)
-                const dw = BigInt(r.readUint32());
-                reta |= ((dw & 0x7fffffffn) << 28n);
+                const dw = r.readUint32();
+                ret += (dw & 0x7fffffff) * 0x10000000;
 
-                if ((dw & 0x80000000n) > 0) {
-                    const bi = BigInt(r.readByte());
-                    reta |= bi << 59n;
+                if (dw >= 0x80000000) {
+                    ret += r.readByte() * 0x800000000000000;
                 }
-
-                ret = Number(reta);
             }
         }
     }
@@ -106,27 +102,29 @@ export function deserializePackedInt(r: BinaryReader): number {
 }
 
 export function deserializePackedBigint(r: BinaryReader): bigint {
-    let ret = BigInt(0);
+    const bigint = BigInt;
+    const zero = bigint(0);
+    let ret = zero;
 
     let b = r.readByte();
-    ret |= BigInt(b & 0x3f);
+    ret |= bigint(b & 0x3f);
     const neg = (b & 0x40) > 0;
 
     if ((b & 0x80) > 0) {
         b = r.readByte();
-        ret |= BigInt(((b & 0x7f) << 6))
+        ret |= bigint((b & 0x7f) << 6);
 
         if ((b & 0x80) > 0) {
             const w = r.readUint16();
-            ret |= BigInt(((w & 0x7fff) << 13));
+            ret |= bigint((w & 0x7fff) << 13);
 
             if ((w & 0x8000) > 0) {
-                const dw = BigInt(r.readUint32());
-                ret |= ((dw & 0x7fffffffn) << 28n);
+                const dw = bigint(r.readUint32());
+                ret |= (dw & bigint(0x7fffffff)) << bigint(28);
 
-                if ((dw & 0x80000000n) > 0) {
-                    const bi = BigInt(r.readByte());
-                    ret |= bi << 59n;
+                if ((dw & bigint(0x80000000)) > zero) {
+                    const bi = bigint(r.readByte());
+                    ret |= bi << bigint(59);
                 }
             }
         }

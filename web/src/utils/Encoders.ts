@@ -65,7 +65,15 @@ export function serializePrimitiveValue(val: unknown, w: BinaryWriter, vi: VarIn
     throw new Error("unsupported primitive type in serializePrimitiveValue: " + vi.dataType);
 }
 export function serializePackedInt(valRaw: number | bigint, w: BinaryWriter): void {
-    let val = BigInt(valRaw);
+    if (typeof valRaw === 'bigint') {
+        serializePackedBigint(valRaw, w);
+        return;
+    }
+    if (!Number.isInteger(valRaw)) {
+        throw new Error("serializePackedInt requires an integer");
+    }
+
+    let val = valRaw;
 
     let signBit = 0;
     if (val < 0) {
@@ -73,37 +81,91 @@ export function serializePackedInt(valRaw: number | bigint, w: BinaryWriter): vo
         val = -val;
     }
 
-    if (val < (1n << 6n)) {
-        w.writeUint8(Number(val & 0x3Fn) | signBit);
+    if (val < 0x40) {
+        w.writeUint8(val | signBit);
         return;
     }
-    w.writeUint8(Number(val & 0x3Fn) | signBit | 0x80);
-    val >>= 6n;
+    w.writeUint8((val % 0x40) | signBit | 0x80);
+    val = Math.floor(val / 0x40);
 
-    if (val < (1n << 7n)) {
-        w.writeUint8(Number(val & 0x7Fn));
+    if (val < 0x80) {
+        w.writeUint8(val);
         return;
     }
-    w.writeUint8(Number(val & 0x7Fn) | 0x80);
-    val >>= 7n;
+    w.writeUint8((val % 0x80) | 0x80);
+    val = Math.floor(val / 0x80);
 
-    if (val < (1n << 15n)) {
-        w.writeUint16(Number(val & 0x7FFFn));
+    if (val < 0x8000) {
+        w.writeUint16(val);
         return;
     }
-    w.writeUint16(Number(val & 0x7FFFn) | 0x8000);
-    val >>= 15n;
+    w.writeUint16((val % 0x8000) + 0x8000);
+    val = Math.floor(val / 0x8000);
 
-    if (val < (1n << 31n)) {
-        w.writeUint32(Number(val & 0x7FFFFFFFn));
+    if (val < 0x80000000) {
+        w.writeUint32(val);
         return;
     }
-    w.writeUint32(Number(val & 0x7FFFFFFFn) | 0x80000000);
-    val >>= 31n;
+    w.writeUint32((val % 0x80000000) + 0x80000000);
+    val = Math.floor(val / 0x80000000);
 
     // up to 5 bits left over
     if (val > 31) {
         throw new Error("value too large for restream serialization in serializePackedInt")
+    }
+    w.writeUint8(val);
+}
+
+function serializePackedBigint(valRaw: bigint, w: BinaryWriter): void {
+    const bigint = BigInt;
+    const zero = bigint(0);
+    let val = valRaw;
+
+    let signBit = 0;
+    if (val < zero) {
+        signBit = 0x40;
+        val = -val;
+    }
+
+    const six = bigint(6);
+    const seven = bigint(7);
+    const fifteen = bigint(15);
+    const thirtyOne = bigint(31);
+    const lowSixMask = bigint(0x3f);
+    const lowSevenMask = bigint(0x7f);
+    const lowFifteenMask = bigint(0x7fff);
+    const lowThirtyOneMask = bigint(0x7fffffff);
+
+    if (val < (bigint(1) << six)) {
+        w.writeUint8(Number(val & lowSixMask) | signBit);
+        return;
+    }
+    w.writeUint8(Number(val & lowSixMask) | signBit | 0x80);
+    val >>= six;
+
+    if (val < (bigint(1) << seven)) {
+        w.writeUint8(Number(val & lowSevenMask));
+        return;
+    }
+    w.writeUint8(Number(val & lowSevenMask) | 0x80);
+    val >>= seven;
+
+    if (val < (bigint(1) << fifteen)) {
+        w.writeUint16(Number(val & lowFifteenMask));
+        return;
+    }
+    w.writeUint16(Number(val & lowFifteenMask) | 0x8000);
+    val >>= fifteen;
+
+    if (val < (bigint(1) << thirtyOne)) {
+        w.writeUint32(Number(val & lowThirtyOneMask));
+        return;
+    }
+    w.writeUint32(Number(val & lowThirtyOneMask) + 0x80000000);
+    val >>= thirtyOne;
+
+    if (val > bigint(31)) {
+        throw new Error("value too large for restream serialization in serializePackedInt");
     }
     w.writeUint8(Number(val));
 }

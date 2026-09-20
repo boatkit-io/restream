@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import Long from 'long';
 
 import {
     DataStreamFlags,
@@ -19,9 +20,10 @@ describe('data stream envelope decoding', () => {
         expect(decoded).toEqual(expect.objectContaining({
             streamID: 'CameraMedia/Video/camera-a',
             format: 'video/h264',
-            generation: 1n,
-            sequence: 2n,
-            frameID: 3n,
+            generation: Long.fromInt(1, true),
+            sequence: Long.fromInt(2, true),
+            timestampUnixNano: Long.fromInt(42),
+            frameID: Long.fromInt(3, true),
             payloadType: DataStreamPayloadType.Frame,
             flags: DataStreamFlags.Recovery,
         }));
@@ -42,6 +44,25 @@ describe('data stream envelope decoding', () => {
         expect(() => decodeDataStreamEnvelope(encoded)).toThrow(
             'BlockSet commit must not contain a range or payload',
         );
+    });
+
+    test('preserves complete 64-bit envelope values without native BigInt reads', () => {
+        const encoded = encodeTestEnvelope({
+            streamID: 'CameraMedia/Video/camera-a',
+            format: 'video/h264',
+            payloadType: DataStreamPayloadType.Frame,
+            flags: DataStreamFlags.Recovery,
+            payload: new Uint8Array([1]),
+        });
+        const view = new DataView(encoded);
+        view.setUint32(8, 0xffff_ffff, true);
+        view.setUint32(12, 0xffff_ffff, true);
+        view.setUint32(24, 0, true);
+        view.setUint32(28, 0x8000_0000, true);
+
+        const decoded = decodeDataStreamEnvelope(encoded);
+        expect(decoded.generation.toString()).toBe('18446744073709551615');
+        expect(decoded.timestampUnixNano.toString()).toBe('-9223372036854775808');
     });
 
     test('rejects oversized identity strings before decoding payloads', () => {

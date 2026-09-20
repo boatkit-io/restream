@@ -54,6 +54,7 @@
   },
   "dependencies": {
     "@boatkit-io/resub": "^2.4.2",
+    "long": "^5.3.2",
     "socket.io-client": "^4.8.3"
   }
 }

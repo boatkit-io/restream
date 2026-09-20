@@ -168,10 +168,12 @@ export default class BinaryReader {
         if (this._offset + 4 > this._length) {
             throw new Error('Overflowing BinaryReader buffer');
         }
-        const ret = BigInt(this._uint8Buffer[this._offset]!) | BigInt(this._uint8Buffer[this._offset + 1]! << 8) |
-            BigInt(this._uint8Buffer[this._offset + 2]! << 16) | (BigInt(this._uint8Buffer[this._offset + 3]!) << BigInt(24));
+        const ret = this._uint8Buffer[this._offset]! +
+            this._uint8Buffer[this._offset + 1]! * 0x100 +
+            this._uint8Buffer[this._offset + 2]! * 0x10000 +
+            this._uint8Buffer[this._offset + 3]! * 0x1000000;
         this._offset += 4;
-        return Number(ret);
+        return ret;
     }
 
     readFloat32(): number {

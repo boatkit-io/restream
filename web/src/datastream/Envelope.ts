@@ -1,3 +1,5 @@
+import Long from 'long';
+
 const wireHeaderBytes = 60;
 const defaultMaxPayloadBytes = 32 * 1024 * 1024;
 const maxStreamIDBytes = 4 * 1024;
@@ -19,11 +21,11 @@ const allFlags = DataStreamFlags.Recovery | DataStreamFlags.Discontinuity | Data
 
 export interface DataStreamEnvelope {
     streamID: string;
-    generation: bigint;
-    sequence: bigint;
-    timestampUnixNano: bigint;
+    generation: Long;
+    sequence: Long;
+    timestampUnixNano: Long;
     payloadType: DataStreamPayloadType;
-    frameID: bigint;
+    frameID: Long;
     flags: DataStreamFlags;
     format: string;
     firstIndex: number;
@@ -79,11 +81,11 @@ export function decodeDataStreamEnvelope(
 
     const envelope: DataStreamEnvelope = {
         streamID,
-        generation: view.getBigUint64(8, true),
-        sequence: view.getBigUint64(16, true),
-        timestampUnixNano: view.getBigInt64(24, true),
+        generation: readUint64LE(view, 8),
+        sequence: readUint64LE(view, 16),
+        timestampUnixNano: readInt64LE(view, 24),
         payloadType,
-        frameID: view.getBigUint64(32, true),
+        frameID: readUint64LE(view, 32),
         flags,
         format,
         firstIndex: view.getUint32(40, true),
@@ -96,7 +98,7 @@ export function decodeDataStreamEnvelope(
 }
 
 function validateDataStreamEnvelope(envelope: DataStreamEnvelope): void {
-    if (envelope.generation === 0n || envelope.sequence === 0n || envelope.frameID === 0n) {
+    if (envelope.generation.isZero() || envelope.sequence.isZero() || envelope.frameID.isZero()) {
         throw new Error("Data stream generation, sequence, and frame ID must be non-zero");
     }
     switch (envelope.payloadType) {
@@ -117,6 +119,14 @@ function validateDataStreamEnvelope(envelope: DataStreamEnvelope): void {
         default:
             throw new Error(`Unknown data stream payload type ${envelope.payloadType}`);
     }
+}
+
+function readUint64LE(view: DataView, offset: number): Long {
+    return Long.fromBits(view.getInt32(offset, true), view.getInt32(offset + 4, true), true);
+}
+
+function readInt64LE(view: DataView, offset: number): Long {
+    return Long.fromBits(view.getInt32(offset, true), view.getInt32(offset + 4, true), false);
 }
 
 function validateBlockSet(envelope: DataStreamEnvelope): void {
