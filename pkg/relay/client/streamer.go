@@ -219,7 +219,19 @@ func (s *Streamer) Run(ctx context.Context) error {
 	}
 
 	for !s.shutdown.Load() {
-		conn, resp, err := s.opts.Dialer.Dial(s.opts.Endpoint, nil)
+		var headers http.Header
+		var err error
+		if s.opts.HandshakeHeaders != nil {
+			headers, err = s.opts.HandshakeHeaders(ctx)
+			if err != nil {
+				s.onDialError(err)
+				if !sleepOrDone(ctx, s.opts.ReconnectDelay) {
+					return nil
+				}
+				continue
+			}
+		}
+		conn, resp, err := s.opts.Dialer.DialContext(ctx, s.opts.Endpoint, headers)
 		closeResponseBody(resp)
 		if err != nil {
 			s.onDialError(err)

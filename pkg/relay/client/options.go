@@ -2,6 +2,8 @@
 package client
 
 import (
+	"context"
+	"net/http"
 	"time"
 
 	"github.com/boatkit-io/restream/pkg/relay/protocol"
@@ -87,8 +89,11 @@ type Callbacks struct {
 
 // Config configures a Streamer.
 type Config struct {
-	Endpoint    string
-	Credentials Credentials
+	// HandshakeHeaders obtains a fresh, bounded transport admission before each
+	// dial. It runs only in the background relay loop, never at local startup.
+	HandshakeHeaders func(context.Context) (http.Header, error)
+	Endpoint         string
+	Credentials      Credentials
 	// RPCHandlerWithAnnotations receives RPC calls with optional transport
 	// annotations that remain separate from the serialized request. It is
 	// mutually exclusive with NewStreamer's legacy rpc argument.
