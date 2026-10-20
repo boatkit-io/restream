@@ -53,6 +53,7 @@ var syntheticRestreamTypeNames = []string{
 func main() { //nolint:gocyclo,funlen
 	fnPtr := flag.String("file", "", "Full path of file to parse")
 	ppPtr := flag.String("project", "", "Full path of project root to parse")
+	wirePtr := flag.Bool("wire-only", false, "Generate only shared TypeScript wire schemas into tsWireDir")
 
 	wd, _ := os.Getwd() //nolint:errcheck
 	// Note: this calls flag.Parse()
@@ -75,7 +76,15 @@ func main() { //nolint:gocyclo,funlen
 			os.Exit(1)
 		}
 
+		if *wirePtr {
+			if config.TSWireDir == "" {
+				fmt.Println("wire-only generation requires tsWireDir")
+				os.Exit(1)
+			}
+			config.TSDir = config.TSWireDir
+		}
 		pt = NewProjTracking(ppRoot, config)
+		pt.wireOnly = *wirePtr
 		if err := pt.parseProject(); err != nil {
 			fmt.Printf("Error parsing project: %+v\n", err)
 			os.Exit(1)
@@ -165,6 +174,7 @@ func NewProjTracking(ppRoot string, config *restreamConfig) *ProjTracking {
 
 // ProjTracking is the main tracking structure for the codegen project
 type ProjTracking struct {
+	wireOnly bool
 	projPath string
 	config   *restreamConfig
 
@@ -519,8 +529,10 @@ func (pt *ProjTracking) addSyntheticRestreamPackage() *packages.Package {
 
 // Run runs project-scoped codegen work
 func (pt *ProjTracking) Run() error {
-	if err := pt.writeRelayStoreFactories(); err != nil {
-		return err
+	if !pt.wireOnly {
+		if err := pt.writeRelayStoreFactories(); err != nil {
+			return err
+		}
 	}
 
 	// A bit hacky, but this shoves fake filetracking structures into the list, for the extra generated serializers
@@ -528,7 +540,7 @@ func (pt *ProjTracking) Run() error {
 		return err
 	}
 
-	if len(pt.goGenEntries) > 0 {
+	if len(pt.goGenEntries) > 0 && !pt.wireOnly {
 		if err := pt.writeGoExtraFile(); err != nil {
 			return err
 		}
@@ -543,8 +555,10 @@ func (pt *ProjTracking) Run() error {
 			return err
 		}
 
-		if err := pt.lintTSFiles(); err != nil {
-			return err
+		if !pt.wireOnly {
+			if err := pt.lintTSFiles(); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -643,7 +657,7 @@ func (ft *FileTracking) Run() error {
 		return err
 	}
 
-	if len(ft.goGenEntries) > 0 {
+	if len(ft.goGenEntries) > 0 && !ft.pt.wireOnly {
 		if err := ft.writeGoStructs(); err != nil {
 			return err
 		}
@@ -653,7 +667,7 @@ func (ft *FileTracking) Run() error {
 		return err
 	}
 
-	if ft.inputFileDirty {
+	if ft.inputFileDirty && !ft.pt.wireOnly {
 		if err := ft.rewriteSourceFile(); err != nil {
 			return err
 		}

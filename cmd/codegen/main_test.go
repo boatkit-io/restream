@@ -2295,3 +2295,30 @@ func runFieldCompatibilityCodegenProject(projectDir string) error {
 	}
 	return nil
 }
+
+func TestWireOnlyGenerationDoesNotWriteApplicationOrTestFiles(t *testing.T) {
+	project := t.TempDir()
+	pt := NewProjTracking(project, &restreamConfig{TSDir: "wire"})
+	pt.wireOnly = true
+	if err := pt.writeTSFile("PackageState.ts", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(project, "wire", "PackageState.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(string(data), "\n") || strings.HasSuffix(string(data), "\n\n") {
+		t.Fatal("wire target must end with exactly one newline")
+	}
+	if err := pt.writeTSFile("PackageStateTest.ts", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(project, "wire", "PackageStateTest.ts")); !os.IsNotExist(err) {
+		t.Fatal("wire target emitted test schemas")
+	}
+	for _, dir := range []string{"web", "internal"} {
+		if _, err := os.Stat(filepath.Join(project, dir)); !os.IsNotExist(err) {
+			t.Fatal("wire target modified application output")
+		}
+	}
+}

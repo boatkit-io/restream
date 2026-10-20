@@ -1032,6 +1032,9 @@ func (pt *ProjTracking) addTSPackageFileEntry(pkg *packages.Package, def fdef) {
 
 // writeTSFile is a helper to write out a typescript file
 func (pt *ProjTracking) writeTSFile(filename string, entries []fdef, pkgImports []tsImport) error {
+	if pt.wireOnly && strings.HasSuffix(filename, "Test.ts") {
+		return nil
+	}
 	fc := restreamGeneratedFileBanner + `
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /* eslint-disable @typescript-eslint/no-unused-vars */
@@ -1107,6 +1110,9 @@ func (pt *ProjTracking) writeTSFile(filename string, entries []fdef, pkgImports 
 
 	fc += "\n"
 	fc += body
+	if pt.wireOnly {
+		fc = strings.TrimRight(fc, "\r\n") + "\n"
+	}
 
 	tsDir := pt.resolveProjectPath(pt.config.TSDir)
 	if err := os.MkdirAll(tsDir, 0o775); err != nil {

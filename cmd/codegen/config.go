@@ -12,6 +12,7 @@ import (
 type restreamConfig struct {
 	InputDirs            []string   `yaml:"inputDirs"`
 	TSDir                string     `yaml:"tsDir"`
+	TSWireDir            string     `yaml:"tsWireDir"`
 	TSImports            []tsImport `yaml:"tsImports"`
 	TSRuntimeImportMode  string     `yaml:"tsRuntimeImportMode"`
 	TSRuntimeImportPath  string     `yaml:"tsRuntimeImportPath"`
