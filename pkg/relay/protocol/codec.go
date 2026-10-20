@@ -150,6 +150,17 @@ func EncodePacket(packet Packet) ([]byte, error) {
 		if err := encodeDataStreamSubscriptionResultPacket(w, p); err != nil {
 			return nil, err
 		}
+	case *StoreSnapshotRequestPacket:
+		if err := encodeStoreSnapshot(w, p.StoreName, p.RequestID); err != nil {
+			return nil, err
+		}
+	case *StoreSnapshotResponsePacket:
+		if err := encodeStoreSnapshot(w, p.StoreName, p.RequestID); err != nil {
+			return nil, err
+		}
+		if err := writeBytes(w, p.Data); err != nil {
+			return nil, err
+		}
 	case *CustomPacket:
 		if err := encodeCustomPacket(w, p); err != nil {
 			return nil, err
@@ -266,6 +277,19 @@ func DecodePacket(data []byte) (Packet, error) {
 			return nil, err
 		}
 		return packet, ensureEOF(r, "data stream subscription request packet")
+	case KindStoreSnapshotRequest, KindStoreSnapshotResponse:
+		storeName, requestID, err := decodeStoreSnapshot(r)
+		if err != nil {
+			return nil, err
+		}
+		if kind == KindStoreSnapshotRequest {
+			return &StoreSnapshotRequestPacket{StoreName: storeName, RequestID: requestID}, ensureEOF(r, "store snapshot request")
+		}
+		data, err := readBytes(r)
+		if err != nil {
+			return nil, err
+		}
+		return &StoreSnapshotResponsePacket{StoreName: storeName, RequestID: requestID, Data: data}, ensureEOF(r, "store snapshot response")
 	case KindCustom:
 		packet, err := decodeCustomPacket(r)
 		if err != nil {

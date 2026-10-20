@@ -18,6 +18,9 @@ const (
 	// DeviceRPCAnnotationsCapabilityMetadataKey advertises support for optional
 	// key/value annotations appended to RPC call packets.
 	DeviceRPCAnnotationsCapabilityMetadataKey = "restream.capability.rpc-annotations"
+	// DeviceStoreSnapshotsCapabilityMetadataKey advertises ordered snapshot
+	// requests, barriers and connection-scoped store subscription reset.
+	DeviceStoreSnapshotsCapabilityMetadataKey = "restream.capability.store-snapshots"
 	enabledCapabilityMetadataValue            = "1"
 )
 
@@ -62,6 +65,10 @@ const (
 	KindRelayRPCCall PacketKind = 14
 	// KindRelayRPCResponse carries the relay server response to a device-originated RPC.
 	KindRelayRPCResponse PacketKind = 15
+	// KindStoreSnapshotRequest asks for an ordered baseline of an actively subscribed store.
+	KindStoreSnapshotRequest PacketKind = 16
+	// KindStoreSnapshotResponse carries a requested full state and its correlation ID.
+	KindStoreSnapshotResponse PacketKind = 17
 )
 
 const (
@@ -87,6 +94,7 @@ type DeviceHello struct {
 type DeviceCapabilities struct {
 	DataStreams    bool
 	RPCAnnotations bool
+	StoreSnapshots bool
 }
 
 // CapabilitiesFromDeviceMetadata decodes Restream-reserved device capability
@@ -95,6 +103,7 @@ func CapabilitiesFromDeviceMetadata(metadata map[string]string) DeviceCapabiliti
 	return DeviceCapabilities{
 		DataStreams:    metadata[DeviceDataStreamsCapabilityMetadataKey] == enabledCapabilityMetadataValue,
 		RPCAnnotations: metadata[DeviceRPCAnnotationsCapabilityMetadataKey] == enabledCapabilityMetadataValue,
+		StoreSnapshots: metadata[DeviceStoreSnapshotsCapabilityMetadataKey] == enabledCapabilityMetadataValue,
 	}
 }
 
@@ -104,9 +113,10 @@ func DeviceMetadataWithCapabilities(
 	metadata map[string]string,
 	capabilities DeviceCapabilities,
 ) map[string]string {
-	ret := make(map[string]string, len(metadata)+2)
+	ret := make(map[string]string, len(metadata)+3)
 	for key, value := range metadata {
-		if key != DeviceDataStreamsCapabilityMetadataKey && key != DeviceRPCAnnotationsCapabilityMetadataKey {
+		if key != DeviceDataStreamsCapabilityMetadataKey && key != DeviceRPCAnnotationsCapabilityMetadataKey &&
+			key != DeviceStoreSnapshotsCapabilityMetadataKey {
 			ret[key] = value
 		}
 	}
@@ -115,6 +125,9 @@ func DeviceMetadataWithCapabilities(
 	}
 	if capabilities.RPCAnnotations {
 		ret[DeviceRPCAnnotationsCapabilityMetadataKey] = enabledCapabilityMetadataValue
+	}
+	if capabilities.StoreSnapshots {
+		ret[DeviceStoreSnapshotsCapabilityMetadataKey] = enabledCapabilityMetadataValue
 	}
 	if len(ret) == 0 {
 		return nil

@@ -440,6 +440,7 @@ func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials C
 			protocol.DeviceCapabilities{
 				DataStreams:    s.opts.DataStreams != nil && s.opts.DataStreams.HasRegistrations(),
 				RPCAnnotations: s.rpcWithAnnotations != nil || s.ffrpcWithAnnotations != nil,
+				StoreSnapshots: s.opts.StorePolicy.OnDemand,
 			},
 		),
 	})
@@ -528,6 +529,10 @@ func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials C
 			if err := s.handleStoreState(packet); err != nil {
 				return fmt.Errorf("handle relay store state packet for store %q (%d bytes): %w",
 					packet.StoreName, len(packet.Data), err)
+			}
+		case *protocol.StoreSnapshotRequestPacket:
+			if err := s.handleStoreSnapshot(packet); err != nil {
+				return fmt.Errorf("handle relay store snapshot: %w", err)
 			}
 		case *protocol.CustomPacket:
 			if s.opts.Callbacks.OnCustomPacket != nil {
@@ -756,6 +761,10 @@ func (s *Streamer) sendFullState(storeName string) error {
 }
 
 func (s *Streamer) sendFullStateForGeneration(storeName string, generation uint64) error {
+	return s.sendStoreSnapshot(storeName, generation, "")
+}
+
+func (s *Streamer) sendStoreSnapshot(storeName string, generation uint64, requestID string) error {
 	accessLevel, err := s.sr.GetStoreMinimumAccessLevel(storeName)
 	if err != nil {
 		return err
@@ -764,15 +773,22 @@ func (s *Streamer) sendFullStateForGeneration(storeName string, generation uint6
 	if err != nil {
 		return err
 	}
+	kind := protocol.KindFullState
+	if requestID != "" {
+		kind = protocol.KindStoreSnapshotResponse
+	}
 	return s.enqueueStorePacketBuilder(
 		"full state "+storeName,
 		storeName,
-		protocol.KindFullState,
+		kind,
 		generation,
 		func() ([]byte, error) {
 			stateBytes, err := restream.SerializeToBytes(stateSnapshot, nil)
 			if err != nil {
 				return nil, err
+			}
+			if requestID != "" {
+				return protocol.EncodePacket(&protocol.StoreSnapshotResponsePacket{StoreName: storeName, RequestID: requestID, Data: stateBytes})
 			}
 			return protocol.EncodePacket(protocol.NewFullStatePacket(storeName, stateBytes))
 		},

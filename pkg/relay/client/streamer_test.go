@@ -1499,9 +1499,13 @@ type streamerTestState struct {
 	Value       string `restream:",fID=1"`
 	Other       string `restream:",fID=2"`
 	onSerialize func()
+	onClone     func()
 }
 
 func (s *streamerTestState) RestreamClone() *streamerTestState {
+	if s != nil && s.onClone != nil {
+		s.onClone()
+	}
 	if s == nil {
 		return nil
 	}

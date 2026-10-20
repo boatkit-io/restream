@@ -395,6 +395,24 @@ s.storeData = restream.NewStoreDataWithOptions[MyState, *MyState, *MyStatePartia
 
 ReStream is designed to work well for both directly-hosted web applications/API servers as well as remotely-hosted servers (i.e. on an IOT device) that relay data up to a cloud-based server.  Helpers are in the restream packages for both the device-side relaying and creating the relay server itself.  Both sides have very simple out of the box configs to get you started and extension points to add in complexity as your project advances.  See the `tictactoerelay` example for how to set up and use the relay server.
 
+### Requested snapshots on an active relay connection
+
+An on-demand Streamer advertises `restream.capability.store-snapshots=1`. First
+subscriptions receive the existing ordinary full-state packet. If a relay needs
+a newer baseline for a store already being streamed, it sends
+`StoreSnapshotRequestPacket` (kind 16) with a store name and opaque request ID.
+The Streamer replies with `StoreSnapshotResponsePacket` (kind 17), containing
+that ID and the full serialized state, followed by subsequent buffered partials.
+This prevents an older in-flight full state from satisfying a newer request.
+There is no separate barrier or subscription-reset packet.
+
+A relay that loses its session state closes its vessel and Viewer transports.
+Both ends use their ordinary connection state machines, reauthenticate and
+subscribe afresh. Never replay a command whose outcome became unknown. These
+additive snapshot packets retain protocol version 9 and existing kind values;
+relays must negotiate the capability before using them. Legacy relays continue
+using the existing protocol.
+
 ### Debouncing Updates
 
 There's helpers inside the streaming client to aggregate updates over a time period per store before updating the relay server, to accommodate limited upstream bandwidth from an IOT device with fast updates that it can't (or just shouldn't bother to) stream at full fidelity.  See `pkg/relay/client/StorePolicy` for details on configuring the Debounce per storename.
