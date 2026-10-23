@@ -174,9 +174,12 @@ export function encodeBoolean(val: boolean, w: BinaryWriter): void {
     w.writeUint8(val ? 1 : 0);
 }
 
+const stringEncoder = new TextEncoder();
+
 export function encodeString(val: string, w: BinaryWriter): void {
-    encodeUint32(val.length, w);
-    w.writeStringAsBytes(val);
+    const bytes = stringEncoder.encode(val);
+    encodeUint32(bytes.byteLength, w);
+    w.writeBytes(bytes);
 }
 
 // Make this one different so we can hackily ID it in the array decode

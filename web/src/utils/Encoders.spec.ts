@@ -96,6 +96,31 @@ describe('Fielded structs', () => {
     });
 });
 
+describe('UTF-8 string boundaries', () => {
+    // Produced by Go SerializeString followed by SerializePacked64(uint32(123456)).
+    test.each([
+        ['Open-Meteo · Best Match', '184f70656e2d4d6574656f20c2b72042657374204d6174636880890f00'],
+        ['Café 東京 🚤', '11436166c3a920e69db1e4baac20f09f9aa480890f00'],
+        ['e\u0301', '0365cc8180890f00'],
+    ])('matches the Go wire for %s', (value, expected) => {
+        const writer = new BinaryWriter();
+        encodeString(value, writer);
+        encodeUint32(123456, writer);
+        const hex = Array.from(writer.getBytes(), byte => byte.toString(16).padStart(2, '0')).join('');
+        expect(hex).toBe(expected);
+    });
+
+    test.each(['', 'ASCII', 'Open-Meteo · Best Match', 'Café 東京 🚤', 'e\u0301'])('preserves the next field after %s', value => {
+        const writer = new BinaryWriter();
+        encodeString(value, writer);
+        encodeUint32(123456, writer);
+        const reader = new BinaryReader(writer.getBytes().slice().buffer);
+        expect(decodeString(reader)).toBe(value);
+        expect(decodeUint32(reader)).toBe(123456);
+        expect(reader.isEOF()).toBe(true);
+    });
+});
+
 describe('Primitive Isomorphism', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const primitiveTests: [any, (v: any, w: BinaryWriter) => void, (r: BinaryReader) => any][] = [
@@ -151,6 +176,9 @@ describe('Primitive Isomorphism', () => {
 
         ["", encodeString, decodeString],
         ["testme", encodeString, decodeString],
+        ["Open-Meteo · Best Match", encodeString, decodeString],
+        ["Café 東京 🚤", encodeString, decodeString],
+        ["e\u0301", encodeString, decodeString],
 
         [0, encodeFloat32, decodeFloat32],
         [-1, encodeFloat32, decodeFloat32],
