@@ -86,7 +86,13 @@ func TestRunRecoversFromStalledHandshake(t *testing.T) {
 			})
 			done := make(chan error, 1)
 			go func() { done <- streamer.Run(ctx) }()
-			defer func() { cancel(); streamer.Shutdown(); <-done }()
+			defer func() {
+				cancel()
+				streamer.Shutdown()
+				if err := <-done; err != nil {
+					t.Errorf("relay streamer exited: %v", err)
+				}
+			}()
 			select {
 			case <-connected:
 				if attempts.Load() != 2 || failures.Load() != 1 {
