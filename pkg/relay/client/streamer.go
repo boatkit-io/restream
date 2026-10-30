@@ -432,6 +432,12 @@ func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials C
 		s.clearRelaySubscriptions()
 	}()
 
+	// An upgraded socket is not yet an admitted relay connection. A stalled
+	// hello or Connected response must return to the ordinary reconnect loop.
+	if err := conn.SetReadDeadline(time.Now().Add(s.opts.Dialer.HandshakeTimeout)); err != nil {
+		return err
+	}
+
 	closeOnContextDone := make(chan struct{})
 	defer close(closeOnContextDone)
 	go func() {
@@ -459,6 +465,9 @@ func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials C
 	if err != nil {
 		return err
 	}
+	if err := conn.SetWriteDeadline(time.Now().Add(s.opts.WriteTimeout)); err != nil {
+		return err
+	}
 	if err := conn.WriteMessage(gws.BinaryMessage, helloBytes); err != nil {
 		return err
 	}
@@ -481,6 +490,9 @@ func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials C
 		case *protocol.ConnectedPacket:
 			if packet.ProtocolVersion != protocol.CurrentVersion {
 				return fmt.Errorf("unsupported relay protocol version: %d", packet.ProtocolVersion)
+			}
+			if err := conn.SetReadDeadline(time.Time{}); err != nil {
+				return err
 			}
 			onDemand := s.configureOnDemandStoreStreaming(packet)
 			s.startConn(conn, packet.Capabilities.RelayRPCs)

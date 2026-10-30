@@ -12,10 +12,11 @@ import (
 )
 
 const (
-	defaultReconnectDelay = time.Second
-	defaultWriteTimeout   = 5 * time.Second
-	defaultSendQueueSize  = 1000
-	defaultMaxReadBytes   = int64(64 * 1024 * 1024)
+	defaultHandshakeTimeout = 10 * time.Second
+	defaultReconnectDelay   = time.Second
+	defaultWriteTimeout     = 5 * time.Second
+	defaultSendQueueSize    = 1000
+	defaultMaxReadBytes     = int64(64 * 1024 * 1024)
 )
 
 // Credentials are sent in the device hello packet when connecting to a relay server.
@@ -123,6 +124,7 @@ type Config struct {
 func DefaultConfig() Config {
 	dialer := gws.Dialer{
 		EnableCompression: true,
+		HandshakeTimeout:  defaultHandshakeTimeout,
 	}
 	return Config{
 		ReconnectDelay:      defaultReconnectDelay,
@@ -149,6 +151,12 @@ func applyDefaults(config Config) Config {
 	}
 	if config.Dialer == nil {
 		config.Dialer = defaults.Dialer
+	} else if config.Dialer.HandshakeTimeout <= 0 {
+		// Keep caller-owned dialers unchanged while bounding DNS, TCP, TLS and
+		// the HTTP upgrade on every reconnect.
+		dialer := *config.Dialer
+		dialer.HandshakeTimeout = defaults.Dialer.HandshakeTimeout
+		config.Dialer = &dialer
 	}
 	return config
 }
