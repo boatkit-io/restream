@@ -179,3 +179,25 @@ still stream full states and partials from the device but expect a custom cloud
 store implementation annotated as `CloudImplOfDevice`. `DeviceWithNoRelay`,
 `DeviceAndCloud`, `CloudImplOfDevice`, and `CloudOnly` stores are skipped by the
 device relay streamer.
+
+
+### Optional device heartbeat
+
+A relay may advertise `RelayCapabilities.Heartbeats` through the existing
+Connected metadata key `restream.heartbeats=1`. A device can set
+`client.Config.HeartbeatInterval` to a positive duration. Its sole connection
+writer then sends a payload-free `protocol.HeartbeatPacket` (kind 18) after that
+much silence, resetting the timer after every successful application write.
+The timer starts only after Connected, requires the advertised capability and
+ends with the connection writer. Zero leaves heartbeat disabled. Merely queued
+or skipped stale packets do not postpone the heartbeat; finite write deadlines
+still close stalled connections. Byte accounting includes its one-byte payload.
+
+This is an application WebSocket message, not native ping/pong. It can keep a
+hibernating relay owner active and incur connected duration even without
+subscribers. The receiver performs no store mutation or reply. Applications
+choose the cadence and must retain ordinary reconnect/recovery because traffic
+cannot prevent deployment or runtime loss. No protocol version bump or change
+to the positional Connected framing is needed; older relays lack the capability
+and receive no heartbeat. Publish the compatible receiver before dependent
+client releases.

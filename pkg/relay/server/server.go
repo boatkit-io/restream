@@ -266,6 +266,11 @@ func (s *Server) readPackets(ctx context.Context, c *Connection, device *Device)
 			}
 		case *protocol.DataStreamSubscriptionResultPacket:
 			device.HandleDataStreamSubscriptionResult(c, packet)
+		case *protocol.HeartbeatPacket:
+			if !s.config.Capabilities.Heartbeats {
+				return fmt.Errorf("unnegotiated relay heartbeat")
+			}
+			// The admitted connection is alive; no store, authority or reply work.
 		case *protocol.CustomPacket:
 			if err := device.HandleCustomPacket(c, packet); err != nil {
 				return fmt.Errorf("handle relay custom packet %q (%d bytes): %w", packet.Name, len(packet.Payload), err)

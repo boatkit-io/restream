@@ -490,3 +490,27 @@ func TestPacketKindHelpers(t *testing.T) {
 		t.Fatal("KindCustom should use named custom packet handling, not fixed application handling")
 	}
 }
+
+func TestHeartbeatNegotiationAndPayload(t *testing.T) {
+	b, err := EncodePacket(&HeartbeatPacket{})
+	if err != nil || !reflect.DeepEqual(b, []byte{18}) {
+		t.Fatalf("heartbeat = %v, %v", b, err)
+	}
+	p, err := DecodePacket(b)
+	if _, ok := p.(*HeartbeatPacket); err != nil || !ok {
+		t.Fatalf("decode = %T, %v", p, err)
+	}
+	if _, err := DecodePacket([]byte{18, 0}); err == nil {
+		t.Fatal("accepted heartbeat payload")
+	}
+	for _, enabled := range []bool{false, true} {
+		b, err := EncodePacket(&ConnectedPacket{ProtocolVersion: CurrentVersion, Capabilities: RelayCapabilities{Heartbeats: enabled}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := DecodePacket(b)
+		if err != nil || p.(*ConnectedPacket).Capabilities.Heartbeats != enabled {
+			t.Fatalf("negotiation = %v, %v", p, err)
+		}
+	}
+}

@@ -69,6 +69,9 @@ const (
 	KindStoreSnapshotRequest PacketKind = 16
 	// KindStoreSnapshotResponse carries a requested full state and its correlation ID.
 	KindStoreSnapshotResponse PacketKind = 17
+	// KindHeartbeat is a payload-free device application message. Send only when
+	// the relay advertises Heartbeats; unlike native ping/pong it reaches an owner.
+	KindHeartbeat PacketKind = 18
 )
 
 const (
@@ -144,7 +147,15 @@ type Packet interface {
 type RelayCapabilities struct {
 	OnDemandStoreStreaming bool
 	RelayRPCs              bool
+	Heartbeats             bool
 }
+
+// HeartbeatPacket keeps an admitted device connection active without store data.
+// It grants no authority, changes no state and requires no response.
+type HeartbeatPacket struct{}
+
+// Kind implements Packet.
+func (*HeartbeatPacket) Kind() PacketKind { return KindHeartbeat }
 
 // ConnectedPacket acknowledges an accepted device connection.
 type ConnectedPacket struct {

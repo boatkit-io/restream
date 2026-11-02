@@ -109,9 +109,14 @@ type Config struct {
 	// registrations. Its presence is advertised as an optional relay capability.
 	DataStreams *restream.DataStreamDispatcher
 
-	ReconnectDelay time.Duration
-	WriteTimeout   time.Duration
-	SendQueueSize  int
+	// HeartbeatInterval is the maximum healthy-connection silence between
+	// successful application writes. Zero disables heartbeats. Only a relay
+	// advertising the optional Heartbeats capability receives them. This timer
+	// belongs to the connection's sole writer and does not depend on store input.
+	HeartbeatInterval time.Duration
+	ReconnectDelay    time.Duration
+	WriteTimeout      time.Duration
+	SendQueueSize     int
 	// MaxReadMessageBytes bounds one relay websocket message. High-bandwidth
 	// payloads belong on the separate data plane, not this control socket.
 	MaxReadMessageBytes int64

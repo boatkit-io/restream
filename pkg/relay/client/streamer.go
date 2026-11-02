@@ -495,7 +495,7 @@ func (s *Streamer) handleConn(ctx context.Context, conn *gws.Conn, credentials C
 				return err
 			}
 			onDemand := s.configureOnDemandStoreStreaming(packet)
-			s.startConn(conn, packet.Capabilities.RelayRPCs)
+			s.startConn(conn, packet.Capabilities)
 			s.onConnected(packet)
 			if !onDemand {
 				if err := s.sendFullStates(); err != nil {
@@ -1364,7 +1364,7 @@ func (s *Streamer) isConnected() bool {
 	}
 }
 
-func (s *Streamer) startConn(conn *gws.Conn, relayRPCs bool) {
+func (s *Streamer) startConn(conn *gws.Conn, capabilities protocol.RelayCapabilities) {
 	sendQueue := make(chan outboundPacket, s.opts.SendQueueSize)
 	sendDone := make(chan struct{})
 
@@ -1374,10 +1374,14 @@ func (s *Streamer) startConn(conn *gws.Conn, relayRPCs bool) {
 	s.conn = conn
 	s.sendQueue = sendQueue
 	s.sendDone = sendDone
-	s.relayRPCs = relayRPCs
+	s.relayRPCs = capabilities.RelayRPCs
 	s.connMutex.Unlock()
 
-	s.handleSendQueue(conn, sendQueue, sendDone)
+	interval := time.Duration(0)
+	if capabilities.Heartbeats {
+		interval = s.opts.HeartbeatInterval
+	}
+	s.handleSendQueue(conn, sendQueue, sendDone, interval)
 }
 
 func (s *Streamer) closeCurrentConn() {
@@ -1593,53 +1597,69 @@ func (s *Streamer) enqueueOutboundPacket(packet outboundPacket) error {
 	}
 }
 
-func (s *Streamer) handleSendQueue(conn *gws.Conn, sendQueue <-chan outboundPacket, sendDone <-chan struct{}) {
+// The writer owns the idle timer, so real traffic postpones heartbeats without
+// racing another writer or adding packets to a congested queue. Stalled writes
+// use the ordinary deadline and close this exact connection, never its replacement.
+// Completion is observable for lifecycle tests; callers need not wait to enqueue.
+func (s *Streamer) handleSendQueue(conn *gws.Conn, sendQueue <-chan outboundPacket, sendDone <-chan struct{}, heartbeatInterval time.Duration) <-chan struct{} {
+	finished := make(chan struct{})
 	go func() {
+		defer close(finished)
+		var timer *time.Timer
+		var idle <-chan time.Time
+		if heartbeatInterval > 0 {
+			timer = time.NewTimer(heartbeatInterval)
+			idle = timer.C
+			defer timer.Stop()
+		}
 		for {
+			var packet outboundPacket
 			select {
 			case <-sendDone:
 				return
-			case packet, ok := <-sendQueue:
+			case <-idle:
+				packet = outboundPacket{description: "heartbeat", bytes: []byte{byte(protocol.KindHeartbeat)}}
+			case queued, ok := <-sendQueue:
 				if !ok {
 					return
 				}
-				select {
-				case <-sendDone:
-					return
-				default:
-				}
-				if !s.storePacketStillActive(packet) {
-					continue
-				}
-
-				b, err := packet.buildBytes()
-				if err != nil {
-					s.closeConn(conn)
-					return
-				}
-
-				deadline := time.Now().Add(s.opts.WriteTimeout)
-				if err := conn.SetWriteDeadline(deadline); err != nil {
-					s.closeConn(conn)
-					return
-				}
-				if err := conn.WriteMessage(gws.BinaryMessage, b); err != nil {
-					s.closeConn(conn)
-					return
-				}
-				if s.opts.Callbacks.OnBytesSent != nil {
-					s.opts.Callbacks.OnBytesSent(len(b))
-				}
-				if packet.storeName != "" && s.opts.Callbacks.OnStorePacketSent != nil {
-					s.opts.Callbacks.OnStorePacketSent(StorePacketSentInfo{
-						StoreName:  packet.storeName,
-						PacketKind: packet.packetKind,
-						Bytes:      len(b),
-					})
-				}
+				packet = queued
+			}
+			select {
+			case <-sendDone:
+				return
+			default:
+			}
+			if !s.storePacketStillActive(packet) {
+				continue
+			}
+			b, err := packet.buildBytes()
+			if err != nil {
+				s.closeConn(conn)
+				return
+			}
+			if err := conn.SetWriteDeadline(time.Now().Add(s.opts.WriteTimeout)); err != nil {
+				s.closeConn(conn)
+				return
+			}
+			if err := conn.WriteMessage(gws.BinaryMessage, b); err != nil {
+				s.closeConn(conn)
+				return
+			}
+			// Reset only after successful I/O, including heartbeats. Never let skipped
+			// stale store packets or merely queued work postpone a liveness message.
+			if timer != nil {
+				timer.Reset(heartbeatInterval)
+			}
+			if s.opts.Callbacks.OnBytesSent != nil {
+				s.opts.Callbacks.OnBytesSent(len(b))
+			}
+			if packet.storeName != "" && s.opts.Callbacks.OnStorePacketSent != nil {
+				s.opts.Callbacks.OnStorePacketSent(StorePacketSentInfo{StoreName: packet.storeName, PacketKind: packet.packetKind, Bytes: len(b)})
 			}
 		}
 	}()
+	return finished
 }
 
 func (s *Streamer) storePacketStillActive(packet outboundPacket) bool {

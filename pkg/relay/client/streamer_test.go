@@ -205,7 +205,7 @@ func TestCallRelayRPCRequiresCapability(t *testing.T) {
 	s := NewStreamer(nil, nil, nil, Config{})
 	serverConn, clientConn, cleanup := newTestWebsocketPair(t)
 	defer cleanup()
-	s.startConn(clientConn, false)
+	s.startConn(clientConn, protocol.RelayCapabilities{})
 	defer s.closeConn(clientConn)
 
 	_, err := s.CallRelayRPC(context.Background(), "CloudSettings.SetName", nil)
@@ -672,7 +672,7 @@ func TestStorePacketSentCallbackRunsAfterSuccessfulWrite(t *testing.T) {
 	}}
 	sendQueue := make(chan outboundPacket, 1)
 	sendDone := make(chan struct{})
-	s.handleSendQueue(clientConn, sendQueue, sendDone)
+	s.handleSendQueue(clientConn, sendQueue, sendDone, 0)
 
 	packetBytes, err := protocol.EncodePacket(protocol.NewPartialStatePacket("TestStore", []byte{1, 2, 3}))
 	if err != nil {

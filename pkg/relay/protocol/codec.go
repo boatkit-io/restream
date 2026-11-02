@@ -14,6 +14,7 @@ const (
 	maxUint32                                = uint64(^uint32(0))
 	onDemandStoreStreamingCapabilityKey      = "restream.on-demand-store-streaming"
 	relayRPCsCapabilityKey                   = "restream.relay-rpcs"
+	heartbeatsCapabilityKey                  = "restream.heartbeats"
 	enabledConnectedPacketCapabilityMetadata = "1"
 )
 
@@ -161,6 +162,8 @@ func EncodePacket(packet Packet) ([]byte, error) {
 		if err := writeBytes(w, p.Data); err != nil {
 			return nil, err
 		}
+	case *HeartbeatPacket:
+	// No payload.
 	case *CustomPacket:
 		if err := encodeCustomPacket(w, p); err != nil {
 			return nil, err
@@ -290,6 +293,8 @@ func DecodePacket(data []byte) (Packet, error) {
 			return nil, err
 		}
 		return &StoreSnapshotResponsePacket{StoreName: storeName, RequestID: requestID, Data: data}, ensureEOF(r, "store snapshot response")
+	case KindHeartbeat:
+		return &HeartbeatPacket{}, ensureEOF(r, "heartbeat packet")
 	case KindCustom:
 		packet, err := decodeCustomPacket(r)
 		if err != nil {
@@ -320,9 +325,11 @@ func decodeConnectedPacket(r *binarystreams.Reader) (*ConnectedPacket, error) {
 	capabilities := RelayCapabilities{
 		OnDemandStoreStreaming: metadata[onDemandStoreStreamingCapabilityKey] == enabledConnectedPacketCapabilityMetadata,
 		RelayRPCs:              metadata[relayRPCsCapabilityKey] == enabledConnectedPacketCapabilityMetadata,
+		Heartbeats:             metadata[heartbeatsCapabilityKey] == enabledConnectedPacketCapabilityMetadata,
 	}
 	delete(metadata, onDemandStoreStreamingCapabilityKey)
 	delete(metadata, relayRPCsCapabilityKey)
+	delete(metadata, heartbeatsCapabilityKey)
 	if len(metadata) == 0 {
 		metadata = nil
 	}
@@ -334,9 +341,9 @@ func decodeConnectedPacket(r *binarystreams.Reader) (*ConnectedPacket, error) {
 }
 
 func encodeConnectedPacketMetadata(packet *ConnectedPacket) map[string]string {
-	metadata := make(map[string]string, len(packet.Metadata)+2)
+	metadata := make(map[string]string, len(packet.Metadata)+3)
 	for key, value := range packet.Metadata {
-		if key != onDemandStoreStreamingCapabilityKey && key != relayRPCsCapabilityKey {
+		if key != onDemandStoreStreamingCapabilityKey && key != relayRPCsCapabilityKey && key != heartbeatsCapabilityKey {
 			metadata[key] = value
 		}
 	}
@@ -345,6 +352,9 @@ func encodeConnectedPacketMetadata(packet *ConnectedPacket) map[string]string {
 	}
 	if packet.Capabilities.RelayRPCs {
 		metadata[relayRPCsCapabilityKey] = enabledConnectedPacketCapabilityMetadata
+	}
+	if packet.Capabilities.Heartbeats {
+		metadata[heartbeatsCapabilityKey] = enabledConnectedPacketCapabilityMetadata
 	}
 	if len(metadata) == 0 {
 		return nil
