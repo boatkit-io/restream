@@ -57,7 +57,10 @@ func TestHeartbeatIsNegotiatedAndConnectionOwned(t *testing.T) {
 			}
 			cancel()
 			select {
-			case <-stopped:
+			case err := <-stopped:
+				if err == nil {
+					t.Fatal("expected relay read error after cancellation")
+				}
 			case <-time.After(time.Second):
 				t.Fatal("reader did not stop")
 			}
