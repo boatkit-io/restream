@@ -218,11 +218,17 @@ func (s *Streamer) Run(ctx context.Context) error {
 		return fmt.Errorf("relay streamer endpoint is not configured")
 	}
 
-	for !s.shutdown.Load() {
+	for !s.shutdown.Load() && ctx.Err() == nil {
 		var headers http.Header
 		var err error
 		if s.opts.HandshakeHeaders != nil {
 			headers, err = s.opts.HandshakeHeaders(ctx)
+			// Replacement/shutdown can cancel header preparation in flight.
+			// A retired attempt must not publish an error or open a transport,
+			// even if its adapter returns a sanitized error or a late success.
+			if s.shutdown.Load() || ctx.Err() != nil {
+				return nil
+			}
 			if err != nil {
 				s.onDialError(err)
 				if !sleepOrDone(ctx, s.opts.ReconnectDelay) {
@@ -233,6 +239,12 @@ func (s *Streamer) Run(ctx context.Context) error {
 		}
 		conn, resp, err := s.opts.Dialer.DialContext(ctx, s.opts.Endpoint, headers)
 		closeResponseBody(resp)
+		if s.shutdown.Load() || ctx.Err() != nil {
+			if conn != nil {
+				_ = conn.Close()
+			}
+			return nil
+		}
 		if err != nil {
 			s.onDialError(err)
 			if !sleepOrDone(ctx, s.opts.ReconnectDelay) {

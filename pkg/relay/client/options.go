@@ -90,8 +90,8 @@ type Callbacks struct {
 
 // Config configures a Streamer.
 type Config struct {
-	// HandshakeHeaders obtains a fresh, bounded transport admission before each
-	// dial. It runs only in the background relay loop, never at local startup.
+	// HandshakeHeaders prepares fresh headers before each dial. It runs in the
+	// connection loop and may perform bounded authentication work under ctx.
 	HandshakeHeaders func(context.Context) (http.Header, error)
 	Endpoint         string
 	Credentials      Credentials
